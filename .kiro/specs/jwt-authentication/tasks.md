@@ -1,0 +1,191 @@
+# Implementation Plan: JWT Authentication System
+
+## Task List
+
+- [ ] 1. Set up database infrastructure and dependencies
+  - Add SeaORM, jsonwebtoken, argon2, and crypto dependencies to Cargo.toml
+  - Create migration crate structure with sea-orm-migration
+  - Configure DATABASE_URL and JWT_SECRET environment variables
+  - _Requirements: 5.1, 5.3_
+
+- [ ] 2. Create database migrations and entity models
+  - [ ] 2.1 Create migration for users table
+    - Write migration to create users table with id, username, password_hash, created_at columns
+    - Add unique index on username column
+    - _Requirements: 5.1, 5.3_
+  - [ ] 2.2 Create migration for refresh_tokens table
+    - Write migration to create refresh_tokens table with id, token_hash, user_id, expires_at, created_at columns
+    - Add indexes on token_hash and expires_at columns
+    - Add foreign key constraint to users table
+    - _Requirements: 5.2, 5.3_
+  - [ ] 2.3 Create SeaORM entity for User model
+    - Define User entity with DeriveEntityModel macro
+    - Implement relations if needed
+    - _Requirements: 5.1, 6.4_
+  - [ ] 2.4 Create SeaORM entity for RefreshToken model
+    - Define RefreshToken entity with DeriveEntityModel macro
+    - Implement relation to User entity
+    - _Requirements: 5.2, 6.3_
+
+- [ ] 3. Implement authentication models and error types
+  - [ ] 3.1 Create request/response models
+    - Implement LoginRequest, RefreshRequest, LogoutRequest models with poem-openapi Object derive
+    - Implement TokenResponse, RefreshResponse, WhoAmIResponse, LogoutResponse models
+    - Add validation attributes where needed
+    - _Requirements: 1.1, 2.1, 3.1, 4.1, 7.1_
+  - [ ] 3.2 Create internal JWT claims structure
+    - Define Claims struct with sub (user_id), exp, and iat fields
+    - Add serde serialization support
+    - _Requirements: 6.4, 6.5_
+  - [ ] 3.3 Implement error types and HTTP mapping
+    - Create AuthError enum with all error variants
+    - Implement conversion to poem-openapi ApiResponse with proper status codes
+    - Ensure error messages don't leak sensitive information
+    - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5_
+
+- [ ] 4. Implement TokenManager for JWT operations
+  - [ ] 4.1 Create TokenManager struct with configuration
+    - Initialize with JWT secret, expiration times from environment
+    - Validate JWT secret has minimum 256-bit entropy
+    - _Requirements: 6.1_
+  - [ ] 4.2 Implement JWT generation
+    - Create generate_jwt method that creates JWT with user_id claim
+    - Set expiration to 15 minutes from issuance
+    - Include iat (issued at) timestamp
+    - Sign with HS256 algorithm
+    - _Requirements: 1.3, 6.1, 6.4, 6.5_
+  - [ ] 4.3 Implement JWT validation
+    - Create validate_jwt method that verifies signature and expiration
+    - Return Claims on success or appropriate error
+    - Handle expired tokens separately from invalid tokens
+    - _Requirements: 3.1, 3.2, 3.3, 3.4_
+  - [ ] 4.4 Implement refresh token generation and hashing
+    - Create generate_refresh_token using cryptographically secure random (32 bytes)
+    - Create hash_refresh_token using SHA-256
+    - Create get_refresh_expiration returning 7 days in seconds
+    - _Requirements: 1.4, 6.2, 6.3_
+
+- [ ] 5. Implement CredentialStore for database operations
+  - [ ] 5.1 Create CredentialStore struct with database connection
+    - Initialize with SeaORM DatabaseConnection
+    - _Requirements: 5.1, 5.2_
+  - [ ] 5.2 Implement user credential verification
+    - Create verify_credentials method that queries user by username
+    - Verify password using Argon2 constant-time comparison
+    - Return user_id on success
+    - _Requirements: 1.1, 1.2_
+  - [ ] 5.3 Implement add_user method
+    - Hash password with Argon2id
+    - Generate new UUID for user
+    - Insert user into database
+    - Handle duplicate username errors
+    - _Requirements: 5.1_
+  - [ ] 5.4 Implement refresh token storage
+    - Create store_refresh_token method that inserts hashed token with user_id and expiration
+    - Use database transaction for consistency
+    - _Requirements: 1.5, 5.2, 5.4, 6.3_
+  - [ ] 5.5 Implement refresh token validation
+    - Create validate_refresh_token method that queries by token hash
+    - Check expiration timestamp
+    - Return user_id on success
+    - _Requirements: 2.1, 2.2, 2.3_
+  - [ ] 5.6 Implement refresh token revocation
+    - Create revoke_refresh_token method that deletes token by hash
+    - _Requirements: 4.1, 4.4_
+  - [ ] 5.7 Implement expired token cleanup
+    - Create cleanup_expired_tokens method that deletes tokens where expires_at < now
+    - Return count of deleted tokens
+    - _Requirements: 5.5_
+
+- [ ] 6. Implement AuthService business logic
+  - [ ] 6.1 Create AuthService struct with dependencies
+    - Initialize with Arc references to TokenManager and CredentialStore
+    - _Requirements: All_
+  - [ ] 6.2 Implement login flow
+    - Verify credentials via CredentialStore
+    - Generate JWT and refresh token via TokenManager
+    - Hash and store refresh token via CredentialStore
+    - Return TokenResponse with both tokens
+    - Handle invalid credentials with appropriate error
+    - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5_
+  - [ ] 6.3 Implement refresh flow
+    - Hash incoming refresh token
+    - Validate refresh token via CredentialStore
+    - Generate new JWT for the user_id
+    - Return RefreshResponse with new JWT (keep same refresh token)
+    - _Requirements: 2.1, 2.2, 2.3, 2.4_
+  - [ ] 6.4 Implement whoami flow
+    - Validate JWT via TokenManager
+    - Extract user_id and expiration from claims
+    - Return WhoAmIResponse
+    - _Requirements: 3.1, 3.2, 3.3, 3.4_
+  - [ ] 6.5 Implement logout flow
+    - Hash incoming refresh token
+    - Revoke refresh token via CredentialStore
+    - Return success response regardless of token validity
+    - _Requirements: 4.1, 4.2, 4.3_
+
+- [ ] 7. Implement AuthApi HTTP endpoints
+  - [ ] 7.1 Create AuthApi struct with AuthService dependency
+    - Initialize with Arc reference to AuthService
+    - Add Authentication tag for OpenAPI grouping
+    - _Requirements: All_
+  - [ ] 7.2 Implement POST /auth/login endpoint
+    - Accept LoginRequest in request body
+    - Call AuthService.login
+    - Return TokenResponse on success (200)
+    - Return 401 on invalid credentials
+    - Return 400 on malformed request
+    - _Requirements: 1.1, 1.2, 7.2, 7.3, 7.4_
+  - [ ] 7.3 Implement POST /auth/refresh endpoint
+    - Accept RefreshRequest in request body
+    - Call AuthService.refresh
+    - Return RefreshResponse on success (200)
+    - Return 401 on invalid/expired token
+    - _Requirements: 2.1, 2.2, 7.2, 7.4_
+  - [ ] 7.4 Implement GET /auth/whoami endpoint
+    - Extract JWT from Authorization header (Bearer token)
+    - Call AuthService.whoami
+    - Return WhoAmIResponse on success (200)
+    - Return 401 on missing/invalid/expired JWT
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 7.2, 7.4_
+  - [ ] 7.5 Implement POST /auth/logout endpoint
+    - Accept LogoutRequest in request body
+    - Call AuthService.logout
+    - Return LogoutResponse with success message (200)
+    - _Requirements: 4.1, 4.2, 7.4_
+
+- [ ] 8. Integrate authentication system into main application
+  - [ ] 8.1 Update main.rs with database setup
+    - Load DATABASE_URL from environment with default
+    - Create DatabaseConnection using SeaORM
+    - Run migrations on startup
+    - _Requirements: 5.3_
+  - [ ] 8.2 Initialize authentication components
+    - Create TokenManager with JWT_SECRET from environment
+    - Create CredentialStore with database connection
+    - Create AuthService with both dependencies
+    - Create AuthApi with AuthService
+    - _Requirements: All_
+  - [ ] 8.3 Register AuthApi with OpenApiService
+    - Add AuthApi to OpenApiService alongside existing Api
+    - Ensure auth endpoints appear under /api/auth/*
+    - Verify Swagger UI includes authentication endpoints
+    - _Requirements: All_
+  - [ ] 8.4 Seed test user on startup
+    - Add test user (username: "testuser", password: "testpass") if not exists
+    - Log success/failure of seed operation
+    - _Requirements: 5.1_
+  - [ ] 8.5 Start background cleanup task
+    - Spawn Tokio task that runs cleanup_expired_tokens every hour
+    - Log cleanup results
+    - _Requirements: 5.5_
+
+- [ ] 9. Create integration tests for authentication flow
+
+  - Write end-to-end test for complete auth flow: login → use JWT → refresh → logout
+  - Test invalid credentials return 401
+  - Test expired JWT returns 401
+  - Test invalid refresh token returns 401
+  - Test whoami without auth header returns 401
+  - _Requirements: All_
