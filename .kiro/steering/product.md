@@ -1,43 +1,35 @@
-# Product Overview
+---
+inclusion: always
+---
 
-Linkstash Backend - A Rust-based REST API backend with JWT authentication.
+# Product: Linkstash Backend
 
-## Purpose
-
-Provide a secure, performant backend API with:
-- RESTful endpoints with automatic OpenAPI documentation
-- JWT-based authentication with refresh tokens
-- Type-safe request/response handling
-- Interactive API documentation via Swagger UI
-
-## Key Features
-
-### Current
-- ✅ Poem web framework with async support
-- ✅ Automatic Swagger UI generation
-- ✅ Type-safe API definitions
-- ✅ Health check endpoint
-- ✅ Item management endpoints (example)
-
-### In Development
-- 🚧 JWT authentication system
-- 🚧 User credential management
-- 🚧 Refresh token support
-- 🚧 SQLite database with SeaORM
-
-### Planned
-- Token rotation
-- Multi-device session management
-- Rate limiting
-- Password reset
-- OAuth2/OIDC integration
-- Audit logging
-- User registration
+Rust REST API with JWT authentication, auto-generated OpenAPI docs, and Swagger UI.
 
 ## Architecture Principles
 
-- **Type Safety**: Leverage Rust's type system for compile-time guarantees
-- **Documentation First**: Auto-generate OpenAPI specs from code
-- **Security**: JWT tokens, password hashing, secure token storage
-- **Simplicity**: Minimal dependencies, clear structure
-- **Async**: Fully async using Tokio runtime
+- **Type Safety First** - Leverage Rust's compile-time guarantees
+- **Documentation from Code** - OpenAPI specs auto-generated via macros
+- **Security by Default** - JWT auth, argon2 hashing, input validation
+- **Fully Async** - Tokio runtime throughout
+- **Minimal Complexity** - Clear structure, essential dependencies only
+
+## Feature Status
+
+**Implemented:**
+- Poem web framework with async support
+- Auto-generated Swagger UI at `/swagger`
+- Type-safe API definitions
+- Health check endpoint
+
+**In Progress:**
+- JWT authentication (access + refresh tokens)
+- User credential management
+- SQLite with SeaORM
+
+**Planned:**
+- Token rotation
+- Multi-device sessions
+- Rate limiting
+- Password reset
+- User registration
