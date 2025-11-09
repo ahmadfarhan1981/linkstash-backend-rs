@@ -194,38 +194,54 @@ Build incrementally with working endpoints at each step, adding database persist
 
 ## Phase 3: Real JWT Generation
 
-- [ ] 5. Add JWT dependencies and implement TokenManager
-  - [ ] 5.1 Add JWT dependencies to Cargo.toml
+- [x] 5. Add JWT dependencies and implement TokenManager
+
+
+
+
+  - [x] 5.1 Add JWT dependencies to Cargo.toml
+
+
     - Add jsonwebtoken = "9.2"
     - Add chrono for timestamps (already have)
     - _Requirements: 6.1_
     
-  - [ ] 5.2 Create Claims struct
+  - [x] 5.2 Create Claims struct
+
+
     - Define Claims with sub (user_id), exp, iat fields in models.rs
     - Add serde Serialize/Deserialize derives
     - _Requirements: 6.4, 6.5_
     
-  - [ ] 5.3 Implement TokenManager for JWT operations
+  - [x] 5.3 Implement TokenManager for JWT operations
+
+
     - Create src/auth/token_manager.rs
     - Implement TokenManager struct with jwt_secret field
     - Implement generate_jwt method (15 min expiration, HS256 signing)
     - Load JWT_SECRET from environment variable in main.rs
     - _Requirements: 1.3, 6.1, 6.4, 6.5_
     
-  - [ ] 5.4 Update login endpoint to return real JWT
+  - [x] 5.4 Update login endpoint to return real JWT
+
+
     - Pass TokenManager to AuthApi
     - Replace placeholder access_token with real JWT (using user_id from database)
     - Keep placeholder refresh_token for now
     - _Requirements: 1.3_
     
-  - [ ] 5.5 Manual test JWT generation
+
+  - [x] 5.5 Manual test JWT generation
+
     - Login via Swagger UI
     - Copy JWT and decode at jwt.io to verify claims
     - Verify expiration is 15 minutes from now
     - Verify sub claim contains user_id from database
     - _Requirements: 1.3_
     
-  - [ ] 5.6 Write unit tests for JWT generation
+  - [x] 5.6 Write unit tests for JWT generation
+
+
 
     - Test TokenManager.generate_jwt creates valid JWT
     - Test JWT contains correct user_id in sub claim
@@ -233,7 +249,9 @@ Build incrementally with working endpoints at each step, adding database persist
     - Test JWT has iat (issued at) timestamp
     - _Requirements: 1.3, 6.4, 6.5_
     
-  - [ ] 5.7 Update login tests to verify real JWT
+  - [x] 5.7 Update login tests to verify real JWT
+
+
 
     - Update existing login test to decode and verify JWT structure
     - Test JWT can be decoded and contains expected claims
@@ -243,30 +261,45 @@ Build incrementally with working endpoints at each step, adding database persist
 
 ## Phase 4: JWT Validation and WhoAmI Endpoint
 
-- [ ] 6. Implement JWT validation and whoami endpoint
-  - [ ] 6.1 Create WhoAmIResponse model
+- [x] 6. Implement JWT validation and whoami endpoint
+
+
+
+
+
+  - [x] 6.1 Create WhoAmIResponse model
+
+
     - Add WhoAmIResponse with user_id and expires_at fields
     - _Requirements: 3.1_
     
-  - [ ] 6.2 Implement JWT validation in TokenManager
+  - [x] 6.2 Implement JWT validation in TokenManager
+
+
     - Add validate_jwt method that verifies signature and expiration
     - Return Claims on success
     - Handle expired vs invalid token errors separately
     - _Requirements: 3.1, 3.2, 3.3, 3.4_
     
-  - [ ] 6.3 Update AuthError with token validation errors
+  - [x] 6.3 Update AuthError with token validation errors
+
+
     - Add InvalidToken, ExpiredToken, MissingAuthHeader, InvalidAuthHeader variants
     - Map to HTTP 401 responses
     - _Requirements: 7.2_
     
-  - [ ] 6.4 Implement GET /auth/whoami endpoint
+  - [x] 6.4 Implement GET /auth/whoami endpoint
+
+
     - Extract JWT from Authorization header (Bearer token)
     - Validate JWT using TokenManager
     - Return user_id and expiration from claims
     - Return appropriate errors for missing/invalid/expired tokens
     - _Requirements: 3.1, 3.2, 3.3, 3.4_
     
-  - [ ] 6.5 Manual test whoami endpoint
+  - [x] 6.5 Manual test whoami endpoint
+
+
     - Login to get JWT
     - Call /auth/whoami with Authorization header
     - Verify user_id is returned
@@ -274,14 +307,20 @@ Build incrementally with working endpoints at each step, adding database persist
     - Test with invalid JWT (should return 401)
     - _Requirements: 3.1, 3.2, 3.3, 3.4_
     
-  - [ ]* 6.6 Write unit tests for JWT validation
+  - [x] 6.6 Write unit tests for JWT validation
+
+
+
     - Test TokenManager.validate_jwt succeeds with valid JWT
     - Test validate_jwt returns correct Claims
     - Test validate_jwt fails with invalid signature
     - Test validate_jwt fails with expired JWT
     - _Requirements: 3.1, 3.2, 3.3, 3.4_
     
-  - [ ]* 6.7 Write unit tests for whoami endpoint
+  - [x] 6.7 Write unit tests for whoami endpoint
+
+
+
     - Test whoami with valid JWT returns 200 and user_id
     - Test whoami without Authorization header returns 401
     - Test whoami with invalid JWT returns 401
@@ -331,19 +370,22 @@ Build incrementally with working endpoints at each step, adding database persist
     - Verify token is stored in database (check refresh_tokens table)
     - _Requirements: 1.4, 1.5_
     
-  - [ ]* 7.8 Write unit tests for refresh token generation
+  - [ ] 7.8 Write unit tests for refresh token generation
+
     - Test TokenManager.generate_refresh_token creates unique tokens
     - Test hash_refresh_token produces consistent hashes
     - Test hash_refresh_token produces different hashes for different tokens
     - _Requirements: 1.4, 6.2, 6.3_
     
-  - [ ]* 7.9 Write unit tests for refresh token storage
+  - [ ] 7.9 Write unit tests for refresh token storage
+
     - Test store_refresh_token saves token to database
     - Test stored token is hashed (not plaintext)
     - Test stored token has correct expiration (7 days)
     - _Requirements: 1.5, 5.2, 5.4_
     
-  - [ ]* 7.10 Update login tests for real refresh tokens
+  - [ ] 7.10 Update login tests for real refresh tokens
+
     - Update login test to verify refresh_token is not placeholder
     - Test refresh token is stored in database after login
     - _Requirements: 1.4, 1.5_
@@ -374,14 +416,16 @@ Build incrementally with working endpoints at each step, adding database persist
     - Test with invalid refresh token (should return 401)
     - _Requirements: 2.1, 2.2, 2.3_
     
-  - [ ]* 8.5 Write unit tests for refresh token validation
+  - [ ] 8.5 Write unit tests for refresh token validation
+
     - Test validate_refresh_token succeeds with valid token
     - Test validate_refresh_token returns correct user_id
     - Test validate_refresh_token fails with invalid token
     - Test validate_refresh_token fails with expired token
     - _Requirements: 2.1, 2.2, 2.3_
     
-  - [ ]* 8.6 Write unit tests for refresh endpoint
+  - [ ] 8.6 Write unit tests for refresh endpoint
+
     - Test refresh with valid token returns 200 and new JWT
     - Test refresh with invalid token returns 401
     - Test refresh with expired token returns 401
@@ -416,12 +460,15 @@ Build incrementally with working endpoints at each step, adding database persist
     - Try to refresh with revoked token (should return 401)
     - _Requirements: 4.1, 4.2_
     
-  - [ ]* 9.5 Write unit tests for refresh token revocation
+  - [ ] 9.5 Write unit tests for refresh token revocation
+
     - Test revoke_refresh_token removes token from database
     - Test revoke_refresh_token succeeds even if token doesn't exist
     - _Requirements: 4.1, 4.4_
     
-  - [ ]* 9.6 Write unit tests for logout endpoint
+
+  - [ ] 9.6 Write unit tests for logout endpoint
+
     - Test logout with valid token returns 200
     - Test logout removes token from database
     - Test logout with invalid token still returns 200

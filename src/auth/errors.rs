@@ -24,6 +24,22 @@ pub enum AuthError {
     #[oai(status = 400)]
     DuplicateUsername(Json<AuthErrorResponse>),
     
+    /// Invalid or malformed JWT
+    #[oai(status = 401)]
+    InvalidToken(Json<AuthErrorResponse>),
+    
+    /// JWT has expired
+    #[oai(status = 401)]
+    ExpiredToken(Json<AuthErrorResponse>),
+    
+    /// Authorization header is missing
+    #[oai(status = 401)]
+    MissingAuthHeader(Json<AuthErrorResponse>),
+    
+    /// Authorization header format is invalid
+    #[oai(status = 401)]
+    InvalidAuthHeader(Json<AuthErrorResponse>),
+    
     /// Internal server error
     #[oai(status = 500)]
     InternalError(Json<AuthErrorResponse>),
@@ -45,6 +61,42 @@ impl AuthError {
             error: "duplicate_username".to_string(),
             message: "Username already exists".to_string(),
             status_code: 400,
+        }))
+    }
+    
+    /// Create an InvalidToken error
+    pub fn invalid_token() -> Self {
+        AuthError::InvalidToken(Json(AuthErrorResponse {
+            error: "invalid_token".to_string(),
+            message: "Invalid or malformed JWT".to_string(),
+            status_code: 401,
+        }))
+    }
+    
+    /// Create an ExpiredToken error
+    pub fn expired_token() -> Self {
+        AuthError::ExpiredToken(Json(AuthErrorResponse {
+            error: "expired_token".to_string(),
+            message: "JWT has expired".to_string(),
+            status_code: 401,
+        }))
+    }
+    
+    /// Create a MissingAuthHeader error
+    pub fn missing_auth_header() -> Self {
+        AuthError::MissingAuthHeader(Json(AuthErrorResponse {
+            error: "missing_auth_header".to_string(),
+            message: "Authorization header is required".to_string(),
+            status_code: 401,
+        }))
+    }
+    
+    /// Create an InvalidAuthHeader error
+    pub fn invalid_auth_header() -> Self {
+        AuthError::InvalidAuthHeader(Json(AuthErrorResponse {
+            error: "invalid_auth_header".to_string(),
+            message: "Invalid Authorization header format".to_string(),
+            status_code: 401,
         }))
     }
     
