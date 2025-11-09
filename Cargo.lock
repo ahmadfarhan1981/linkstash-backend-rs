@@ -2807,6 +2807,7 @@ name = "swagger-api-generation"
 version = "0.1.0"
 dependencies = [
  "argon2",
+ "base64 0.21.7",
  "chrono",
  "jsonwebtoken",
  "migration",
@@ -2815,6 +2816,7 @@ dependencies = [
  "rand",
  "sea-orm",
  "serde",
+ "sha2",
  "tokio",
  "uuid",
 ]

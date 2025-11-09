@@ -40,6 +40,14 @@ pub enum AuthError {
     #[oai(status = 401)]
     InvalidAuthHeader(Json<AuthErrorResponse>),
     
+    /// Invalid refresh token
+    #[oai(status = 401)]
+    InvalidRefreshToken(Json<AuthErrorResponse>),
+    
+    /// Refresh token has expired
+    #[oai(status = 401)]
+    ExpiredRefreshToken(Json<AuthErrorResponse>),
+    
     /// Internal server error
     #[oai(status = 500)]
     InternalError(Json<AuthErrorResponse>),
@@ -96,6 +104,24 @@ impl AuthError {
         AuthError::InvalidAuthHeader(Json(AuthErrorResponse {
             error: "invalid_auth_header".to_string(),
             message: "Invalid Authorization header format".to_string(),
+            status_code: 401,
+        }))
+    }
+    
+    /// Create an InvalidRefreshToken error
+    pub fn invalid_refresh_token() -> Self {
+        AuthError::InvalidRefreshToken(Json(AuthErrorResponse {
+            error: "invalid_refresh_token".to_string(),
+            message: "Invalid refresh token".to_string(),
+            status_code: 401,
+        }))
+    }
+    
+    /// Create an ExpiredRefreshToken error
+    pub fn expired_refresh_token() -> Self {
+        AuthError::ExpiredRefreshToken(Json(AuthErrorResponse {
+            error: "expired_refresh_token".to_string(),
+            message: "Refresh token has expired".to_string(),
             status_code: 401,
         }))
     }

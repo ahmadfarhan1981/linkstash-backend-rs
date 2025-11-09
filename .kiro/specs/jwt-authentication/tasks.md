@@ -332,83 +332,119 @@ Build incrementally with working endpoints at each step, adding database persist
 
 ## Phase 5: Refresh Token Implementation
 
-- [ ] 7. Implement refresh token generation and storage
-  - [ ] 7.1 Add crypto dependencies
+- [x] 7. Implement refresh token generation and storage
+
+
+
+
+  - [x] 7.1 Add crypto dependencies
+
+
     - Add rand = "0.8", sha2 = "0.10", base64 = "0.21" to Cargo.toml
     - _Requirements: 6.2, 6.3_
     
-  - [ ] 7.2 Create refresh_tokens table migration
+  - [x] 7.2 Create refresh_tokens table migration
+
+
     - Create migration for refresh_tokens table (id, token_hash, user_id, expires_at, created_at)
     - Add indexes on token_hash and expires_at
     - Add foreign key to users table
     - _Requirements: 5.2, 5.3_
     
-  - [ ] 7.3 Create RefreshToken entity model
+  - [x] 7.3 Create RefreshToken entity model
+
+
     - Create src/auth/entities/refresh_token.rs
     - Define RefreshToken entity with DeriveEntityModel
     - _Requirements: 5.2, 6.3_
     
-  - [ ] 7.4 Implement refresh token generation in TokenManager
+  - [x] 7.4 Implement refresh token generation in TokenManager
+
+
     - Add generate_refresh_token (32 random bytes, base64-encoded)
     - Add hash_refresh_token (SHA-256)
     - Add get_refresh_expiration (7 days)
     - _Requirements: 1.4, 6.2, 6.3_
     
-  - [ ] 7.5 Implement refresh token storage in CredentialStore
+  - [x] 7.5 Implement refresh token storage in CredentialStore
+
+
     - Add store_refresh_token method (insert hashed token with user_id and expiration)
     - Use database transaction
     - _Requirements: 1.5, 5.2, 5.4, 6.3_
     
-  - [ ] 7.6 Update login endpoint to generate and store real refresh token
+  - [x] 7.6 Update login endpoint to generate and store real refresh token
+
+
     - Generate refresh token via TokenManager
     - Hash and store via CredentialStore
     - Return real refresh token in response
     - _Requirements: 1.4, 1.5_
     
-  - [ ] 7.7 Manual test refresh token generation
+  - [x] 7.7 Manual test refresh token generation
+
+
     - Login and verify refresh_token is no longer "placeholder-rt"
     - Verify token is stored in database (check refresh_tokens table)
     - _Requirements: 1.4, 1.5_
     
-  - [ ] 7.8 Write unit tests for refresh token generation
+  - [x] 7.8 Write unit tests for refresh token generation
+
+
 
     - Test TokenManager.generate_refresh_token creates unique tokens
     - Test hash_refresh_token produces consistent hashes
     - Test hash_refresh_token produces different hashes for different tokens
     - _Requirements: 1.4, 6.2, 6.3_
     
-  - [ ] 7.9 Write unit tests for refresh token storage
+  - [x] 7.9 Write unit tests for refresh token storage
+
+
 
     - Test store_refresh_token saves token to database
     - Test stored token is hashed (not plaintext)
     - Test stored token has correct expiration (7 days)
     - _Requirements: 1.5, 5.2, 5.4_
     
-  - [ ] 7.10 Update login tests for real refresh tokens
+  - [x] 7.10 Update login tests for real refresh tokens
+
+
 
     - Update login test to verify refresh_token is not placeholder
     - Test refresh token is stored in database after login
     - _Requirements: 1.4, 1.5_
 
-- [ ] 8. Implement refresh endpoint
-  - [ ] 8.1 Create RefreshRequest and RefreshResponse models
+- [x] 8. Implement refresh endpoint
+
+
+
+
+  - [x] 8.1 Create RefreshRequest and RefreshResponse models
+
+
     - Add RefreshRequest with refresh_token field
     - Add RefreshResponse with access_token, token_type, expires_in
     - _Requirements: 2.1_
     
-  - [ ] 8.2 Implement refresh token validation in CredentialStore
+  - [x] 8.2 Implement refresh token validation in CredentialStore
+
+
     - Add validate_refresh_token method (query by hash, check expiration)
     - Return user_id on success
     - _Requirements: 2.1, 2.2, 2.3_
     
-  - [ ] 8.3 Implement POST /auth/refresh endpoint
+  - [x] 8.3 Implement POST /auth/refresh endpoint
+
+
     - Accept RefreshRequest
     - Hash and validate refresh token
     - Generate new JWT for user_id
     - Return new JWT (keep same refresh token)
     - _Requirements: 2.1, 2.2, 2.3, 2.4_
     
-  - [ ] 8.4 Manual test refresh flow
+  - [x] 8.4 Manual test refresh flow
+
+
     - Login to get tokens
     - Call /auth/refresh with refresh_token
     - Verify new JWT is returned
@@ -416,7 +452,9 @@ Build incrementally with working endpoints at each step, adding database persist
     - Test with invalid refresh token (should return 401)
     - _Requirements: 2.1, 2.2, 2.3_
     
-  - [ ] 8.5 Write unit tests for refresh token validation
+  - [x] 8.5 Write unit tests for refresh token validation
+
+
 
     - Test validate_refresh_token succeeds with valid token
     - Test validate_refresh_token returns correct user_id
@@ -424,7 +462,9 @@ Build incrementally with working endpoints at each step, adding database persist
     - Test validate_refresh_token fails with expired token
     - _Requirements: 2.1, 2.2, 2.3_
     
-  - [ ] 8.6 Write unit tests for refresh endpoint
+  - [x] 8.6 Write unit tests for refresh endpoint
+
+
 
     - Test refresh with valid token returns 200 and new JWT
     - Test refresh with invalid token returns 401

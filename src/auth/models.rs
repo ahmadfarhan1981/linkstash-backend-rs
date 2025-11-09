@@ -49,3 +49,23 @@ pub struct WhoAmIResponse {
     /// Token expiration time (Unix timestamp)
     pub expires_at: i64,
 }
+
+/// Request model for token refresh
+#[derive(Object, Debug, Serialize, Deserialize)]
+pub struct RefreshRequest {
+    /// Refresh token to exchange for a new access token
+    pub refresh_token: String,
+}
+
+/// Response model for token refresh
+#[derive(Object, Debug, Serialize, Deserialize)]
+pub struct RefreshResponse {
+    /// New JWT access token for API authentication
+    pub access_token: String,
+    
+    /// Token type (always "Bearer")
+    pub token_type: String,
+    
+    /// Number of seconds until the access token expires
+    pub expires_in: i64,
+}

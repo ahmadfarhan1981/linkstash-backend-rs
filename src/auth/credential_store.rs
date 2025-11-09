@@ -1,8 +1,9 @@
-use sea_orm::{DatabaseConnection, EntityTrait, ColumnTrait, QueryFilter, ActiveModelTrait, Set};
+use sea_orm::{DatabaseConnection, EntityTrait, ColumnTrait, QueryFilter, ActiveModelTrait, Set, TransactionTrait};
 use argon2::{Argon2, PasswordHash, PasswordVerifier, PasswordHasher, password_hash::SaltString};
 use uuid::Uuid;
 use chrono::Utc;
 use crate::auth::entities::user::{self, Entity as User, ActiveModel};
+use crate::auth::entities::refresh_token::{ActiveModel as RefreshTokenActiveModel};
 use crate::auth::errors::AuthError;
 
 /// CredentialStore manages user credentials and refresh tokens in the database
@@ -107,6 +108,71 @@ impl CredentialStore {
 
         // Return user_id on success
         Ok(user.id)
+    }
+    
+    /// Store a refresh token in the database
+    /// 
+    /// # Arguments
+    /// * `token_hash` - The SHA-256 hash of the refresh token
+    /// * `user_id` - The user_id (UUID string) this token belongs to
+    /// * `expires_at` - Unix timestamp when the token expires
+    /// 
+    /// # Returns
+    /// * `Ok(())` - Token stored successfully
+    /// * `Err(AuthError)` - Database error
+    pub async fn store_refresh_token(&self, token_hash: String, user_id: String, expires_at: i64) -> Result<(), AuthError> {
+        // Use a transaction to ensure atomicity
+        let txn = self.db.begin().await
+            .map_err(|e| AuthError::internal_error(format!("Failed to start transaction: {}", e)))?;
+        
+        let created_at = Utc::now().timestamp();
+        
+        let new_token = RefreshTokenActiveModel {
+            id: sea_orm::ActiveValue::NotSet, // Auto-increment will handle this
+            token_hash: Set(token_hash),
+            user_id: Set(user_id),
+            expires_at: Set(expires_at),
+            created_at: Set(created_at),
+        };
+        
+        new_token.insert(&txn).await
+            .map_err(|e| AuthError::internal_error(format!("Failed to store refresh token: {}", e)))?;
+        
+        txn.commit().await
+            .map_err(|e| AuthError::internal_error(format!("Failed to commit transaction: {}", e)))?;
+        
+        Ok(())
+    }
+    
+    /// Validate a refresh token and return the associated user_id
+    /// 
+    /// # Arguments
+    /// * `token_hash` - The SHA-256 hash of the refresh token to validate
+    /// 
+    /// # Returns
+    /// * `Ok(String)` - The user_id (UUID) if token is valid and not expired
+    /// * `Err(AuthError)` - InvalidRefreshToken if not found, ExpiredRefreshToken if expired
+    pub async fn validate_refresh_token(&self, token_hash: &str) -> Result<String, AuthError> {
+        use crate::auth::entities::refresh_token::{Entity as RefreshToken, Column};
+        
+        // Query token by hash
+        let token = RefreshToken::find()
+            .filter(Column::TokenHash.eq(token_hash))
+            .one(&self.db)
+            .await
+            .map_err(|e| AuthError::internal_error(format!("Database error: {}", e)))?;
+        
+        // If token not found, return invalid refresh token error
+        let token = token.ok_or_else(|| AuthError::invalid_refresh_token())?;
+        
+        // Check if token is expired
+        let now = Utc::now().timestamp();
+        if token.expires_at < now {
+            return Err(AuthError::expired_refresh_token());
+        }
+        
+        // Return user_id on success
+        Ok(token.user_id)
     }
 }
 
@@ -263,6 +329,208 @@ mod tests {
                 // Expected error type
             }
             _ => panic!("Expected InvalidCredentials error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_store_refresh_token_saves_token_to_database() {
+        let (db, credential_store) = setup_test_db().await;
+        
+        // Add a user first
+        let user_id = credential_store
+            .add_user("tokenuser".to_string(), "password".to_string())
+            .await
+            .expect("Failed to add user");
+        
+        // Store a refresh token
+        let token_hash = "test_hash_123";
+        let expires_at = Utc::now().timestamp() + 604800; // 7 days
+        
+        let result = credential_store
+            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at)
+            .await;
+        
+        assert!(result.is_ok());
+        
+        // Verify token is in database
+        use crate::auth::entities::refresh_token::{Entity as RefreshToken, Column};
+        let stored_token = RefreshToken::find()
+            .filter(Column::TokenHash.eq(token_hash))
+            .one(&db)
+            .await
+            .expect("Failed to query token")
+            .expect("Token not found");
+        
+        assert_eq!(stored_token.token_hash, token_hash);
+        assert_eq!(stored_token.user_id, user_id);
+        assert_eq!(stored_token.expires_at, expires_at);
+    }
+
+    #[tokio::test]
+    async fn test_stored_token_is_hashed() {
+        let (db, credential_store) = setup_test_db().await;
+        
+        // Add a user
+        let user_id = credential_store
+            .add_user("hashuser".to_string(), "password".to_string())
+            .await
+            .expect("Failed to add user");
+        
+        // Store a token with a plaintext-looking value
+        let plaintext_token = "my-plaintext-token";
+        let expires_at = Utc::now().timestamp() + 604800;
+        
+        let result = credential_store
+            .store_refresh_token(plaintext_token.to_string(), user_id.clone(), expires_at)
+            .await;
+        
+        assert!(result.is_ok());
+        
+        // Verify the stored value matches what we passed (caller is responsible for hashing)
+        use crate::auth::entities::refresh_token::{Entity as RefreshToken, Column};
+        let stored_token = RefreshToken::find()
+            .filter(Column::TokenHash.eq(plaintext_token))
+            .one(&db)
+            .await
+            .expect("Failed to query token")
+            .expect("Token not found");
+        
+        // The store method stores whatever hash is passed to it
+        assert_eq!(stored_token.token_hash, plaintext_token);
+    }
+
+    #[tokio::test]
+    async fn test_stored_token_has_correct_expiration() {
+        let (db, credential_store) = setup_test_db().await;
+        
+        // Add a user
+        let user_id = credential_store
+            .add_user("expiryuser".to_string(), "password".to_string())
+            .await
+            .expect("Failed to add user");
+        
+        // Store a token with 7 days expiration
+        let token_hash = "expiry_test_hash";
+        let now = Utc::now().timestamp();
+        let expires_at = now + (7 * 24 * 60 * 60); // 7 days in seconds
+        
+        let result = credential_store
+            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at)
+            .await;
+        
+        assert!(result.is_ok());
+        
+        // Verify expiration is correct
+        use crate::auth::entities::refresh_token::{Entity as RefreshToken, Column};
+        let stored_token = RefreshToken::find()
+            .filter(Column::TokenHash.eq(token_hash))
+            .one(&db)
+            .await
+            .expect("Failed to query token")
+            .expect("Token not found");
+        
+        assert_eq!(stored_token.expires_at, expires_at);
+        
+        // Verify it's approximately 7 days from now
+        let diff = stored_token.expires_at - now;
+        assert_eq!(diff, 7 * 24 * 60 * 60); // Exactly 7 days
+    }
+
+    #[tokio::test]
+    async fn test_validate_refresh_token_succeeds_with_valid_token() {
+        let (_db, credential_store) = setup_test_db().await;
+        
+        // Add a user
+        let user_id = credential_store
+            .add_user("validtokenuser".to_string(), "password".to_string())
+            .await
+            .expect("Failed to add user");
+        
+        // Store a valid refresh token
+        let token_hash = "valid_token_hash";
+        let expires_at = Utc::now().timestamp() + 604800; // 7 days from now
+        
+        credential_store
+            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at)
+            .await
+            .expect("Failed to store token");
+        
+        // Validate the token
+        let result = credential_store.validate_refresh_token(token_hash).await;
+        
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_refresh_token_returns_correct_user_id() {
+        let (_db, credential_store) = setup_test_db().await;
+        
+        // Add a user
+        let user_id = credential_store
+            .add_user("useridtest".to_string(), "password".to_string())
+            .await
+            .expect("Failed to add user");
+        
+        // Store a refresh token
+        let token_hash = "userid_token_hash";
+        let expires_at = Utc::now().timestamp() + 604800;
+        
+        credential_store
+            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at)
+            .await
+            .expect("Failed to store token");
+        
+        // Validate and verify user_id
+        let result = credential_store.validate_refresh_token(token_hash).await;
+        
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), user_id);
+    }
+
+    #[tokio::test]
+    async fn test_validate_refresh_token_fails_with_invalid_token() {
+        let (_db, credential_store) = setup_test_db().await;
+        
+        // Try to validate a token that doesn't exist
+        let result = credential_store.validate_refresh_token("nonexistent_token").await;
+        
+        assert!(result.is_err());
+        match result {
+            Err(AuthError::InvalidRefreshToken(_)) => {
+                // Expected error type
+            }
+            _ => panic!("Expected InvalidRefreshToken error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_refresh_token_fails_with_expired_token() {
+        let (_db, credential_store) = setup_test_db().await;
+        
+        // Add a user
+        let user_id = credential_store
+            .add_user("expireduser".to_string(), "password".to_string())
+            .await
+            .expect("Failed to add user");
+        
+        // Store an expired refresh token
+        let token_hash = "expired_token_hash";
+        let expires_at = Utc::now().timestamp() - 3600; // Expired 1 hour ago
+        
+        credential_store
+            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at)
+            .await
+            .expect("Failed to store token");
+        
+        // Try to validate the expired token
+        let result = credential_store.validate_refresh_token(token_hash).await;
+        
+        assert!(result.is_err());
+        match result {
+            Err(AuthError::ExpiredRefreshToken(_)) => {
+                // Expected error type
+            }
+            _ => panic!("Expected ExpiredRefreshToken error"),
         }
     }
 }

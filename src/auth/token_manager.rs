@@ -1,12 +1,16 @@
 use jsonwebtoken::{encode, decode, Header, EncodingKey, DecodingKey, Validation, Algorithm};
 use chrono::Utc;
 use uuid::Uuid;
+use rand::Rng;
+use sha2::{Sha256, Digest};
+use base64::{Engine as _, engine::general_purpose};
 use super::{Claims, AuthError};
 
 /// Manages JWT token generation and validation
 pub struct TokenManager {
     jwt_secret: String,
     jwt_expiration_minutes: i64,
+    refresh_expiration_days: i64,
 }
 
 impl TokenManager {
@@ -15,6 +19,7 @@ impl TokenManager {
         Self {
             jwt_secret,
             jwt_expiration_minutes: 15, // 15 minutes as per requirements
+            refresh_expiration_days: 7, // 7 days as per requirements
         }
     }
     
@@ -70,6 +75,39 @@ impl TokenManager {
         })?;
         
         Ok(token_data.claims)
+    }
+    
+    /// Generate a cryptographically secure refresh token
+    /// 
+    /// # Returns
+    /// * `String` - A base64-encoded random token (32 bytes)
+    pub fn generate_refresh_token(&self) -> String {
+        let mut rng = rand::thread_rng();
+        let random_bytes: [u8; 32] = rng.gen();
+        general_purpose::STANDARD.encode(random_bytes)
+    }
+    
+    /// Hash a refresh token using SHA-256
+    /// 
+    /// # Arguments
+    /// * `token` - The plaintext refresh token to hash
+    /// 
+    /// # Returns
+    /// * `String` - The hex-encoded SHA-256 hash
+    pub fn hash_refresh_token(&self, token: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(token.as_bytes());
+        let result = hasher.finalize();
+        format!("{:x}", result)
+    }
+    
+    /// Get the expiration timestamp for a refresh token (7 days from now)
+    /// 
+    /// # Returns
+    /// * `i64` - Unix timestamp for 7 days from now
+    pub fn get_refresh_expiration(&self) -> i64 {
+        let now = Utc::now().timestamp();
+        now + (self.refresh_expiration_days * 24 * 60 * 60)
     }
 }
 
@@ -238,5 +276,49 @@ mod tests {
             }
             _ => panic!("Expected ExpiredToken error"),
         }
+    }
+
+    #[test]
+    fn test_generate_refresh_token_creates_unique_tokens() {
+        let token_manager = TokenManager::new("test-secret-key-minimum-32-characters-long".to_string());
+        
+        let token1 = token_manager.generate_refresh_token();
+        let token2 = token_manager.generate_refresh_token();
+        
+        // Tokens should be different
+        assert_ne!(token1, token2);
+        
+        // Tokens should be base64-encoded (44 characters for 32 bytes)
+        assert_eq!(token1.len(), 44);
+        assert_eq!(token2.len(), 44);
+    }
+
+    #[test]
+    fn test_hash_refresh_token_produces_consistent_hashes() {
+        let token_manager = TokenManager::new("test-secret-key-minimum-32-characters-long".to_string());
+        
+        let token = "test-refresh-token";
+        let hash1 = token_manager.hash_refresh_token(token);
+        let hash2 = token_manager.hash_refresh_token(token);
+        
+        // Same token should produce same hash
+        assert_eq!(hash1, hash2);
+        
+        // Hash should be 64 characters (SHA-256 in hex)
+        assert_eq!(hash1.len(), 64);
+    }
+
+    #[test]
+    fn test_hash_refresh_token_produces_different_hashes_for_different_tokens() {
+        let token_manager = TokenManager::new("test-secret-key-minimum-32-characters-long".to_string());
+        
+        let token1 = "token1";
+        let token2 = "token2";
+        
+        let hash1 = token_manager.hash_refresh_token(token1);
+        let hash2 = token_manager.hash_refresh_token(token2);
+        
+        // Different tokens should produce different hashes
+        assert_ne!(hash1, hash2);
     }
 }

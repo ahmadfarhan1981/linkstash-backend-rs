@@ -33,3 +33,12 @@ cargo test             # Run tests
 cargo build --release  # Production build
 sea-orm-cli migrate up # Run migrations
 ```
+
+## Manual Testing
+
+- **ALWAYS** use `controlPwshProcess` with action "start" to run the server in the background for manual testing
+- **NEVER** use `executePwsh` with `cargo run` during manual tests (it blocks execution)
+- Set JWT_SECRET environment variable before starting: `$env:JWT_SECRET="test-secret-key-minimum-32-characters-long"`
+- Use `getProcessOutput` to check server logs
+- Use `controlPwshProcess` with action "stop" to stop the server when done
+- Test endpoints via curl or by checking Swagger UI at http://localhost:3000/swagger
