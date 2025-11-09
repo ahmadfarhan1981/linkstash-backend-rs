@@ -56,3 +56,17 @@ pub struct RefreshResponse {
     /// Number of seconds until the access token expires
     pub expires_in: i64,
 }
+
+/// Request model for logout
+#[derive(Object, Debug, Serialize, Deserialize)]
+pub struct LogoutRequest {
+    /// Refresh token to revoke
+    pub refresh_token: String,
+}
+
+/// Response model for logout
+#[derive(Object, Debug, Serialize, Deserialize)]
+pub struct LogoutResponse {
+    /// Success message
+    pub message: String,
+}

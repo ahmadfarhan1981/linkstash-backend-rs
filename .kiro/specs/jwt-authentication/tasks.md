@@ -477,37 +477,53 @@ Build incrementally with working endpoints at each step, adding database persist
 
 ## Phase 6: Logout and Token Cleanup
 
-- [ ] 9. Implement logout endpoint
-  - [ ] 9.1 Create LogoutRequest and LogoutResponse models
+- [x] 9. Implement logout endpoint
+
+
+
+
+  - [x] 9.1 Create LogoutRequest and LogoutResponse models
+
+
     - Add LogoutRequest with refresh_token field
     - Add LogoutResponse with message field
     - _Requirements: 4.1_
     
-  - [ ] 9.2 Implement refresh token revocation in CredentialStore
+  - [x] 9.2 Implement refresh token revocation in CredentialStore
+
+
     - Add revoke_refresh_token method (delete by hash)
     - _Requirements: 4.1, 4.4_
     
-  - [ ] 9.3 Implement POST /auth/logout endpoint
+  - [x] 9.3 Implement POST /auth/logout endpoint
+
+
     - Accept LogoutRequest
     - Hash and revoke refresh token
     - Return success message regardless of token validity
     - _Requirements: 4.1, 4.2, 4.3_
     
-  - [ ] 9.4 Manual test logout
+  - [x] 9.4 Manual test logout
+
+
     - Login to get tokens
     - Call /auth/logout with refresh_token
     - Verify token is removed from database
     - Try to refresh with revoked token (should return 401)
     - _Requirements: 4.1, 4.2_
     
-  - [ ] 9.5 Write unit tests for refresh token revocation
+  - [x] 9.5 Write unit tests for refresh token revocation
+
+
 
     - Test revoke_refresh_token removes token from database
     - Test revoke_refresh_token succeeds even if token doesn't exist
     - _Requirements: 4.1, 4.4_
     
 
-  - [ ] 9.6 Write unit tests for logout endpoint
+  - [x] 9.6 Write unit tests for logout endpoint
+
+
 
     - Test logout with valid token returns 200
     - Test logout removes token from database
@@ -515,13 +531,13 @@ Build incrementally with working endpoints at each step, adding database persist
     - Test refresh fails after logout with 401
     - _Requirements: 4.1, 4.2, 4.3_
 
-- [ ] 10. Implement token cleanup
-  - [ ] 10.1 Implement cleanup_expired_tokens in CredentialStore
+- [ ]* 10. Implement token cleanup
+  - [ ]* 10.1 Implement cleanup_expired_tokens in CredentialStore
     - Add method to delete expired tokens
     - Return count of deleted tokens
     - _Requirements: 5.5_
     
-  - [ ] 10.2 Add background cleanup task in main.rs
+  - [ ]* 10.2 Add background cleanup task in main.rs
     - Spawn Tokio task that runs cleanup every hour
     - Log cleanup results
     - _Requirements: 5.5_

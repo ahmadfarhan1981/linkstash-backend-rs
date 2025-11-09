@@ -1,7 +1,7 @@
 use poem_openapi::{payload::Json, OpenApi, Tags, SecurityScheme, auth::Bearer};
 use crate::stores::CredentialStore;
 use crate::services::TokenService;
-use crate::types::dto::auth::{LoginRequest, TokenResponse, WhoAmIResponse, RefreshRequest, RefreshResponse};
+use crate::types::dto::auth::{LoginRequest, TokenResponse, WhoAmIResponse, RefreshRequest, RefreshResponse, LogoutRequest, LogoutResponse};
 use crate::errors::auth::AuthError;
 use std::sync::Arc;
 
@@ -104,6 +104,24 @@ impl AuthApi {
             access_token,
             token_type: "Bearer".to_string(),
             expires_in: 900, // 15 minutes in seconds
+        }))
+    }
+    
+    /// Logout and revoke refresh token
+    #[oai(path = "/logout", method = "post", tag = "AuthTags::Authentication")]
+    async fn logout(&self, auth: BearerAuth, body: Json<LogoutRequest>) -> Result<Json<LogoutResponse>, AuthError> {
+        // Validate JWT to get authenticated user
+        let claims = self.token_manager.validate_jwt(&auth.0.token)?;
+        
+        // Hash the refresh token
+        let token_hash = self.token_manager.hash_refresh_token(&body.refresh_token);
+        
+        // Revoke refresh token only if it belongs to the authenticated user
+        self.credential_store.revoke_refresh_token(&token_hash, &claims.sub).await?;
+        
+        // Return success message
+        Ok(Json(LogoutResponse {
+            message: "Logged out successfully".to_string(),
         }))
     }
 }
@@ -590,6 +608,188 @@ mod tests {
         // Both JWTs should contain the same user_id
         assert_eq!(new_claims.sub, original_claims.sub);
         assert!(!new_claims.sub.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_logout_with_valid_token_returns_200() {
+        let (_db, credential_store, token_manager) = setup_test_db().await;
+        let api = AuthApi::new(credential_store, token_manager);
+        
+        // Login to get tokens
+        let login_request = Json(LoginRequest {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+        let login_response = api.login(login_request).await.unwrap();
+        
+        // Create BearerAuth with the JWT
+        let auth = BearerAuth(Bearer { token: login_response.access_token.clone() });
+        
+        // Logout with valid refresh token
+        let logout_request = Json(LogoutRequest {
+            refresh_token: login_response.refresh_token.clone(),
+        });
+        let result = api.logout(auth, logout_request).await;
+        
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.message, "Logged out successfully");
+    }
+
+    #[tokio::test]
+    async fn test_logout_removes_token_from_database() {
+        let (db, credential_store, token_manager) = setup_test_db().await;
+        let api = AuthApi::new(credential_store, token_manager.clone());
+        
+        // Login to get tokens
+        let login_request = Json(LoginRequest {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+        let login_response = api.login(login_request).await.unwrap();
+        
+        // Hash the refresh token to check database
+        let token_hash = token_manager.hash_refresh_token(&login_response.refresh_token);
+        
+        // Verify token exists in database
+        use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
+        let token_before = RefreshToken::find()
+            .filter(Column::TokenHash.eq(&token_hash))
+            .one(&db)
+            .await
+            .expect("Failed to query token");
+        assert!(token_before.is_some());
+        
+        // Create BearerAuth with the JWT
+        let auth = BearerAuth(Bearer { token: login_response.access_token.clone() });
+        
+        // Logout
+        let logout_request = Json(LogoutRequest {
+            refresh_token: login_response.refresh_token.clone(),
+        });
+        api.logout(auth, logout_request).await.unwrap();
+        
+        // Verify token is removed from database
+        let token_after = RefreshToken::find()
+            .filter(Column::TokenHash.eq(&token_hash))
+            .one(&db)
+            .await
+            .expect("Failed to query token");
+        assert!(token_after.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_logout_with_invalid_token_still_returns_200() {
+        let (_db, credential_store, token_manager) = setup_test_db().await;
+        let api = AuthApi::new(credential_store, token_manager);
+        
+        // Login to get a valid JWT
+        let login_request = Json(LoginRequest {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+        let login_response = api.login(login_request).await.unwrap();
+        
+        // Create BearerAuth with the JWT
+        let auth = BearerAuth(Bearer { token: login_response.access_token.clone() });
+        
+        // Logout with invalid refresh token
+        let logout_request = Json(LogoutRequest {
+            refresh_token: "invalid-token-12345".to_string(),
+        });
+        let result = api.logout(auth, logout_request).await;
+        
+        // Should still return success
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.message, "Logged out successfully");
+    }
+
+    #[tokio::test]
+    async fn test_refresh_fails_after_logout_with_401() {
+        let (_db, credential_store, token_manager) = setup_test_db().await;
+        let api = AuthApi::new(credential_store, token_manager);
+        
+        // Login to get tokens
+        let login_request = Json(LoginRequest {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+        let login_response = api.login(login_request).await.unwrap();
+        
+        // Create BearerAuth with the JWT
+        let auth = BearerAuth(Bearer { token: login_response.access_token.clone() });
+        
+        // Logout
+        let logout_request = Json(LogoutRequest {
+            refresh_token: login_response.refresh_token.clone(),
+        });
+        api.logout(auth, logout_request).await.unwrap();
+        
+        // Try to refresh with revoked token
+        let refresh_request = Json(RefreshRequest {
+            refresh_token: login_response.refresh_token.clone(),
+        });
+        let result = api.refresh(refresh_request).await;
+        
+        // Should return 401 error
+        assert!(result.is_err());
+        match result {
+            Err(AuthError::InvalidRefreshToken(_)) => {
+                // Expected error type
+            }
+            _ => panic!("Expected InvalidRefreshToken error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_logout_cannot_revoke_another_users_token() {
+        let (db, credential_store, token_manager) = setup_test_db().await;
+        let api = AuthApi::new(credential_store.clone(), token_manager.clone());
+        
+        // Create a second user
+        credential_store
+            .add_user("user2".to_string(), "password2".to_string())
+            .await
+            .expect("Failed to create user2");
+        
+        // Login as testuser
+        let login1_request = Json(LoginRequest {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+        let login1_response = api.login(login1_request).await.unwrap();
+        
+        // Login as user2
+        let login2_request = Json(LoginRequest {
+            username: "user2".to_string(),
+            password: "password2".to_string(),
+        });
+        let login2_response = api.login(login2_request).await.unwrap();
+        
+        // Try to logout user2's token using testuser's JWT
+        let auth = BearerAuth(Bearer { token: login1_response.access_token.clone() });
+        let logout_request = Json(LogoutRequest {
+            refresh_token: login2_response.refresh_token.clone(),
+        });
+        api.logout(auth, logout_request).await.unwrap();
+        
+        // Verify user2's token still exists (wasn't deleted)
+        let token_hash = token_manager.hash_refresh_token(&login2_response.refresh_token);
+        use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
+        let token_after = RefreshToken::find()
+            .filter(Column::TokenHash.eq(&token_hash))
+            .one(&db)
+            .await
+            .expect("Failed to query token");
+        assert!(token_after.is_some());
+        
+        // Verify user2 can still refresh
+        let refresh_request = Json(RefreshRequest {
+            refresh_token: login2_response.refresh_token.clone(),
+        });
+        let result = api.refresh(refresh_request).await;
+        assert!(result.is_ok());
     }
 }
 

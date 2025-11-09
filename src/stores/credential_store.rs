@@ -174,6 +174,29 @@ impl CredentialStore {
         // Return user_id on success
         Ok(token.user_id)
     }
+    
+    /// Revoke a refresh token by deleting it from the database
+    /// 
+    /// # Arguments
+    /// * `token_hash` - The SHA-256 hash of the refresh token to revoke
+    /// * `user_id` - The user_id that must own the token (for authorization)
+    /// 
+    /// # Returns
+    /// * `Ok(())` - Token revoked successfully (or didn't exist, or didn't belong to user)
+    /// * `Err(AuthError)` - Database error
+    pub async fn revoke_refresh_token(&self, token_hash: &str, user_id: &str) -> Result<(), AuthError> {
+        use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
+        
+        // Delete token by hash AND user_id (succeeds even if token doesn't exist or doesn't belong to user)
+        RefreshToken::delete_many()
+            .filter(Column::TokenHash.eq(token_hash))
+            .filter(Column::UserId.eq(user_id))
+            .exec(&self.db)
+            .await
+            .map_err(|e| AuthError::internal_error(format!("Failed to revoke refresh token: {}", e)))?;
+        
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -532,6 +555,114 @@ mod tests {
             }
             _ => panic!("Expected ExpiredRefreshToken error"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_revoke_refresh_token_removes_token_from_database() {
+        let (db, credential_store) = setup_test_db().await;
+        
+        // Add a user
+        let user_id = credential_store
+            .add_user("revokeuser".to_string(), "password".to_string())
+            .await
+            .expect("Failed to add user");
+        
+        // Store a refresh token
+        let token_hash = "revoke_test_hash";
+        let expires_at = Utc::now().timestamp() + 604800;
+        
+        credential_store
+            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at)
+            .await
+            .expect("Failed to store token");
+        
+        // Verify token exists
+        use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
+        let token_before = RefreshToken::find()
+            .filter(Column::TokenHash.eq(token_hash))
+            .one(&db)
+            .await
+            .expect("Failed to query token");
+        assert!(token_before.is_some());
+        
+        // Revoke the token with correct user_id
+        let result = credential_store.revoke_refresh_token(token_hash, &user_id).await;
+        assert!(result.is_ok());
+        
+        // Verify token is removed
+        let token_after = RefreshToken::find()
+            .filter(Column::TokenHash.eq(token_hash))
+            .one(&db)
+            .await
+            .expect("Failed to query token");
+        assert!(token_after.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_revoke_refresh_token_succeeds_even_if_token_doesnt_exist() {
+        let (_db, credential_store) = setup_test_db().await;
+        
+        // Add a user
+        let user_id = credential_store
+            .add_user("testuser".to_string(), "password".to_string())
+            .await
+            .expect("Failed to add user");
+        
+        // Try to revoke a token that doesn't exist
+        let result = credential_store.revoke_refresh_token("nonexistent_token", &user_id).await;
+        
+        // Should succeed without error
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_revoke_refresh_token_only_revokes_if_user_matches() {
+        let (db, credential_store) = setup_test_db().await;
+        
+        // Add two users
+        let user1_id = credential_store
+            .add_user("user1".to_string(), "password".to_string())
+            .await
+            .expect("Failed to add user1");
+        
+        let user2_id = credential_store
+            .add_user("user2".to_string(), "password".to_string())
+            .await
+            .expect("Failed to add user2");
+        
+        // Store a refresh token for user1
+        let token_hash = "user1_token_hash";
+        let expires_at = Utc::now().timestamp() + 604800;
+        
+        credential_store
+            .store_refresh_token(token_hash.to_string(), user1_id.clone(), expires_at)
+            .await
+            .expect("Failed to store token");
+        
+        // Try to revoke user1's token as user2 (should not delete)
+        let result = credential_store.revoke_refresh_token(token_hash, &user2_id).await;
+        assert!(result.is_ok());
+        
+        // Verify token still exists (wasn't deleted because user_id didn't match)
+        use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
+        let token_after = RefreshToken::find()
+            .filter(Column::TokenHash.eq(token_hash))
+            .one(&db)
+            .await
+            .expect("Failed to query token");
+        assert!(token_after.is_some());
+        
+        // Now revoke with correct user_id
+        let result = credential_store.revoke_refresh_token(token_hash, &user1_id).await;
+        assert!(result.is_ok());
+        
+        // Verify token is now removed
+        let token_final = RefreshToken::find()
+            .filter(Column::TokenHash.eq(token_hash))
+            .one(&db)
+            .await
+            .expect("Failed to query token");
+        assert!(token_final.is_none());
     }
 }
 
