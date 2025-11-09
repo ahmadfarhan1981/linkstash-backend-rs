@@ -1,17 +1,20 @@
 use poem_openapi::{payload::Json, OpenApi, Tags};
 use poem::http::HeaderMap;
-use super::{AuthError, LoginRequest, TokenResponse, WhoAmIResponse, RefreshRequest, RefreshResponse, CredentialStore, TokenManager};
+use crate::stores::CredentialStore;
+use crate::services::TokenService;
+use crate::types::dto::auth::{LoginRequest, TokenResponse, WhoAmIResponse, RefreshRequest, RefreshResponse};
+use crate::errors::auth::AuthError;
 use std::sync::Arc;
 
 /// Authentication API endpoints
 pub struct AuthApi {
     credential_store: Arc<CredentialStore>,
-    token_manager: Arc<TokenManager>,
+    token_manager: Arc<TokenService>,
 }
 
 impl AuthApi {
-    /// Create a new AuthApi with the given CredentialStore and TokenManager
-    pub fn new(credential_store: Arc<CredentialStore>, token_manager: Arc<TokenManager>) -> Self {
+    /// Create a new AuthApi with the given CredentialStore and TokenService
+    pub fn new(credential_store: Arc<CredentialStore>, token_manager: Arc<TokenService>) -> Self {
         Self { 
             credential_store,
             token_manager,
@@ -117,7 +120,7 @@ mod tests {
     use sea_orm::{Database, DatabaseConnection, EntityTrait, ColumnTrait, QueryFilter};
     use migration::{Migrator, MigratorTrait};
 
-    async fn setup_test_db() -> (DatabaseConnection, Arc<CredentialStore>, Arc<TokenManager>) {
+    async fn setup_test_db() -> (DatabaseConnection, Arc<CredentialStore>, Arc<TokenService>) {
         // Create in-memory SQLite database for testing
         let db = Database::connect("sqlite::memory:")
             .await
@@ -132,7 +135,7 @@ mod tests {
         let credential_store = Arc::new(CredentialStore::new(db.clone()));
         
         // Create token manager with test secret
-        let token_manager = Arc::new(TokenManager::new("test-secret-key-minimum-32-characters-long".to_string()));
+        let token_manager = Arc::new(TokenService::new("test-secret-key-minimum-32-characters-long".to_string()));
         
         // Add test user
         credential_store
@@ -248,7 +251,7 @@ mod tests {
         
         // Decode JWT and verify it contains expected claims
         use jsonwebtoken::{decode, Validation, DecodingKey, Algorithm};
-        use crate::auth::Claims;
+        use crate::types::internal::auth::Claims;
         
         let mut validation = Validation::new(Algorithm::HS256);
         validation.validate_exp = false; // Don't validate expiration in test
@@ -348,7 +351,7 @@ mod tests {
         // Create an expired JWT manually
         use jsonwebtoken::{encode, Header, EncodingKey, Algorithm};
         use chrono::Utc;
-        use crate::auth::Claims;
+        use crate::types::internal::auth::Claims;
         
         let now = Utc::now().timestamp();
         let expired_claims = Claims {
@@ -447,7 +450,7 @@ mod tests {
         let token_hash = token_manager.hash_refresh_token(&response.refresh_token);
         
         // Verify token is stored in database
-        use crate::auth::entities::refresh_token::{Entity as RefreshToken, Column};
+        use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
         let stored_token = RefreshToken::find()
             .filter(Column::TokenHash.eq(&token_hash))
             .one(&db)
@@ -580,7 +583,7 @@ mod tests {
         
         // Decode both JWTs and compare expiration times
         use jsonwebtoken::{decode, Validation, DecodingKey, Algorithm};
-        use crate::auth::Claims;
+        use crate::types::internal::auth::Claims;
         
         let mut validation = Validation::new(Algorithm::HS256);
         validation.validate_exp = false;
@@ -622,7 +625,7 @@ mod tests {
         
         // Decode both JWTs and verify user_id matches
         use jsonwebtoken::{decode, Validation, DecodingKey, Algorithm};
-        use crate::auth::Claims;
+        use crate::types::internal::auth::Claims;
         
         let mut validation = Validation::new(Algorithm::HS256);
         validation.validate_exp = false;
@@ -644,3 +647,4 @@ mod tests {
         assert!(!new_claims.sub.is_empty());
     }
 }
+

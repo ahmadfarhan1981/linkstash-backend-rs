@@ -4,17 +4,18 @@ use uuid::Uuid;
 use rand::Rng;
 use sha2::{Sha256, Digest};
 use base64::{Engine as _, engine::general_purpose};
-use super::{Claims, AuthError};
+use crate::types::internal::auth::Claims;
+use crate::errors::auth::AuthError;
 
 /// Manages JWT token generation and validation
-pub struct TokenManager {
+pub struct TokenService {
     jwt_secret: String,
     jwt_expiration_minutes: i64,
     refresh_expiration_days: i64,
 }
 
-impl TokenManager {
-    /// Create a new TokenManager with the given JWT secret
+impl TokenService {
+    /// Create a new TokenService with the given JWT secret
     pub fn new(jwt_secret: String) -> Self {
         Self {
             jwt_secret,
@@ -119,7 +120,7 @@ mod tests {
 
     #[test]
     fn test_generate_jwt_creates_valid_jwt() {
-        let token_manager = TokenManager::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
         let user_id = Uuid::new_v4();
         
         let result = token_manager.generate_jwt(&user_id);
@@ -142,7 +143,7 @@ mod tests {
 
     #[test]
     fn test_jwt_contains_correct_user_id() {
-        let token_manager = TokenManager::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
         let user_id = Uuid::new_v4();
         
         let token = token_manager.generate_jwt(&user_id).unwrap();
@@ -162,7 +163,7 @@ mod tests {
 
     #[test]
     fn test_jwt_expiration_is_15_minutes() {
-        let token_manager = TokenManager::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
         let user_id = Uuid::new_v4();
         
         let token = token_manager.generate_jwt(&user_id).unwrap();
@@ -183,7 +184,7 @@ mod tests {
 
     #[test]
     fn test_jwt_has_iat_timestamp() {
-        let token_manager = TokenManager::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
         let user_id = Uuid::new_v4();
         
         let before = Utc::now().timestamp();
@@ -206,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_validate_jwt_succeeds_with_valid_jwt() {
-        let token_manager = TokenManager::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
         let user_id = Uuid::new_v4();
         
         let token = token_manager.generate_jwt(&user_id).unwrap();
@@ -217,7 +218,7 @@ mod tests {
 
     #[test]
     fn test_validate_jwt_returns_correct_claims() {
-        let token_manager = TokenManager::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
         let user_id = Uuid::new_v4();
         
         let token = token_manager.generate_jwt(&user_id).unwrap();
@@ -230,8 +231,8 @@ mod tests {
 
     #[test]
     fn test_validate_jwt_fails_with_invalid_signature() {
-        let token_manager = TokenManager::new("test-secret-key-minimum-32-characters-long".to_string());
-        let wrong_token_manager = TokenManager::new("wrong-secret-key-minimum-32-characters".to_string());
+        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
+        let wrong_token_manager = TokenService::new("wrong-secret-key-minimum-32-characters".to_string());
         let user_id = Uuid::new_v4();
         
         // Generate token with one secret
@@ -251,7 +252,7 @@ mod tests {
 
     #[test]
     fn test_validate_jwt_fails_with_expired_jwt() {
-        let token_manager = TokenManager::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
         
         // Create an expired token manually
         let now = Utc::now().timestamp();
@@ -280,7 +281,7 @@ mod tests {
 
     #[test]
     fn test_generate_refresh_token_creates_unique_tokens() {
-        let token_manager = TokenManager::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
         
         let token1 = token_manager.generate_refresh_token();
         let token2 = token_manager.generate_refresh_token();
@@ -295,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_hash_refresh_token_produces_consistent_hashes() {
-        let token_manager = TokenManager::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
         
         let token = "test-refresh-token";
         let hash1 = token_manager.hash_refresh_token(token);
@@ -310,7 +311,7 @@ mod tests {
 
     #[test]
     fn test_hash_refresh_token_produces_different_hashes_for_different_tokens() {
-        let token_manager = TokenManager::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
         
         let token1 = "token1";
         let token2 = "token2";
@@ -322,3 +323,4 @@ mod tests {
         assert_ne!(hash1, hash2);
     }
 }
+

@@ -1,11 +1,15 @@
-mod models;
 mod api;
-mod auth;
+mod types;
+mod errors;
+mod stores;
+mod services;
 
 use poem::{listener::TcpListener, Route, Server};
 use poem_openapi::OpenApiService;
-use api::Api;
-use auth::{AuthApi, CredentialStore, AuthError, TokenManager};
+use api::{HealthApi, ItemsApi, AuthApi};
+use stores::CredentialStore;
+use services::TokenService;
+use errors::auth::AuthError;
 use sea_orm::{Database, DatabaseConnection};
 use migration::{Migrator, MigratorTrait};
 
@@ -33,8 +37,8 @@ async fn main() -> Result<(), std::io::Error> {
     let jwt_secret = std::env::var("JWT_SECRET")
         .expect("JWT_SECRET environment variable must be set");
     
-    // Create TokenManager
-    let token_manager = std::sync::Arc::new(TokenManager::new(jwt_secret));
+    // Create TokenService
+    let token_manager = std::sync::Arc::new(TokenService::new(jwt_secret));
     
     // TODO: This is temporary - seed test user for development
     // Seed test user if not exists (username: "testuser", password: "testpass")
@@ -55,11 +59,11 @@ async fn main() -> Result<(), std::io::Error> {
         }
     }
     
-    // Create AuthApi with CredentialStore and TokenManager
+    // Create AuthApi with CredentialStore and TokenService
     let auth_api = AuthApi::new(credential_store.clone(), token_manager.clone());
     
     // Create OpenAPI service with API implementation
-    let api_service = OpenApiService::new((Api, auth_api), "Swagger API Generation", "1.0.0")
+    let api_service = OpenApiService::new((HealthApi, ItemsApi, auth_api), "Swagger API Generation", "1.0.0")
         .server("http://localhost:3000/api");
     
     // Generate Swagger UI from OpenAPI service

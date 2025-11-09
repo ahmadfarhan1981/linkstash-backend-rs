@@ -6,18 +6,58 @@ inclusion: always
 
 ## Module Organization
 
+**Layer-Based Architecture** - Organize by technical layer, not by feature:
+
 ```
 src/
-├── main.rs              # Server setup + route registration ONLY
-├── api.rs               # Root endpoints (health, items)
-├── models.rs            # Shared types
-└── {feature}/           # Feature modules (e.g., auth/)
-    ├── mod.rs           # Public exports only
-    ├── api.rs           # Endpoints with #[OpenApi]
-    ├── models.rs        # Request/response types
-    ├── service.rs       # Business logic
-    └── entities/        # SeaORM entities
+├── main.rs                    # Server setup + route registration ONLY
+│
+├── api/                       # HTTP endpoints layer
+│   ├── mod.rs                 # Public exports
+│   ├── health.rs              # Health check endpoints
+│   ├── items.rs               # Item management endpoints
+│   └── auth.rs                # Authentication endpoints
+│
+├── types/                     # All data structures
+│   ├── mod.rs
+│   ├── db/                    # Database entities (SeaORM)
+│   │   ├── mod.rs
+│   │   ├── user.rs            # User entity with DeriveEntityModel
+│   │   └── refresh_token.rs   # RefreshToken entity
+│   │
+│   ├── dto/                   # Data Transfer Objects (API contracts)
+│   │   ├── mod.rs
+│   │   ├── auth.rs            # LoginRequest, TokenResponse, RefreshRequest
+│   │   ├── items.rs           # CreateItemRequest, Item
+│   │   └── common.rs          # HealthResponse, ErrorResponse
+│   │
+│   └── internal/              # Internal-only types
+│       ├── mod.rs
+│       └── auth.rs            # Claims (JWT payload)
+│
+├── services/                  # Business logic layer
+│   ├── mod.rs
+│   ├── auth_service.rs        # Auth orchestration (login/refresh flows)
+│   └── token_service.rs       # JWT generation/validation
+│
+├── stores/                    # Data access layer (Repository pattern)
+│   ├── mod.rs
+│   └── credential_store.rs    # User credential DB operations
+│
+└── errors/                    # Error types
+    ├── mod.rs
+    └── auth.rs                # AuthError with ResponseError impl
 ```
+
+## Layer Responsibilities
+
+- **api/** - HTTP endpoints, request handling, OpenAPI tags, status codes
+- **types/db/** - SeaORM entities representing database schema
+- **types/dto/** - API request/response models with poem-openapi decorators
+- **types/internal/** - Internal data structures not exposed via API or DB
+- **services/** - Business logic, orchestration between stores
+- **stores/** - Database operations, query encapsulation (Repository pattern)
+- **errors/** - Custom error types implementing ResponseError
 
 ## API Patterns
 
@@ -44,10 +84,11 @@ src/
 
 ## Database
 
-- Entities use `DeriveEntityModel` in `{module}/entities/`
+- Entities use `DeriveEntityModel` in `types/db/`
 - Migrations in `migration/src/` with descriptive names
 - Connection pool managed in `main.rs`
 - Always use SeaORM's async API
+- Stores encapsulate all database queries (no SeaORM usage outside stores)
 
 ## Security Rules
 

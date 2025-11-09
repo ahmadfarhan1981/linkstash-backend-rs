@@ -2,9 +2,9 @@ use sea_orm::{DatabaseConnection, EntityTrait, ColumnTrait, QueryFilter, ActiveM
 use argon2::{Argon2, PasswordHash, PasswordVerifier, PasswordHasher, password_hash::SaltString};
 use uuid::Uuid;
 use chrono::Utc;
-use crate::auth::entities::user::{self, Entity as User, ActiveModel};
-use crate::auth::entities::refresh_token::{ActiveModel as RefreshTokenActiveModel};
-use crate::auth::errors::AuthError;
+use crate::types::db::user::{self, Entity as User, ActiveModel};
+use crate::types::db::refresh_token::{ActiveModel as RefreshTokenActiveModel};
+use crate::errors::auth::AuthError;
 
 /// CredentialStore manages user credentials and refresh tokens in the database
 pub struct CredentialStore {
@@ -153,7 +153,7 @@ impl CredentialStore {
     /// * `Ok(String)` - The user_id (UUID) if token is valid and not expired
     /// * `Err(AuthError)` - InvalidRefreshToken if not found, ExpiredRefreshToken if expired
     pub async fn validate_refresh_token(&self, token_hash: &str) -> Result<String, AuthError> {
-        use crate::auth::entities::refresh_token::{Entity as RefreshToken, Column};
+        use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
         
         // Query token by hash
         let token = RefreshToken::find()
@@ -353,7 +353,7 @@ mod tests {
         assert!(result.is_ok());
         
         // Verify token is in database
-        use crate::auth::entities::refresh_token::{Entity as RefreshToken, Column};
+        use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
         let stored_token = RefreshToken::find()
             .filter(Column::TokenHash.eq(token_hash))
             .one(&db)
@@ -387,7 +387,7 @@ mod tests {
         assert!(result.is_ok());
         
         // Verify the stored value matches what we passed (caller is responsible for hashing)
-        use crate::auth::entities::refresh_token::{Entity as RefreshToken, Column};
+        use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
         let stored_token = RefreshToken::find()
             .filter(Column::TokenHash.eq(plaintext_token))
             .one(&db)
@@ -421,7 +421,7 @@ mod tests {
         assert!(result.is_ok());
         
         // Verify expiration is correct
-        use crate::auth::entities::refresh_token::{Entity as RefreshToken, Column};
+        use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
         let stored_token = RefreshToken::find()
             .filter(Column::TokenHash.eq(token_hash))
             .one(&db)
@@ -534,3 +534,4 @@ mod tests {
         }
     }
 }
+
