@@ -16,8 +16,11 @@ inclusion: always
 - **Poem 3.1** - Web framework with `#[OpenApi]` macro for endpoints
 - **poem-openapi 5.1** - Auto-generates OpenAPI 3.0 specs and Swagger UI at `/swagger`
 - **SeaORM 0.12** - Async ORM with SQLite (features: `sqlx-sqlite`, `runtime-tokio-native-tls`, `macros`)
-- **jsonwebtoken 9.2** - JWT generation/validation
-- **argon2 0.5** - Password hashing (use for all password storage)
+- **jsonwebtoken 9.2** - JWT generation/validation (HS256 algorithm)
+- **argon2 0.5** - Password hashing with Argon2id (use for all password storage)
+- **rand 0.8** - Cryptographically secure random number generation
+- **sha2 0.10** - SHA-256 hashing for refresh tokens
+- **base64 0.21** - Base64 encoding for refresh tokens
 
 ## Server Config
 

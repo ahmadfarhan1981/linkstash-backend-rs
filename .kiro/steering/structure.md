@@ -66,6 +66,8 @@ src/
 - All routes under `/api` base path
 - Request types: `poem_openapi::Object` with validation
 - Response types: `poem_openapi::Object` or `poem_openapi::ApiResponse`
+- JWT authentication via Authorization header: `Bearer <token>`
+- Extract JWT from header, validate, and use claims for authorization
 
 ## Naming
 
@@ -92,7 +94,10 @@ src/
 
 ## Security Rules
 
-- Hash ALL passwords with argon2 before storage
+- Hash ALL passwords with argon2 (Argon2id variant) before storage
 - Validate all user input in request models
-- Use JWT for stateless auth
+- Use JWT for stateless auth (HS256 algorithm, 15 min expiration)
+- Refresh tokens: 32 random bytes, base64-encoded, SHA-256 hashed for storage (7 day expiration)
 - Never expose sensitive data in logs or responses
+- Never log or expose passwords, tokens, or hashes
+- Store only hashed refresh tokens in database, never plaintext

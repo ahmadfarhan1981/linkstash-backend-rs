@@ -21,13 +21,18 @@ Rust REST API with JWT authentication, auto-generated OpenAPI docs, and Swagger 
 - Auto-generated Swagger UI at `/swagger`
 - Type-safe API definitions
 - Health check endpoint
-
-**In Progress:**
 - JWT authentication (access + refresh tokens)
-- User credential management
+- User credential management with argon2 password hashing
 - SQLite with SeaORM
+- Login endpoint with database-backed authentication
+- JWT generation and validation (15 min expiration)
+- Refresh token generation and storage (7 day expiration, SHA-256 hashed)
+- Token refresh endpoint
+- WhoAmI endpoint for JWT validation
 
 **Planned:**
+- Logout endpoint with token revocation
+- Expired token cleanup (background task)
 - Token rotation
 - Multi-device sessions
 - Rate limiting
