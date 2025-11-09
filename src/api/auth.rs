@@ -1,5 +1,4 @@
-use poem_openapi::{payload::Json, OpenApi, Tags};
-use poem::http::HeaderMap;
+use poem_openapi::{payload::Json, OpenApi, Tags, SecurityScheme, auth::Bearer};
 use crate::stores::CredentialStore;
 use crate::services::TokenService;
 use crate::types::dto::auth::{LoginRequest, TokenResponse, WhoAmIResponse, RefreshRequest, RefreshResponse};
@@ -21,6 +20,16 @@ impl AuthApi {
         }
     }
 }
+
+/// JWT Bearer token authentication
+#[derive(SecurityScheme)]
+#[oai(
+    ty = "bearer",
+    key_name = "Authorization",
+    key_in = "header",
+    bearer_format = "JWT"
+)]
+pub struct BearerAuth(Bearer);
 
 /// API tags for authentication endpoints
 #[derive(Tags)]
@@ -63,23 +72,9 @@ impl AuthApi {
     
     /// Verify JWT and return user information
     #[oai(path = "/whoami", method = "get", tag = "AuthTags::Authentication")]
-    async fn whoami(&self, headers: &HeaderMap) -> Result<Json<WhoAmIResponse>, AuthError> {
-        // Extract Authorization header
-        let auth_header = headers
-            .get("authorization")
-            .ok_or_else(|| AuthError::missing_auth_header())?
-            .to_str()
-            .map_err(|_| AuthError::invalid_auth_header())?;
-        
-        // Parse Bearer token
-        if !auth_header.starts_with("Bearer ") {
-            return Err(AuthError::invalid_auth_header());
-        }
-        
-        let token = &auth_header[7..]; // Skip "Bearer "
-        
+    async fn whoami(&self, auth: BearerAuth) -> Result<Json<WhoAmIResponse>, AuthError> {
         // Validate JWT
-        let claims = self.token_manager.validate_jwt(token)?;
+        let claims = self.token_manager.validate_jwt(&auth.0.token)?;
         
         // Return user info
         Ok(Json(WhoAmIResponse {
@@ -283,15 +278,11 @@ mod tests {
         });
         let login_response = api.login(login_request).await.unwrap();
         
-        // Create headers with the JWT
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "authorization",
-            format!("Bearer {}", login_response.access_token).parse().unwrap(),
-        );
+        // Create BearerAuth with the JWT
+        let auth = BearerAuth(Bearer { token: login_response.access_token.clone() });
         
         // Call whoami
-        let result = api.whoami(&headers).await;
+        let result = api.whoami(auth).await;
         
         assert!(result.is_ok());
         let response = result.unwrap();
@@ -299,40 +290,19 @@ mod tests {
         assert!(response.expires_at > 0);
     }
 
-    #[tokio::test]
-    async fn test_whoami_without_authorization_header_returns_401() {
-        let (_db, credential_store, token_manager) = setup_test_db().await;
-        let api = AuthApi::new(credential_store, token_manager);
-        
-        // Create empty headers
-        let headers = HeaderMap::new();
-        
-        // Call whoami without auth header
-        let result = api.whoami(&headers).await;
-        
-        assert!(result.is_err());
-        match result {
-            Err(AuthError::MissingAuthHeader(_)) => {
-                // Expected error type
-            }
-            _ => panic!("Expected MissingAuthHeader error"),
-        }
-    }
+    // Test removed: poem-openapi automatically handles missing Authorization header
+    // and returns 401 before reaching the handler
 
     #[tokio::test]
     async fn test_whoami_with_invalid_jwt_returns_401() {
         let (_db, credential_store, token_manager) = setup_test_db().await;
         let api = AuthApi::new(credential_store, token_manager);
         
-        // Create headers with invalid JWT
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "authorization",
-            "Bearer invalid-jwt-token".parse().unwrap(),
-        );
+        // Create BearerAuth with invalid JWT
+        let auth = BearerAuth(Bearer { token: "invalid-jwt-token".to_string() });
         
         // Call whoami with invalid JWT
-        let result = api.whoami(&headers).await;
+        let result = api.whoami(auth).await;
         
         assert!(result.is_err());
         match result {
@@ -366,15 +336,11 @@ mod tests {
             &EncodingKey::from_secret("test-secret-key-minimum-32-characters-long".as_bytes()),
         ).unwrap();
         
-        // Create headers with expired JWT
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "authorization",
-            format!("Bearer {}", expired_token).parse().unwrap(),
-        );
+        // Create BearerAuth with expired JWT
+        let auth = BearerAuth(Bearer { token: expired_token });
         
         // Call whoami with expired JWT
-        let result = api.whoami(&headers).await;
+        let result = api.whoami(auth).await;
         
         assert!(result.is_err());
         match result {
@@ -385,29 +351,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_whoami_with_malformed_authorization_header_returns_401() {
-        let (_db, credential_store, token_manager) = setup_test_db().await;
-        let api = AuthApi::new(credential_store, token_manager);
-        
-        // Create headers with malformed auth header (missing "Bearer ")
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "authorization",
-            "just-a-token-without-bearer".parse().unwrap(),
-        );
-        
-        // Call whoami with malformed header
-        let result = api.whoami(&headers).await;
-        
-        assert!(result.is_err());
-        match result {
-            Err(AuthError::InvalidAuthHeader(_)) => {
-                // Expected error type
-            }
-            _ => panic!("Expected InvalidAuthHeader error"),
-        }
-    }
+    // Test removed: poem-openapi automatically handles malformed Authorization header
+    // and returns 401 before reaching the handler
 
     #[tokio::test]
     async fn test_login_refresh_token_is_not_placeholder() {
