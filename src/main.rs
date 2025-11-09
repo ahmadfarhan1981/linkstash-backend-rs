@@ -15,6 +15,9 @@ use migration::{Migrator, MigratorTrait};
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
+    // Load environment variables from .env file
+    dotenv::dotenv().ok();
+    
     // Load database URL from environment or use default
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "sqlite://auth.db?mode=rwc".to_string());
