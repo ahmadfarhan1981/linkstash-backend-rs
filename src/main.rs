@@ -1,4 +1,5 @@
 mod api;
+mod config;
 mod types;
 mod errors;
 mod stores;
@@ -9,6 +10,7 @@ use poem_openapi::OpenApiService;
 use api::{HealthApi, AuthApi};
 use stores::CredentialStore;
 use services::TokenService;
+use config::SecretManager;
 use errors::auth::AuthError;
 use sea_orm::{Database, DatabaseConnection};
 use migration::{Migrator, MigratorTrait};
@@ -36,12 +38,14 @@ async fn main() -> Result<(), std::io::Error> {
     
     println!("Database migrations completed");
     
-    // Load JWT secret from environment
-    let jwt_secret = std::env::var("JWT_SECRET")
-        .expect("JWT_SECRET environment variable must be set");
+    // Initialize SecretManager
+    let secret_manager = std::sync::Arc::new(
+        SecretManager::init()
+            .expect("Failed to initialize secrets. Please ensure all required environment variables are set with valid values.")
+    );
     
-    // Create TokenService
-    let token_manager = std::sync::Arc::new(TokenService::new(jwt_secret));
+    // Create TokenService with JWT secret from SecretManager
+    let token_manager = std::sync::Arc::new(TokenService::new(secret_manager.jwt_secret().to_string()));
     
     // TODO: This is temporary - seed test user for development
     // Seed test user if not exists (username: "testuser", password: "testpass")

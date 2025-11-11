@@ -3,6 +3,10 @@ name = "linkstash-backend-rs"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "linkstash_backend"
+path = "src/lib.rs"
+
 [dependencies]
 poem = "3.1"
 poem-openapi = { version = "5.1", features = ["swagger-ui"] }

@@ -7,11 +7,6 @@
   - Export crypto module in `src/auth/mod.rs`
   - _Requirements: 2.1, 2.2, 6.1, 6.3_
 
-- [ ] 1.1 Write unit tests for HMAC utility
-  - Test HMAC consistency (same key + token = same hash)
-  - Test output length (64 hex characters)
-  - _Requirements: 7.1, 7.2_
-
 - [ ] 2. Implement password pepper support in CredentialStore
   - Add `password_pepper: String` field to `CredentialStore` struct
   - Update `CredentialStore::new()` to accept `password_pepper` parameter
