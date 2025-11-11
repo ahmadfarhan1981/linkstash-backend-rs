@@ -42,7 +42,7 @@ impl CredentialStore {
         let user_id = Uuid::new_v4().to_string();
 
         // Hash password with Argon2id
-        let salt = SaltString::generate(&mut rand::thread_rng());
+        let salt = SaltString::generate(&mut rand_core::OsRng);
         let argon2 = Argon2::default();
         let password_hash = argon2
             .hash_password(password.as_bytes(), &salt)

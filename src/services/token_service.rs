@@ -1,7 +1,7 @@
 use jsonwebtoken::{encode, decode, Header, EncodingKey, DecodingKey, Validation, Algorithm};
 use chrono::Utc;
 use uuid::Uuid;
-use rand::Rng;
+use rand::prelude::*;
 use sha2::{Sha256, Digest};
 use base64::{Engine as _, engine::general_purpose};
 use crate::types::internal::auth::Claims;
@@ -83,8 +83,8 @@ impl TokenService {
     /// # Returns
     /// * `String` - A base64-encoded random token (32 bytes)
     pub fn generate_refresh_token(&self) -> String {
-        let mut rng = rand::thread_rng();
-        let random_bytes: [u8; 32] = rng.gen();
+        let mut rng = rand::rng();
+        let random_bytes: [u8; 32] = rng.random();
         general_purpose::STANDARD.encode(random_bytes)
     }
     
