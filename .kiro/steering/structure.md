@@ -15,7 +15,6 @@ src/
 ├── api/                       # HTTP endpoints layer
 │   ├── mod.rs                 # Public exports
 │   ├── health.rs              # Health check endpoints
-│   ├── items.rs               # Item management endpoints
 │   └── auth.rs                # Authentication endpoints
 │
 ├── types/                     # All data structures
@@ -28,7 +27,6 @@ src/
 │   ├── dto/                   # Data Transfer Objects (API contracts)
 │   │   ├── mod.rs
 │   │   ├── auth.rs            # LoginRequest, TokenResponse, RefreshRequest
-│   │   ├── items.rs           # CreateItemRequest, Item
 │   │   └── common.rs          # HealthResponse, ErrorResponse
 │   │
 │   └── internal/              # Internal-only types

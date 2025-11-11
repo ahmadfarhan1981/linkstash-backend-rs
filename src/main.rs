@@ -6,7 +6,7 @@ mod services;
 
 use poem::{listener::TcpListener, Route, Server};
 use poem_openapi::OpenApiService;
-use api::{HealthApi, ItemsApi, AuthApi};
+use api::{HealthApi, AuthApi};
 use stores::CredentialStore;
 use services::TokenService;
 use errors::auth::AuthError;
@@ -66,7 +66,7 @@ async fn main() -> Result<(), std::io::Error> {
     let auth_api = AuthApi::new(credential_store.clone(), token_manager.clone());
     
     // Create OpenAPI service with API implementation
-    let api_service = OpenApiService::new((HealthApi, ItemsApi, auth_api), "Swagger API Generation", "1.0.0")
+    let api_service = OpenApiService::new((HealthApi, auth_api), "Swagger API Generation", "1.0.0")
         .server("http://localhost:3000/api");
     
     // Generate Swagger UI from OpenAPI service
