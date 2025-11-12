@@ -144,11 +144,15 @@ mod tests {
             .await
             .expect("Failed to run migrations");
         
-        // Create credential store
-        let credential_store = Arc::new(CredentialStore::new(db.clone()));
+        // Create credential store with test password pepper
+        let password_pepper = "test-pepper-for-api-tests".to_string();
+        let credential_store = Arc::new(CredentialStore::new(db.clone(), password_pepper));
         
-        // Create token manager with test secret
-        let token_manager = Arc::new(TokenService::new("test-secret-key-minimum-32-characters-long".to_string()));
+        // Create token manager with test secret and refresh token secret
+        let token_manager = Arc::new(TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+        ));
         
         // Add test user
         credential_store

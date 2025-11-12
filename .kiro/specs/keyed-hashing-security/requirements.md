@@ -7,9 +7,10 @@ This document specifies the requirements for enhancing the authentication system
 ## Glossary
 
 - **Auth_System**: The authentication service responsible for user credential verification and token management
+- **SecretManager**: The centralized secret management component that loads and validates all application secrets
 - **HMAC**: Hash-based Message Authentication Code, a keyed cryptographic hash function
-- **Password_Pepper**: A secret key used in HMAC to add an additional layer of security to password hashing
-- **Refresh_Token_Secret**: A secret key used in HMAC to prevent unauthorized refresh token minting
+- **Password_Pepper**: A secret key (loaded as PASSWORD_PEPPER env var) used to add an additional layer of security to password hashing via Argon2's secret parameter
+- **Refresh_Token_Secret**: A secret key (loaded as REFRESH_TOKEN_SECRET env var) used in HMAC to prevent unauthorized refresh token minting
 - **Token_Hash**: The HMAC output stored in the database for refresh token validation
 - **Keyed_Hash**: A cryptographic hash that requires a secret key to compute
 - **Database_Compromise**: A security incident where an attacker gains read or write access to the database
@@ -22,9 +23,9 @@ This document specifies the requirements for enhancing the authentication system
 
 #### Acceptance Criteria
 
-1. WHEN the Auth_System hashes a password, THE Auth_System SHALL apply HMAC-SHA256 with the Password_Pepper before applying Argon2id hashing
-2. WHEN the Auth_System verifies a password, THE Auth_System SHALL apply HMAC-SHA256 with the Password_Pepper before Argon2id verification
-3. THE Auth_System SHALL load the Password_Pepper from an environment variable with minimum 256-bit entropy
+1. WHEN the Auth_System hashes a password, THE Auth_System SHALL use Argon2id with the Password_Pepper as the secret parameter
+2. WHEN the Auth_System verifies a password, THE Auth_System SHALL use Argon2id with the Password_Pepper as the secret parameter for verification
+3. THE SecretManager SHALL load the Password_Pepper from the PASSWORD_PEPPER environment variable with minimum 16 characters
 4. WHEN the Password_Pepper is not available, THE Auth_System SHALL fail to start with a clear error message
 5. THE Auth_System SHALL not store the Password_Pepper in the database or application logs
 
@@ -46,23 +47,13 @@ This document specifies the requirements for enhancing the authentication system
 
 #### Acceptance Criteria
 
-1. THE Auth_System SHALL use three distinct secret keys: JWT_SECRET, Password_Pepper, and Refresh_Token_Secret
-2. THE Auth_System SHALL load all secret keys from environment variables
-3. WHEN any required secret key is missing or invalid, THE Auth_System SHALL fail to start with a specific error message indicating which key is missing
-4. THE Auth_System SHALL validate that each secret key has minimum 32 characters (256 bits) of entropy
-5. THE Auth_System SHALL not use the same secret key for multiple purposes
+1. THE SecretManager SHALL manage three distinct secret keys: JWT_SECRET, PASSWORD_PEPPER, and REFRESH_TOKEN_SECRET
+2. THE SecretManager SHALL load all secret keys from environment variables
+3. WHEN any required secret key is missing or invalid, THE SecretManager SHALL fail initialization with a specific error message indicating which key is missing
+4. THE SecretManager SHALL validate that JWT_SECRET has minimum 32 characters and PASSWORD_PEPPER has minimum 16 characters
+5. THE SecretManager SHALL validate that REFRESH_TOKEN_SECRET has minimum 32 characters
 
-### Requirement 4
 
-**User Story:** As a developer, I want the keyed hashing implementation to be backward compatible, so that existing users can continue to authenticate during migration
-
-#### Acceptance Criteria
-
-1. WHEN the Auth_System encounters a password hash without pepper, THE Auth_System SHALL support verification using the legacy method
-2. WHEN a user with a legacy password hash successfully authenticates, THE Auth_System SHALL re-hash the password with the new keyed hashing method
-3. THE Auth_System SHALL provide a migration flag to indicate whether legacy password support is enabled
-4. WHEN legacy support is disabled and a legacy password is encountered, THE Auth_System SHALL require the user to reset their password
-5. THE Auth_System SHALL log migration events for monitoring purposes without exposing sensitive data
 
 ### Requirement 5
 
@@ -96,6 +87,6 @@ This document specifies the requirements for enhancing the authentication system
 
 1. THE Auth_System SHALL provide unit tests that verify HMAC-SHA256 produces consistent outputs for the same input and key
 2. THE Auth_System SHALL provide unit tests that verify different keys produce different HMAC outputs for the same input
-3. THE Auth_System SHALL provide integration tests that verify end-to-end password hashing with pepper
+3. THE Auth_System SHALL provide integration tests that verify end-to-end password hashing with PASSWORD_PEPPER
 4. THE Auth_System SHALL provide integration tests that verify refresh token validation with keyed hashing
 5. THE Auth_System SHALL provide tests that verify the system fails to start with missing or invalid secret keys

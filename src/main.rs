@@ -44,12 +44,20 @@ async fn main() -> Result<(), std::io::Error> {
             .expect("Failed to initialize secrets. Please ensure all required environment variables are set with valid values.")
     );
     
-    // Create TokenService with JWT secret from SecretManager
-    let token_manager = std::sync::Arc::new(TokenService::new(secret_manager.jwt_secret().to_string()));
+    // Create TokenService with JWT secret and refresh token secret from SecretManager
+    let token_manager = std::sync::Arc::new(TokenService::new(
+        secret_manager.jwt_secret().to_string(),
+        secret_manager.refresh_token_secret().to_string(),
+    ));
+    
+    // Create CredentialStore with password_pepper from SecretManager
+    let credential_store = std::sync::Arc::new(CredentialStore::new(
+        db.clone(),
+        secret_manager.password_pepper().to_string()
+    ));
     
     // TODO: This is temporary - seed test user for development
     // Seed test user if not exists (username: "testuser", password: "testpass")
-    let credential_store = std::sync::Arc::new(CredentialStore::new(db.clone()));
     match credential_store.add_user("testuser".to_string(), "testpass".to_string()).await {
         Ok(user_id) => {
             println!("Test user created successfully with ID: {}", user_id);

@@ -25,8 +25,8 @@ This design document outlines the implementation of keyed hashing (HMAC) for pas
 ┌─────────────────────────────────────────────────────────┐
 │                    Secret Keys (Not in DB)              │
 ├─────────────────────────────────────────────────────────┤
-│  JWT_SECRET          │  PASSWORD_PEPPER  │  RT_SECRET   │
-│  (JWT signing)       │  (Password HMAC)  │  (Token HMAC)│
+│  JWT_SECRET          │  PASSWORD_PEPPER     │  RT_SECRET   │
+│  (JWT signing)       │  (Password hashing)  │  (Token HMAC)│
 └──────────┬───────────┴──────────┬────────┴──────┬───────┘
            │                      │                │
            ▼                      ▼                ▼
@@ -52,18 +52,18 @@ This design document outlines the implementation of keyed hashing (HMAC) for pas
 
 #### Current Implementation
 ```rust
-// Existing: Direct Argon2 hashing
+// Existing: Direct Argon2 hashing (no pepper)
 let argon2 = Argon2::default();
 let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
 ```
 
 #### New Implementation
 ```rust
-// Enhanced: Argon2 with secret parameter (pepper)
+// Enhanced: Argon2 with secret parameter (pepper from SecretManager)
 use argon2::{Argon2, Algorithm, Version, Params};
 
 let argon2 = Argon2::new_with_secret(
-    self.password_pepper.as_bytes(),
+    self.pepper.as_bytes(),
     Algorithm::Argon2id,
     Version::V0x13,
     Params::default(),
@@ -76,12 +76,12 @@ let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
 ```rust
 pub struct CredentialStore {
     db: DatabaseConnection,
-    password_pepper: String,  // NEW: Secret key for password HMAC
+    pepper: String,  // NEW: Secret key for password hashing (from SecretManager)
 }
 
 impl CredentialStore {
-    pub fn new(db: DatabaseConnection, password_pepper: String) -> Self {
-        Self { db, password_pepper }
+    pub fn new(db: DatabaseConnection, pepper: String) -> Self {
+        Self { db, pepper }
     }
     
     // Modified methods (internal implementation changes only)
@@ -93,7 +93,7 @@ impl CredentialStore {
 }
 ```
 
-### 2. Enhanced Refresh Token Hashing (TokenManager)
+### 2. Enhanced Refresh Token Hashing (TokenService)
 
 #### Current Implementation
 ```rust
@@ -118,14 +118,14 @@ let hash = format!("{:x}", mac.finalize().into_bytes());
 #### Interface Changes
 
 ```rust
-pub struct TokenManager {
+pub struct TokenService {
     jwt_secret: String,
     jwt_expiration_minutes: i64,
     refresh_expiration_days: i64,
     refresh_token_secret: String,  // NEW: Secret key for refresh token HMAC
 }
 
-impl TokenManager {
+impl TokenService {
     pub fn new(jwt_secret: String, refresh_token_secret: String) -> Self;
     
     // Modified method (internal implementation changes only)
@@ -139,7 +139,7 @@ impl TokenManager {
 }
 ```
 
-### 3. HMAC Utility Module (src/auth/crypto.rs)
+### 3. HMAC Utility Module (src/services/crypto.rs)
 
 Create a new module for refresh token HMAC operations:
 
@@ -280,16 +280,13 @@ Not Found → Invalid
 ```bash
 # Existing
 DATABASE_URL=sqlite://auth.db?mode=rwc
-JWT_SECRET=<256-bit-secret-key>              # For JWT signing
+JWT_SECRET=<256-bit-secret-key>              # For JWT signing (min 32 chars)
 JWT_EXPIRATION_MINUTES=15
 REFRESH_EXPIRATION_DAYS=7
+PASSWORD_PEPPER=<128-bit-secret-key>         # For password hashing (min 16 chars) - ALREADY EXISTS
 
 # NEW: Keyed hashing secrets
-PASSWORD_PEPPER=<256-bit-secret-key>         # For password HMAC
-REFRESH_TOKEN_SECRET=<256-bit-secret-key>    # For refresh token HMAC
-
-# Optional: Migration support
-LEGACY_PASSWORD_SUPPORT=true                 # Default: true for backward compatibility
+REFRESH_TOKEN_SECRET=<256-bit-secret-key>    # For refresh token HMAC (min 32 chars)
 ```
 
 ### Secret Key Generation
@@ -305,120 +302,51 @@ openssl rand -base64 32
 ### Validation on Startup
 
 ```rust
-// In main.rs
-fn validate_secrets() -> Result<(), String> {
-    let jwt_secret = env::var("JWT_SECRET")
-        .map_err(|_| "JWT_SECRET environment variable is required")?;
-    
-    let password_pepper = env::var("PASSWORD_PEPPER")
-        .map_err(|_| "PASSWORD_PEPPER environment variable is required")?;
-    
-    let refresh_token_secret = env::var("REFRESH_TOKEN_SECRET")
-        .map_err(|_| "REFRESH_TOKEN_SECRET environment variable is required")?;
-    
-    // Validate minimum length (32 characters = 256 bits)
-    if jwt_secret.len() < 32 {
-        return Err("JWT_SECRET must be at least 32 characters".to_string());
-    }
-    if password_pepper.len() < 32 {
-        return Err("PASSWORD_PEPPER must be at least 32 characters".to_string());
-    }
-    if refresh_token_secret.len() < 32 {
-        return Err("REFRESH_TOKEN_SECRET must be at least 32 characters".to_string());
+// In src/config/secret_manager.rs
+impl SecretManager {
+    pub fn init() -> Result<Self, SecretError> {
+        // Load secrets with validation rules
+        let jwt_secret = Self::load_secret(&Self::jwt_config())?;
+        let password_pepper = Self::load_secret(&Self::password_pepper_config())?;
+        let refresh_token_secret = Self::load_secret(&Self::refresh_token_config())?;  // NEW
+        
+        Ok(Self {
+            jwt_secret,
+            password_pepper,
+            refresh_token_secret,  // NEW
+        })
     }
     
-    // Ensure keys are different
-    if jwt_secret == password_pepper || jwt_secret == refresh_token_secret || password_pepper == refresh_token_secret {
-        return Err("All secret keys must be different".to_string());
+    // NEW: Configuration for refresh token secret
+    fn refresh_token_config() -> SecretConfig {
+        SecretConfig::new(SecretType::EnvVar {
+            name: "REFRESH_TOKEN_SECRET".to_string(),
+        })
+        .required(true)
+        .min_length(32)
     }
     
-    Ok(())
-}
-```
-
-## Backward Compatibility Strategy
-
-### Password Migration
-
-#### Approach: Lazy Migration on Login
-
-```rust
-impl CredentialStore {
-    pub async fn verify_credentials(&self, username: &str, password: &str) -> Result<String, AuthError> {
-        let user = self.find_user_by_username(username).await?;
-        
-        // Check if password hash is legacy (no secret parameter)
-        if self.is_legacy_password_hash(&user.password_hash) {
-            // Verify using legacy method (Argon2 without secret)
-            let argon2 = Argon2::default();
-            let parsed_hash = PasswordHash::new(&user.password_hash)?;
-            argon2.verify_password(password.as_bytes(), &parsed_hash)?;
-            
-            // Migration: Re-hash with pepper
-            self.migrate_user_password(&user.id, password).await?;
-            
-            return Ok(user.id);
-        }
-        
-        // New method: Argon2 with secret parameter
-        let argon2 = Argon2::new_with_secret(
-            self.password_pepper.as_bytes(),
-            Algorithm::Argon2id,
-            Version::V0x13,
-            Params::default(),
-        )?;
-        let parsed_hash = PasswordHash::new(&user.password_hash)?;
-        argon2.verify_password(password.as_bytes(), &parsed_hash)?;
-        
-        Ok(user.id)
+    // NEW: Getter for refresh token secret
+    pub fn refresh_token_secret(&self) -> &str {
+        &self.refresh_token_secret
     }
     
-    fn is_legacy_password_hash(&self, hash: &str) -> bool {
-        // Legacy hashes don't have the 'data' parameter that Argon2 adds when using secret
-        // Argon2 with secret adds: $argon2id$v=19$m=19456,t=2,p=1,data=...$salt$hash
-        // Legacy: $argon2id$v=19$m=19456,t=2,p=1$salt$hash
-        
-        // Check if hash contains 'data=' parameter (indicates secret was used)
-        !hash.contains("data=")
-    }
-    
-    async fn migrate_user_password(&self, user_id: &str, password: &str) -> Result<(), AuthError> {
-        // Re-hash password with pepper (secret parameter)
-        let salt = SaltString::generate(&mut rand::thread_rng());
-        let argon2 = Argon2::new_with_secret(
-            self.password_pepper.as_bytes(),
-            Algorithm::Argon2id,
-            Version::V0x13,
-            Params::default(),
-        )?;
-        let new_hash = argon2.hash_password(password.as_bytes(), &salt)?.to_string();
-        
-        // Update database
-        self.update_user_password(user_id, &new_hash).await?;
-        
-        log::info!("Migrated password for user: {}", user_id);
-        Ok(())
+    // Getter for password pepper (already exists, shown for completeness)
+    pub fn password_pepper(&self) -> &str {
+        &self.password_pepper
     }
 }
 ```
 
-#### Migration Marker
+## Implementation Notes
 
-**Argon2 Built-in Marker** (Automatic)
-- When Argon2 uses a secret parameter, it automatically adds `data=` to the PHC format
-- Legacy hash: `$argon2id$v=19$m=19456,t=2,p=1$salt$hash`
-- Peppered hash: `$argon2id$v=19$m=19456,t=2,p=1,data=base64$salt$hash`
-- No manual marker needed - Argon2 handles this automatically
-- Detection: Check if hash contains `data=` parameter
+### Password Hashing
 
-### Refresh Token Migration
+All passwords will be hashed using Argon2id with the PASSWORD_PEPPER secret parameter from the start. No legacy support needed since the application has no existing users.
 
-**No migration needed** - refresh tokens are short-lived (7 days):
+### Refresh Token Hashing
 
-1. Deploy new code with HMAC-based hashing
-2. New tokens use HMAC
-3. Old tokens (SHA-256) expire naturally within 7 days
-4. Optional: Force logout all users on deployment for immediate cutover
+All refresh tokens will use HMAC-SHA256 with the REFRESH_TOKEN_SECRET from the start. No migration needed.
 
 ## Security Considerations
 
@@ -427,9 +355,9 @@ impl CredentialStore {
 #### Critical Requirements
 
 1. **Backup**: All secret keys must be backed up securely
-   - Loss of PASSWORD_PEPPER = all users locked out permanently
-   - Loss of REFRESH_TOKEN_SECRET = all sessions invalidated
-   - Loss of JWT_SECRET = all active JWTs invalidated
+   - Loss of PASSWORD_PEPPER = all users locked out (requires password reset for all users)
+   - Loss of REFRESH_TOKEN_SECRET = all sessions invalidated (users must re-login)
+   - Loss of JWT_SECRET = all active JWTs invalidated (users must re-login)
 
 2. **Storage**: Never store keys in:
    - Version control (Git)
@@ -509,16 +437,6 @@ fn test_different_secrets_produce_different_hashes() {
 }
 
 #[test]
-fn test_legacy_password_verification() {
-    // Verify legacy passwords (without secret) still work
-}
-
-#[test]
-fn test_password_migration_on_login() {
-    // Verify automatic migration on successful login
-}
-
-#[test]
 fn test_hash_contains_data_parameter() {
     // Verify peppered hashes contain 'data=' parameter
 }
@@ -556,11 +474,6 @@ async fn test_end_to_end_refresh_token_flow_with_hmac() {
 }
 
 #[tokio::test]
-async fn test_legacy_user_migration() {
-    // Create legacy user → login → verify migration → login again
-}
-
-#[tokio::test]
 async fn test_startup_validation_missing_secrets() {
     // Verify app fails to start with missing secrets
 }
@@ -589,17 +502,21 @@ async fn test_constant_time_comparison() {
 
 ```
 src/
-├── main.rs                      # Updated: Secret validation on startup
-├── auth/
+├── main.rs                      # Updated: Pass secrets from SecretManager to services
+├── config/
+│   ├── mod.rs                   # Unchanged
+│   ├── secret_config.rs         # Unchanged
+│   └── secret_manager.rs        # Modified: Add REFRESH_TOKEN_SECRET support
+├── services/
 │   ├── mod.rs                   # Updated: Export crypto module
 │   ├── crypto.rs                # NEW: HMAC utility functions
-│   ├── credential_store.rs      # Modified: Add pepper to password hashing
-│   ├── token_manager.rs         # Modified: Add HMAC to refresh token hashing
-│   ├── api.rs                   # Unchanged
-│   ├── service.rs               # Unchanged
-│   ├── models.rs                # Unchanged
-│   ├── errors.rs                # Unchanged
-│   └── entities/                # Unchanged
+│   └── token_service.rs         # Modified: Add HMAC to refresh token hashing
+├── stores/
+│   ├── mod.rs                   # Unchanged
+│   └── credential_store.rs      # Modified: Add pepper to password hashing
+├── api/                         # Unchanged
+├── types/                       # Unchanged
+└── errors/                      # Unchanged
 
 migration/
 ├── src/
@@ -611,39 +528,37 @@ migration/
 ```toml
 [dependencies]
 hmac = "0.12"           # HMAC implementation for refresh tokens
-# sha2 = "0.10"         # Already added for SHA-256
+# sha2 = "0.10"         # Already added
 # rand = "0.8"          # Already added
-# argon2 = "0.5"        # Already added (supports secret parameter)
+# argon2 = "0.5"        # Already added (supports secret parameter via new_with_secret)
 ```
 
 ## Deployment Checklist
 
 ### Pre-Deployment
 
-- [ ] Generate three unique 256-bit secret keys
-- [ ] Store keys in secure key management system
-- [ ] Back up keys in secure offline storage
+- [ ] Generate REFRESH_TOKEN_SECRET (256-bit) using `openssl rand -base64 32`
+- [ ] Verify JWT_SECRET and PASSWORD_PEPPER are already configured (existing secrets)
+- [ ] Store REFRESH_TOKEN_SECRET in secure key management system
+- [ ] Back up all three secrets in secure offline storage
 - [ ] Document key recovery procedures
-- [ ] Test key validation on startup
-- [ ] Test backward compatibility with existing users
+- [ ] Test SecretManager initialization with all three secrets
+- [ ] Run all unit and integration tests
 
 ### Deployment
 
-- [ ] Set environment variables in production
+- [ ] Set REFRESH_TOKEN_SECRET environment variable in production
 - [ ] Deploy new code
-- [ ] Verify application starts successfully
-- [ ] Monitor logs for migration events
-- [ ] Test login with existing user (triggers migration)
-- [ ] Test login with new user (uses peppered hash)
-- [ ] Test refresh token flow
+- [ ] Verify application starts successfully (SecretManager validates all secrets)
+- [ ] Test user registration (uses peppered hash)
+- [ ] Test login flow
+- [ ] Test refresh token flow with HMAC
 
 ### Post-Deployment
 
-- [ ] Monitor migration progress (% of users migrated)
-- [ ] After 7 days: All refresh tokens using HMAC
-- [ ] After 90 days: Consider disabling legacy password support
 - [ ] Document key locations for operations team
 - [ ] Schedule key rotation procedures (if applicable)
+- [ ] Monitor for any authentication issues
 
 ## Future Enhancements
 
@@ -713,8 +628,10 @@ fn derive_user_pepper(global_pepper: &str, user_id: &str) -> String {
 ### README.md
 
 Add section on secret key management:
-- How to generate keys
-- Where to store keys
+- How to generate keys using `openssl rand -base64 32`
+- Document all three required environment variables: JWT_SECRET (min 32 chars), PASSWORD_PEPPER (min 16 chars), REFRESH_TOKEN_SECRET (min 32 chars)
+- Update .env.example with REFRESH_TOKEN_SECRET
+- Where to store keys (environment variables, never in version control)
 - Backup procedures
 - Recovery procedures
 

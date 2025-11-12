@@ -2,25 +2,28 @@ use jsonwebtoken::{encode, decode, Header, EncodingKey, DecodingKey, Validation,
 use chrono::Utc;
 use uuid::Uuid;
 use rand::prelude::*;
-use sha2::{Sha256, Digest};
 use base64::{Engine as _, engine::general_purpose};
+use std::fmt;
 use crate::types::internal::auth::Claims;
 use crate::errors::auth::AuthError;
+use crate::services::crypto;
 
 /// Manages JWT token generation and validation
 pub struct TokenService {
     jwt_secret: String,
     jwt_expiration_minutes: i64,
     refresh_expiration_days: i64,
+    refresh_token_secret: String,
 }
 
 impl TokenService {
-    /// Create a new TokenService with the given JWT secret
-    pub fn new(jwt_secret: String) -> Self {
+    /// Create a new TokenService with the given JWT secret and refresh token secret
+    pub fn new(jwt_secret: String, refresh_token_secret: String) -> Self {
         Self {
             jwt_secret,
             jwt_expiration_minutes: 15, // 15 minutes as per requirements
             refresh_expiration_days: 7, // 7 days as per requirements
+            refresh_token_secret,
         }
     }
     
@@ -88,18 +91,15 @@ impl TokenService {
         general_purpose::STANDARD.encode(random_bytes)
     }
     
-    /// Hash a refresh token using SHA-256
+    /// Hash a refresh token using HMAC-SHA256
     /// 
     /// # Arguments
     /// * `token` - The plaintext refresh token to hash
     /// 
     /// # Returns
-    /// * `String` - The hex-encoded SHA-256 hash
+    /// * `String` - The hex-encoded HMAC-SHA256 hash
     pub fn hash_refresh_token(&self, token: &str) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(token.as_bytes());
-        let result = hasher.finalize();
-        format!("{:x}", result)
+        crypto::hmac_sha256_token(&self.refresh_token_secret, token)
     }
     
     /// Get the expiration timestamp for a refresh token (7 days from now)
@@ -112,6 +112,26 @@ impl TokenService {
     }
 }
 
+impl fmt::Debug for TokenService {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenService")
+            .field("jwt_secret", &"<redacted>")
+            .field("jwt_expiration_minutes", &self.jwt_expiration_minutes)
+            .field("refresh_expiration_days", &self.refresh_expiration_days)
+            .field("refresh_token_secret", &"<redacted>")
+            .finish()
+    }
+}
+
+impl fmt::Display for TokenService {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "TokenService {{ jwt_expiration: {}min, refresh_expiration: {}days }}",
+            self.jwt_expiration_minutes, self.refresh_expiration_days
+        )
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -120,7 +140,10 @@ mod tests {
 
     #[test]
     fn test_generate_jwt_creates_valid_jwt() {
-        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+        );
         let user_id = Uuid::new_v4();
         
         let result = token_manager.generate_jwt(&user_id);
@@ -143,7 +166,10 @@ mod tests {
 
     #[test]
     fn test_jwt_contains_correct_user_id() {
-        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+        );
         let user_id = Uuid::new_v4();
         
         let token = token_manager.generate_jwt(&user_id).unwrap();
@@ -163,7 +189,10 @@ mod tests {
 
     #[test]
     fn test_jwt_expiration_is_15_minutes() {
-        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+        );
         let user_id = Uuid::new_v4();
         
         let token = token_manager.generate_jwt(&user_id).unwrap();
@@ -184,7 +213,10 @@ mod tests {
 
     #[test]
     fn test_jwt_has_iat_timestamp() {
-        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+        );
         let user_id = Uuid::new_v4();
         
         let before = Utc::now().timestamp();
@@ -207,7 +239,10 @@ mod tests {
 
     #[test]
     fn test_validate_jwt_succeeds_with_valid_jwt() {
-        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+        );
         let user_id = Uuid::new_v4();
         
         let token = token_manager.generate_jwt(&user_id).unwrap();
@@ -218,7 +253,10 @@ mod tests {
 
     #[test]
     fn test_validate_jwt_returns_correct_claims() {
-        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+        );
         let user_id = Uuid::new_v4();
         
         let token = token_manager.generate_jwt(&user_id).unwrap();
@@ -231,8 +269,14 @@ mod tests {
 
     #[test]
     fn test_validate_jwt_fails_with_invalid_signature() {
-        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
-        let wrong_token_manager = TokenService::new("wrong-secret-key-minimum-32-characters".to_string());
+        let token_manager = TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+        );
+        let wrong_token_manager = TokenService::new(
+            "wrong-secret-key-minimum-32-characters".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+        );
         let user_id = Uuid::new_v4();
         
         // Generate token with one secret
@@ -252,7 +296,10 @@ mod tests {
 
     #[test]
     fn test_validate_jwt_fails_with_expired_jwt() {
-        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+        );
         
         // Create an expired token manually
         let now = Utc::now().timestamp();
@@ -281,7 +328,10 @@ mod tests {
 
     #[test]
     fn test_generate_refresh_token_creates_unique_tokens() {
-        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+        );
         
         let token1 = token_manager.generate_refresh_token();
         let token2 = token_manager.generate_refresh_token();
@@ -296,7 +346,10 @@ mod tests {
 
     #[test]
     fn test_hash_refresh_token_produces_consistent_hashes() {
-        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+        );
         
         let token = "test-refresh-token";
         let hash1 = token_manager.hash_refresh_token(token);
@@ -305,13 +358,16 @@ mod tests {
         // Same token should produce same hash
         assert_eq!(hash1, hash2);
         
-        // Hash should be 64 characters (SHA-256 in hex)
+        // Hash should be 64 characters (HMAC-SHA256 in hex)
         assert_eq!(hash1.len(), 64);
     }
 
     #[test]
     fn test_hash_refresh_token_produces_different_hashes_for_different_tokens() {
-        let token_manager = TokenService::new("test-secret-key-minimum-32-characters-long".to_string());
+        let token_manager = TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+        );
         
         let token1 = "token1";
         let token2 = "token2";
@@ -321,6 +377,187 @@ mod tests {
         
         // Different tokens should produce different hashes
         assert_ne!(hash1, hash2);
+    }
+
+    // Tests for HMAC-based refresh token hashing (Requirement 7.4, 2.4)
+    
+    #[test]
+    fn test_hmac_refresh_token_hashing_produces_consistent_output() {
+        let token_manager = TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+        );
+        
+        let token = "test-refresh-token-12345";
+        
+        // Hash the same token multiple times
+        let hash1 = token_manager.hash_refresh_token(token);
+        let hash2 = token_manager.hash_refresh_token(token);
+        let hash3 = token_manager.hash_refresh_token(token);
+        
+        // All hashes should be identical (HMAC is deterministic)
+        assert_eq!(hash1, hash2);
+        assert_eq!(hash2, hash3);
+        
+        // Verify it's a valid hex string of correct length (64 chars for SHA-256)
+        assert_eq!(hash1.len(), 64);
+        assert!(hash1.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_hmac_different_secrets_produce_different_hashes() {
+        let token = "test-refresh-token-12345";
+        
+        let token_manager1 = TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "refresh-secret-one-minimum-32-chars".to_string(),
+        );
+        
+        let token_manager2 = TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "refresh-secret-two-minimum-32-chars".to_string(),
+        );
+        
+        let hash1 = token_manager1.hash_refresh_token(token);
+        let hash2 = token_manager2.hash_refresh_token(token);
+        
+        // Different secrets should produce different hashes (prevents token minting)
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_token_minting_prevention_without_correct_secret() {
+        let token = "malicious-token-attempt";
+        
+        // Attacker tries to mint a token with wrong secret
+        let attacker_token_manager = TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "attacker-guessed-secret-wrong-value".to_string(),
+        );
+        
+        // Legitimate server with correct secret
+        let legitimate_token_manager = TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "correct-refresh-secret-minimum-32-ch".to_string(),
+        );
+        
+        let attacker_hash = attacker_token_manager.hash_refresh_token(token);
+        let legitimate_hash = legitimate_token_manager.hash_refresh_token(token);
+        
+        // Attacker's hash won't match legitimate hash (can't mint valid tokens)
+        assert_ne!(attacker_hash, legitimate_hash);
+        
+        // This simulates database lookup failure - attacker's hash won't be found
+        // in database because it was computed with wrong secret
+    }
+
+    #[test]
+    fn test_hmac_output_is_deterministic_across_instances() {
+        let token = "test-token-for-determinism";
+        let secret = "shared-refresh-secret-minimum-32-c";
+        
+        // Create multiple TokenService instances with same secret
+        let manager1 = TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            secret.to_string(),
+        );
+        
+        let manager2 = TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            secret.to_string(),
+        );
+        
+        let hash1 = manager1.hash_refresh_token(token);
+        let hash2 = manager2.hash_refresh_token(token);
+        
+        // Same secret and token should always produce same hash
+        assert_eq!(hash1, hash2);
+    }
+
+    // Tests for Debug and Display trait protection
+    
+    #[test]
+    fn test_debug_trait_does_not_expose_jwt_secret() {
+        let token_service = TokenService::new(
+            "super-secret-jwt-key-minimum-32-characters".to_string(),
+            "super-secret-refresh-key-minimum-32-ch".to_string(),
+        );
+        
+        let debug_output = format!("{:?}", token_service);
+        
+        // Debug output should not contain the actual secrets
+        assert!(!debug_output.contains("super-secret-jwt-key"));
+        assert!(!debug_output.contains("super-secret-refresh-key"));
+        
+        // Debug output should contain redacted markers
+        assert!(debug_output.contains("<redacted>"));
+        assert!(debug_output.contains("TokenService"));
+    }
+
+    #[test]
+    fn test_debug_trait_does_not_expose_refresh_token_secret() {
+        let token_service = TokenService::new(
+            "test-jwt-secret-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+        );
+        
+        let debug_output = format!("{:?}", token_service);
+        
+        // Debug output should not contain the refresh token secret
+        assert!(!debug_output.contains("test-refresh-secret"));
+        
+        // Debug output should show redacted for both secrets
+        let redacted_count = debug_output.matches("<redacted>").count();
+        assert_eq!(redacted_count, 2, "Should have 2 redacted fields (jwt_secret and refresh_token_secret)");
+    }
+
+    #[test]
+    fn test_debug_trait_shows_non_sensitive_fields() {
+        let token_service = TokenService::new(
+            "test-jwt-secret-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+        );
+        
+        let debug_output = format!("{:?}", token_service);
+        
+        // Debug output should show non-sensitive configuration
+        assert!(debug_output.contains("jwt_expiration_minutes"));
+        assert!(debug_output.contains("15"));
+        assert!(debug_output.contains("refresh_expiration_days"));
+        assert!(debug_output.contains("7"));
+    }
+
+    #[test]
+    fn test_display_trait_does_not_expose_secrets() {
+        let token_service = TokenService::new(
+            "super-secret-jwt-key-minimum-32-characters".to_string(),
+            "super-secret-refresh-key-minimum-32-ch".to_string(),
+        );
+        
+        let display_output = format!("{}", token_service);
+        
+        // Display output should not contain the actual secrets
+        assert!(!display_output.contains("super-secret-jwt-key"));
+        assert!(!display_output.contains("super-secret-refresh-key"));
+        
+        // Display output should show metadata only
+        assert!(display_output.contains("TokenService"));
+        assert!(display_output.contains("15min"));
+        assert!(display_output.contains("7days"));
+    }
+
+    #[test]
+    fn test_display_trait_shows_configuration_summary() {
+        let token_service = TokenService::new(
+            "test-jwt-secret-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+        );
+        
+        let display_output = format!("{}", token_service);
+        
+        // Display should show a human-readable summary
+        assert!(display_output.contains("jwt_expiration: 15min"));
+        assert!(display_output.contains("refresh_expiration: 7days"));
     }
 }
 

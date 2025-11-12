@@ -21,6 +21,7 @@ sha2 = "0.10"
 base64 = "0.21"
 jsonwebtoken = "9.2"
 dotenv = "0.15"
+hmac = "0.12"
 migration = { path = "migration" }
 
 # this is specifically for SaltString::generate, which still expects traits frop rand_core 0.6 dont use anything from rand_core directly

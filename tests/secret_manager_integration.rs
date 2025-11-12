@@ -40,12 +40,13 @@ impl Drop for EnvGuard {
 #[test]
 fn test_application_startup_with_valid_secrets() {
     let _lock = TEST_MUTEX.lock().unwrap();
-    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PEPPER"]);
+    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
     // Set valid environment variables
     unsafe {
         std::env::set_var("JWT_SECRET", "this-is-a-valid-jwt-secret-with-32-characters");
-        std::env::set_var("PEPPER", "valid-pepper-16ch");
+        std::env::set_var("PASSWORD_PEPPER", "valid-pepper-16ch");
+        std::env::set_var("REFRESH_TOKEN_SECRET", "this-is-a-valid-refresh-token-secret-32");
     }
 
     // Initialize SecretManager (simulating application startup)
@@ -56,7 +57,8 @@ fn test_application_startup_with_valid_secrets() {
     
     // Verify secrets are accessible
     assert_eq!(secret_manager.jwt_secret(), "this-is-a-valid-jwt-secret-with-32-characters");
-    assert_eq!(secret_manager.pepper(), "valid-pepper-16ch");
+    assert_eq!(secret_manager.password_pepper(), "valid-pepper-16ch");
+    assert_eq!(secret_manager.refresh_token_secret(), "this-is-a-valid-refresh-token-secret-32");
     
     // Verify SecretManager can be shared across threads (Arc)
     let secret_manager_clone = Arc::clone(&secret_manager);
@@ -66,11 +68,12 @@ fn test_application_startup_with_valid_secrets() {
 #[test]
 fn test_application_fails_gracefully_with_missing_jwt_secret() {
     let _lock = TEST_MUTEX.lock().unwrap();
-    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PEPPER"]);
+    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
-    // Set only PEPPER, missing JWT_SECRET
+    // Set only PASSWORD_PEPPER and REFRESH_TOKEN_SECRET, missing JWT_SECRET
     unsafe {
-        std::env::set_var("PEPPER", "valid-pepper-16ch");
+        std::env::set_var("PASSWORD_PEPPER", "valid-pepper-16ch");
+        std::env::set_var("REFRESH_TOKEN_SECRET", "this-is-a-valid-refresh-token-secret-32");
     }
 
     // Attempt to initialize SecretManager
@@ -90,40 +93,42 @@ fn test_application_fails_gracefully_with_missing_jwt_secret() {
 }
 
 #[test]
-fn test_application_fails_gracefully_with_missing_pepper() {
+fn test_application_fails_gracefully_with_missing_password_pepper() {
     let _lock = TEST_MUTEX.lock().unwrap();
-    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PEPPER"]);
+    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
-    // Set only JWT_SECRET, missing PEPPER
+    // Set only JWT_SECRET and REFRESH_TOKEN_SECRET, missing PASSWORD_PEPPER
     unsafe {
         std::env::set_var("JWT_SECRET", "this-is-a-valid-jwt-secret-with-32-characters");
+        std::env::set_var("REFRESH_TOKEN_SECRET", "this-is-a-valid-refresh-token-secret-32");
     }
 
     // Attempt to initialize SecretManager
     let result = SecretManager::init();
     
-    assert!(result.is_err(), "SecretManager should fail when PEPPER is missing");
+    assert!(result.is_err(), "SecretManager should fail when PASSWORD_PEPPER is missing");
     
     let err = result.unwrap_err();
     let err_msg = err.to_string();
     match err {
         SecretError::Missing { secret_name } => {
-            assert_eq!(secret_name, "PEPPER");
-            assert_eq!(err_msg, "Required secret 'PEPPER' is missing");
+            assert_eq!(secret_name, "PASSWORD_PEPPER");
+            assert_eq!(err_msg, "Required secret 'PASSWORD_PEPPER' is missing");
         }
-        _ => panic!("Expected Missing error for PEPPER"),
+        _ => panic!("Expected Missing error for PASSWORD_PEPPER"),
     }
 }
 
 #[test]
 fn test_application_fails_gracefully_with_invalid_jwt_secret_length() {
     let _lock = TEST_MUTEX.lock().unwrap();
-    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PEPPER"]);
+    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
     // Set JWT_SECRET that's too short
     unsafe {
         std::env::set_var("JWT_SECRET", "too-short");
-        std::env::set_var("PEPPER", "valid-pepper-16ch");
+        std::env::set_var("PASSWORD_PEPPER", "valid-pepper-16ch");
+        std::env::set_var("REFRESH_TOKEN_SECRET", "this-is-a-valid-refresh-token-secret-32");
     }
 
     // Attempt to initialize SecretManager
@@ -145,50 +150,55 @@ fn test_application_fails_gracefully_with_invalid_jwt_secret_length() {
 }
 
 #[test]
-fn test_application_fails_gracefully_with_invalid_pepper_length() {
+fn test_application_fails_gracefully_with_invalid_password_pepper_length() {
     let _lock = TEST_MUTEX.lock().unwrap();
-    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PEPPER"]);
+    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
-    // Set PEPPER that's too short
+    // Set PASSWORD_PEPPER that's too short
     unsafe {
         std::env::set_var("JWT_SECRET", "this-is-a-valid-jwt-secret-with-32-characters");
-        std::env::set_var("PEPPER", "short");
+        std::env::set_var("PASSWORD_PEPPER", "short");
+        std::env::set_var("REFRESH_TOKEN_SECRET", "this-is-a-valid-refresh-token-secret-32");
     }
 
     // Attempt to initialize SecretManager
     let result = SecretManager::init();
     
-    assert!(result.is_err(), "SecretManager should fail when PEPPER is too short");
+    assert!(result.is_err(), "SecretManager should fail when PASSWORD_PEPPER is too short");
     
     let err = result.unwrap_err();
     let err_msg = err.to_string();
     match err {
         SecretError::InvalidLength { secret_name, expected, actual } => {
-            assert_eq!(secret_name, "PEPPER");
+            assert_eq!(secret_name, "PASSWORD_PEPPER");
             assert_eq!(expected, 16);
             assert_eq!(actual, 5);
-            assert_eq!(err_msg, "Secret 'PEPPER' must be at least 16 characters, got 5");
+            assert_eq!(err_msg, "Secret 'PASSWORD_PEPPER' must be at least 16 characters, got 5");
         }
-        _ => panic!("Expected InvalidLength error for PEPPER"),
+        _ => panic!("Expected InvalidLength error for PASSWORD_PEPPER"),
     }
 }
 
 #[test]
 fn test_token_service_integration_with_secret_manager() {
     let _lock = TEST_MUTEX.lock().unwrap();
-    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PEPPER"]);
+    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
     // Set valid environment variables
     unsafe {
         std::env::set_var("JWT_SECRET", "this-is-a-valid-jwt-secret-with-32-characters");
-        std::env::set_var("PEPPER", "valid-pepper-16ch");
+        std::env::set_var("PASSWORD_PEPPER", "valid-pepper-16ch");
+        std::env::set_var("REFRESH_TOKEN_SECRET", "this-is-a-valid-refresh-token-secret-32");
     }
 
     // Initialize SecretManager
     let secret_manager = Arc::new(SecretManager::init().unwrap());
     
-    // Create TokenService with JWT secret from SecretManager
-    let token_service = Arc::new(TokenService::new(secret_manager.jwt_secret().to_string()));
+    // Create TokenService with JWT secret and refresh token secret from SecretManager
+    let token_service = Arc::new(TokenService::new(
+        secret_manager.jwt_secret().to_string(),
+        secret_manager.refresh_token_secret().to_string(),
+    ));
     
     // Verify TokenService was created successfully
     let user_id = Uuid::new_v4();
@@ -200,19 +210,23 @@ fn test_token_service_integration_with_secret_manager() {
 #[test]
 fn test_jwt_generation_works_with_secrets_from_secret_manager() {
     let _lock = TEST_MUTEX.lock().unwrap();
-    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PEPPER"]);
+    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
     // Set valid environment variables
     unsafe {
         std::env::set_var("JWT_SECRET", "this-is-a-valid-jwt-secret-with-32-characters");
-        std::env::set_var("PEPPER", "valid-pepper-16ch");
+        std::env::set_var("PASSWORD_PEPPER", "valid-pepper-16ch");
+        std::env::set_var("REFRESH_TOKEN_SECRET", "this-is-a-valid-refresh-token-secret-32");
     }
 
     // Initialize SecretManager
     let secret_manager = Arc::new(SecretManager::init().unwrap());
     
-    // Create TokenService with JWT secret from SecretManager
-    let token_service = Arc::new(TokenService::new(secret_manager.jwt_secret().to_string()));
+    // Create TokenService with JWT secret and refresh token secret from SecretManager
+    let token_service = Arc::new(TokenService::new(
+        secret_manager.jwt_secret().to_string(),
+        secret_manager.refresh_token_secret().to_string(),
+    ));
     
     // Generate JWT
     let user_id = Uuid::new_v4();
@@ -232,19 +246,23 @@ fn test_jwt_generation_works_with_secrets_from_secret_manager() {
 #[test]
 fn test_jwt_validation_works_with_secrets_from_secret_manager() {
     let _lock = TEST_MUTEX.lock().unwrap();
-    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PEPPER"]);
+    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
     // Set valid environment variables
     unsafe {
         std::env::set_var("JWT_SECRET", "this-is-a-valid-jwt-secret-with-32-characters");
-        std::env::set_var("PEPPER", "valid-pepper-16ch");
+        std::env::set_var("PASSWORD_PEPPER", "valid-pepper-16ch");
+        std::env::set_var("REFRESH_TOKEN_SECRET", "this-is-a-valid-refresh-token-secret-32");
     }
 
     // Initialize SecretManager
     let secret_manager = Arc::new(SecretManager::init().unwrap());
     
-    // Create TokenService with JWT secret from SecretManager
-    let token_service = Arc::new(TokenService::new(secret_manager.jwt_secret().to_string()));
+    // Create TokenService with JWT secret and refresh token secret from SecretManager
+    let token_service = Arc::new(TokenService::new(
+        secret_manager.jwt_secret().to_string(),
+        secret_manager.refresh_token_secret().to_string(),
+    ));
     
     // Generate and validate JWT
     let user_id = Uuid::new_v4();
@@ -260,20 +278,27 @@ fn test_jwt_validation_works_with_secrets_from_secret_manager() {
 #[test]
 fn test_multiple_token_services_can_share_secret_manager() {
     let _lock = TEST_MUTEX.lock().unwrap();
-    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PEPPER"]);
+    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
     // Set valid environment variables
     unsafe {
         std::env::set_var("JWT_SECRET", "this-is-a-valid-jwt-secret-with-32-characters");
-        std::env::set_var("PEPPER", "valid-pepper-16ch");
+        std::env::set_var("PASSWORD_PEPPER", "valid-pepper-16ch");
+        std::env::set_var("REFRESH_TOKEN_SECRET", "this-is-a-valid-refresh-token-secret-32");
     }
 
     // Initialize SecretManager
     let secret_manager = Arc::new(SecretManager::init().unwrap());
     
     // Create multiple TokenService instances with the same secret
-    let token_service1 = Arc::new(TokenService::new(secret_manager.jwt_secret().to_string()));
-    let token_service2 = Arc::new(TokenService::new(secret_manager.jwt_secret().to_string()));
+    let token_service1 = Arc::new(TokenService::new(
+        secret_manager.jwt_secret().to_string(),
+        secret_manager.refresh_token_secret().to_string(),
+    ));
+    let token_service2 = Arc::new(TokenService::new(
+        secret_manager.jwt_secret().to_string(),
+        secret_manager.refresh_token_secret().to_string(),
+    ));
     
     // Generate JWT with first service
     let user_id = Uuid::new_v4();

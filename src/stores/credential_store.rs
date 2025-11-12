@@ -1,5 +1,5 @@
 use sea_orm::{DatabaseConnection, EntityTrait, ColumnTrait, QueryFilter, ActiveModelTrait, Set, TransactionTrait};
-use argon2::{Argon2, PasswordHash, PasswordVerifier, PasswordHasher, password_hash::SaltString};
+use argon2::{Argon2, PasswordHash, PasswordVerifier, PasswordHasher, password_hash::SaltString, Algorithm, Version, Params};
 use uuid::Uuid;
 use chrono::Utc;
 use crate::types::db::user::{self, Entity as User, ActiveModel};
@@ -9,12 +9,17 @@ use crate::errors::auth::AuthError;
 /// CredentialStore manages user credentials and refresh tokens in the database
 pub struct CredentialStore {
     db: DatabaseConnection,
+    password_pepper: String,
 }
 
 impl CredentialStore {
-    /// Create a new CredentialStore with the given database connection
-    pub fn new(db: DatabaseConnection) -> Self {
-        Self { db }
+    /// Create a new CredentialStore with the given database connection and password pepper
+    /// 
+    /// # Arguments
+    /// * `db` - The database connection
+    /// * `password_pepper` - The secret key used for password hashing (from SecretManager)
+    pub fn new(db: DatabaseConnection, password_pepper: String) -> Self {
+        Self { db, password_pepper }
     }
 
     /// Add a new user to the database
@@ -41,9 +46,16 @@ impl CredentialStore {
         // Generate UUID for user
         let user_id = Uuid::new_v4().to_string();
 
-        // Hash password with Argon2id
+        // Hash password with Argon2id using password_pepper as secret parameter
         let salt = SaltString::generate(&mut rand_core::OsRng);
-        let argon2 = Argon2::default();
+        let argon2 = Argon2::new_with_secret(
+            self.password_pepper.as_bytes(),
+            Algorithm::Argon2id,
+            Version::V0x13,
+            Params::default(),
+        )
+        .map_err(|e| AuthError::internal_error(format!("Failed to initialize Argon2 with secret: {}", e)))?;
+        
         let password_hash = argon2
             .hash_password(password.as_bytes(), &salt)
             .map_err(|e| AuthError::internal_error(format!("Password hashing error: {}", e)))?
@@ -100,8 +112,15 @@ impl CredentialStore {
         let parsed_hash = PasswordHash::new(&user.password_hash)
             .map_err(|_| AuthError::invalid_credentials())?;
 
-        // Verify password using Argon2
-        let argon2 = Argon2::default();
+        // Verify password using Argon2 with password_pepper as secret parameter
+        let argon2 = Argon2::new_with_secret(
+            self.password_pepper.as_bytes(),
+            Algorithm::Argon2id,
+            Version::V0x13,
+            Params::default(),
+        )
+        .map_err(|_| AuthError::invalid_credentials())?;
+        
         argon2
             .verify_password(password.as_bytes(), &parsed_hash)
             .map_err(|_| AuthError::invalid_credentials())?;
@@ -199,6 +218,21 @@ impl CredentialStore {
     }
 }
 
+impl std::fmt::Debug for CredentialStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CredentialStore")
+            .field("db", &"<connection>")
+            .field("password_pepper", &"<redacted>")
+            .finish()
+    }
+}
+
+impl std::fmt::Display for CredentialStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CredentialStore {{ db: <connection>, password_pepper: <redacted> }}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,8 +250,9 @@ mod tests {
             .await
             .expect("Failed to run migrations");
         
-        // Create credential store
-        let credential_store = CredentialStore::new(db.clone());
+        // Create credential store with test password pepper
+        let password_pepper = "test-pepper-for-unit-tests".to_string();
+        let credential_store = CredentialStore::new(db.clone(), password_pepper);
         
         (db, credential_store)
     }
@@ -663,6 +698,268 @@ mod tests {
             .await
             .expect("Failed to query token");
         assert!(token_final.is_none());
+    }
+
+    // Tests for password pepper functionality (subtask 3.1)
+
+    #[tokio::test]
+    async fn test_password_hashing_with_secret_parameter_produces_valid_hash() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create test database");
+        
+        Migrator::up(&db, None)
+            .await
+            .expect("Failed to run migrations");
+        
+        let password_pepper = "test-pepper-secret-key".to_string();
+        let credential_store = CredentialStore::new(db.clone(), password_pepper);
+        
+        // Add user with peppered password
+        let result = credential_store
+            .add_user("pepperuser".to_string(), "mypassword".to_string())
+            .await;
+        
+        assert!(result.is_ok());
+        
+        // Query the database to verify hash format
+        let user = User::find()
+            .filter(user::Column::Username.eq("pepperuser"))
+            .one(&db)
+            .await
+            .expect("Failed to query user")
+            .expect("User not found");
+        
+        // Verify it's a valid Argon2 hash
+        assert!(user.password_hash.starts_with("$argon2"));
+        
+        // Verify we can parse it as a valid PasswordHash
+        let parsed = PasswordHash::new(&user.password_hash);
+        assert!(parsed.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_password_verification_with_secret_parameter_works_correctly() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create test database");
+        
+        Migrator::up(&db, None)
+            .await
+            .expect("Failed to run migrations");
+        
+        let password_pepper = "verification-test-pepper".to_string();
+        let credential_store = CredentialStore::new(db.clone(), password_pepper);
+        
+        let password = "correct-password";
+        
+        // Add user
+        credential_store
+            .add_user("verifyuser".to_string(), password.to_string())
+            .await
+            .expect("Failed to add user");
+        
+        // Verify with correct password
+        let result = credential_store
+            .verify_credentials("verifyuser", password)
+            .await;
+        
+        assert!(result.is_ok());
+        
+        // Verify with incorrect password
+        let result = credential_store
+            .verify_credentials("verifyuser", "wrong-password")
+            .await;
+        
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_different_peppers_produce_different_hashes() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create test database");
+        
+        Migrator::up(&db, None)
+            .await
+            .expect("Failed to run migrations");
+        
+        let password = "same-password";
+        
+        // Create first user with pepper1
+        let pepper1 = "pepper-one-secret-key".to_string();
+        let store1 = CredentialStore::new(db.clone(), pepper1);
+        
+        store1
+            .add_user("user1".to_string(), password.to_string())
+            .await
+            .expect("Failed to add user1");
+        
+        // Create second user with pepper2
+        let pepper2 = "pepper-two-secret-key".to_string();
+        let store2 = CredentialStore::new(db.clone(), pepper2);
+        
+        store2
+            .add_user("user2".to_string(), password.to_string())
+            .await
+            .expect("Failed to add user2");
+        
+        // Query both users
+        let user1 = User::find()
+            .filter(user::Column::Username.eq("user1"))
+            .one(&db)
+            .await
+            .expect("Failed to query user1")
+            .expect("User1 not found");
+        
+        let user2 = User::find()
+            .filter(user::Column::Username.eq("user2"))
+            .one(&db)
+            .await
+            .expect("Failed to query user2")
+            .expect("User2 not found");
+        
+        // Verify hashes are different (different peppers produce different hashes)
+        assert_ne!(user1.password_hash, user2.password_hash);
+        
+        // Verify user1 can only be verified with pepper1
+        let verify_result = store1.verify_credentials("user1", password).await;
+        assert!(verify_result.is_ok());
+        
+        // Verify user2 can only be verified with pepper2
+        let verify_result = store2.verify_credentials("user2", password).await;
+        assert!(verify_result.is_ok());
+        
+        // Verify cross-verification fails (user1 with pepper2)
+        let verify_result = store2.verify_credentials("user1", password).await;
+        assert!(verify_result.is_err());
+        
+        // Verify cross-verification fails (user2 with pepper1)
+        let verify_result = store1.verify_credentials("user2", password).await;
+        assert!(verify_result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_peppered_hashes_contain_data_parameter() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create test database");
+        
+        Migrator::up(&db, None)
+            .await
+            .expect("Failed to run migrations");
+        
+        let password_pepper = "data-param-test-pepper".to_string();
+        let credential_store = CredentialStore::new(db.clone(), password_pepper);
+        
+        // Add user with peppered password
+        credential_store
+            .add_user("datauser".to_string(), "password123".to_string())
+            .await
+            .expect("Failed to add user");
+        
+        // Query the user
+        let user = User::find()
+            .filter(user::Column::Username.eq("datauser"))
+            .one(&db)
+            .await
+            .expect("Failed to query user")
+            .expect("User not found");
+        
+        // Verify the hash is in Argon2 PHC format
+        assert!(user.password_hash.starts_with("$argon2"));
+        
+        // Parse the hash to verify it's valid
+        let parsed_hash = PasswordHash::new(&user.password_hash);
+        assert!(parsed_hash.is_ok());
+        
+        // The 'data=' parameter in PHC format indicates the secret/pepper was used
+        // However, argon2 crate may encode this differently, so we verify by testing
+        // that verification fails without the correct pepper
+        let wrong_pepper = "wrong-pepper-key".to_string();
+        let wrong_store = CredentialStore::new(db.clone(), wrong_pepper);
+        
+        // Verification should fail with wrong pepper
+        let verify_result = wrong_store.verify_credentials("datauser", "password123").await;
+        assert!(verify_result.is_err());
+        
+        // Verification should succeed with correct pepper
+        let verify_result = credential_store.verify_credentials("datauser", "password123").await;
+        assert!(verify_result.is_ok());
+    }
+
+    // Tests for Debug and Display traits to ensure secrets are not exposed
+
+    #[tokio::test]
+    async fn test_debug_trait_does_not_expose_password_pepper() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create test database");
+        
+        Migrator::up(&db, None)
+            .await
+            .expect("Failed to run migrations");
+        
+        let password_pepper = "super-secret-pepper-value".to_string();
+        let credential_store = CredentialStore::new(db.clone(), password_pepper);
+        
+        let debug_output = format!("{:?}", credential_store);
+        
+        // Verify the output contains redacted marker
+        assert!(debug_output.contains("<redacted>"));
+        
+        // Verify the actual secret is NOT in the output
+        assert!(!debug_output.contains("super-secret-pepper-value"));
+        
+        // Verify the struct name is present
+        assert!(debug_output.contains("CredentialStore"));
+    }
+
+    #[tokio::test]
+    async fn test_display_trait_does_not_expose_password_pepper() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create test database");
+        
+        Migrator::up(&db, None)
+            .await
+            .expect("Failed to run migrations");
+        
+        let password_pepper = "another-secret-pepper".to_string();
+        let credential_store = CredentialStore::new(db.clone(), password_pepper);
+        
+        let display_output = format!("{}", credential_store);
+        
+        // Verify the output contains redacted marker
+        assert!(display_output.contains("<redacted>"));
+        
+        // Verify the actual secret is NOT in the output
+        assert!(!display_output.contains("another-secret-pepper"));
+        
+        // Verify the struct name is present
+        assert!(display_output.contains("CredentialStore"));
+    }
+
+    #[tokio::test]
+    async fn test_debug_trait_shows_struct_fields() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create test database");
+        
+        Migrator::up(&db, None)
+            .await
+            .expect("Failed to run migrations");
+        
+        let password_pepper = "test-pepper".to_string();
+        let credential_store = CredentialStore::new(db.clone(), password_pepper);
+        
+        let debug_output = format!("{:?}", credential_store);
+        
+        // Verify both fields are mentioned (but redacted)
+        assert!(debug_output.contains("db"));
+        assert!(debug_output.contains("password_pepper"));
+        assert!(debug_output.contains("<connection>"));
+        assert!(debug_output.contains("<redacted>"));
     }
 }
 
