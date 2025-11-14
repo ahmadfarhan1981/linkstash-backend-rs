@@ -33,15 +33,19 @@ impl TokenService {
     /// * `user_id` - The UUID of the user
     /// 
     /// # Returns
-    /// * `Result<String, AuthError>` - The encoded JWT or an error
-    pub fn generate_jwt(&self, user_id: &Uuid) -> Result<String, AuthError> {
+    /// * `Result<(String, String), AuthError>` - Tuple of (encoded JWT, JWT ID) or an error
+    pub fn generate_jwt(&self, user_id: &Uuid) -> Result<(String, String), AuthError> {
         let now = Utc::now().timestamp();
         let expiration = now + (self.jwt_expiration_minutes * 60);
+        
+        // Generate unique JWT ID
+        let jti = Uuid::new_v4().to_string();
         
         let claims = Claims {
             sub: user_id.to_string(),
             exp: expiration,
             iat: now,
+            jti: Some(jti.clone()),
         };
         
         let token = encode(
@@ -51,7 +55,7 @@ impl TokenService {
         )
         .map_err(|e| AuthError::internal_error(format!("Failed to generate JWT: {}", e)))?;
         
-        Ok(token)
+        Ok((token, jti))
     }
     
     /// Validate a JWT and return the claims
@@ -149,7 +153,10 @@ mod tests {
         let result = token_manager.generate_jwt(&user_id);
         
         assert!(result.is_ok());
-        let token = result.unwrap();
+        let (token, jwt_id) = result.unwrap();
+        
+        // Verify JWT ID is not empty
+        assert!(!jwt_id.is_empty());
         
         // Verify token can be decoded
         let mut validation = Validation::new(Algorithm::HS256);
@@ -172,7 +179,7 @@ mod tests {
         );
         let user_id = Uuid::new_v4();
         
-        let token = token_manager.generate_jwt(&user_id).unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&user_id).unwrap();
         
         // Decode and verify user_id in sub claim
         let mut validation = Validation::new(Algorithm::HS256);
@@ -195,7 +202,7 @@ mod tests {
         );
         let user_id = Uuid::new_v4();
         
-        let token = token_manager.generate_jwt(&user_id).unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&user_id).unwrap();
         
         // Decode and verify expiration
         let mut validation = Validation::new(Algorithm::HS256);
@@ -220,7 +227,7 @@ mod tests {
         let user_id = Uuid::new_v4();
         
         let before = Utc::now().timestamp();
-        let token = token_manager.generate_jwt(&user_id).unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&user_id).unwrap();
         let after = Utc::now().timestamp();
         
         // Decode and verify iat is within reasonable range
@@ -245,7 +252,7 @@ mod tests {
         );
         let user_id = Uuid::new_v4();
         
-        let token = token_manager.generate_jwt(&user_id).unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&user_id).unwrap();
         let result = token_manager.validate_jwt(&token);
         
         assert!(result.is_ok());
@@ -259,7 +266,7 @@ mod tests {
         );
         let user_id = Uuid::new_v4();
         
-        let token = token_manager.generate_jwt(&user_id).unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&user_id).unwrap();
         let claims = token_manager.validate_jwt(&token).unwrap();
         
         assert_eq!(claims.sub, user_id.to_string());
@@ -280,7 +287,7 @@ mod tests {
         let user_id = Uuid::new_v4();
         
         // Generate token with one secret
-        let token = token_manager.generate_jwt(&user_id).unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&user_id).unwrap();
         
         // Try to validate with different secret
         let result = wrong_token_manager.validate_jwt(&token);
@@ -307,6 +314,7 @@ mod tests {
             sub: Uuid::new_v4().to_string(),
             exp: now - 3600, // Expired 1 hour ago
             iat: now - 7200, // Issued 2 hours ago
+            jti: Some(Uuid::new_v4().to_string()),
         };
         
         let expired_token = encode(

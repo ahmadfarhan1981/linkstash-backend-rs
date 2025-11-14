@@ -11,4 +11,8 @@ pub struct Claims {
     
     /// Issued at (Unix timestamp)
     pub iat: i64,
+    
+    /// JWT ID (unique identifier for this token)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jti: Option<String>,
 }
