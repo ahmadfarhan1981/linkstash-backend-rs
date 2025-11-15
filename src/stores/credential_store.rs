@@ -2,14 +2,18 @@ use sea_orm::{DatabaseConnection, EntityTrait, ColumnTrait, QueryFilter, ActiveM
 use argon2::{Argon2, PasswordHash, PasswordVerifier, PasswordHasher, password_hash::SaltString, Algorithm, Version, Params};
 use uuid::Uuid;
 use chrono::Utc;
+use std::sync::Arc;
 use crate::types::db::user::{self, Entity as User, ActiveModel};
 use crate::types::db::refresh_token::{ActiveModel as RefreshTokenActiveModel};
 use crate::errors::auth::AuthError;
+use crate::stores::AuditStore;
+use crate::services::audit_logger;
 
 /// CredentialStore manages user credentials and refresh tokens in the database
 pub struct CredentialStore {
     db: DatabaseConnection,
     password_pepper: String,
+    audit_store: Arc<AuditStore>,
 }
 
 impl CredentialStore {
@@ -18,8 +22,9 @@ impl CredentialStore {
     /// # Arguments
     /// * `db` - The database connection
     /// * `password_pepper` - The secret key used for password hashing (from SecretManager)
-    pub fn new(db: DatabaseConnection, password_pepper: String) -> Self {
-        Self { db, password_pepper }
+    /// * `audit_store` - The audit store for logging security events
+    pub fn new(db: DatabaseConnection, password_pepper: String, audit_store: Arc<AuditStore>) -> Self {
+        Self { db, password_pepper, audit_store }
     }
 
     /// Add a new user to the database
@@ -90,14 +95,21 @@ impl CredentialStore {
 
     /// Verify user credentials and return user_id on success
     /// 
+    /// Implements OWASP timing attack mitigation by always executing Argon2 verification,
+    /// even when the user doesn't exist. This prevents attackers from determining valid
+    /// usernames by measuring response time differences.
+    /// 
+    /// Logs authentication attempts (success/failure) to audit database at point of action.
+    /// 
     /// # Arguments
     /// * `username` - The username to verify
     /// * `password` - The plaintext password to verify
+    /// * `ip_address` - Client IP address for audit logging
     /// 
     /// # Returns
     /// * `Ok(String)` - The user_id (UUID) if credentials are valid
     /// * `Err(AuthError)` - InvalidCredentials if username not found or password incorrect
-    pub async fn verify_credentials(&self, username: &str, password: &str) -> Result<String, AuthError> {
+    pub async fn verify_credentials(&self, username: &str, password: &str, ip_address: Option<String>) -> Result<String, AuthError> {
         // Query user by username
         let user = User::find()
             .filter(user::Column::Username.eq(username))
@@ -105,14 +117,26 @@ impl CredentialStore {
             .await
             .map_err(|_| AuthError::invalid_credentials())?;
 
-        // If user not found, return invalid credentials
-        let user = user.ok_or_else(|| AuthError::invalid_credentials())?;
+        // OWASP timing attack mitigation: Always execute Argon2 verification
+        // Use a dummy hash when user doesn't exist to maintain constant-time behavior
+        let (password_hash, user_id) = match user {
+            Some(u) => (u.password_hash.clone(), Some(u.id.clone())),
+            None => {
+                // Dummy Argon2id hash to verify against (prevents timing attacks)
+                // This is a valid hash that will always fail verification
+                (
+                    "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHR2YWx1ZTEyMzQ$\
+                     qrvBFkJXVqKxqhCKqhCKqhCKqhCKqhCKqhCKqhCKqhA".to_string(),
+                    None
+                )
+            }
+        };
 
-        // Parse the stored password hash
-        let parsed_hash = PasswordHash::new(&user.password_hash)
+        // Parse the password hash (real or dummy)
+        let parsed_hash = PasswordHash::new(&password_hash)
             .map_err(|_| AuthError::invalid_credentials())?;
 
-        // Verify password using Argon2 with password_pepper as secret parameter
+        // Initialize Argon2 with password_pepper as secret parameter
         let argon2 = Argon2::new_with_secret(
             self.password_pepper.as_bytes(),
             Algorithm::Argon2id,
@@ -121,25 +145,75 @@ impl CredentialStore {
         )
         .map_err(|_| AuthError::invalid_credentials())?;
         
-        argon2
-            .verify_password(password.as_bytes(), &parsed_hash)
-            .map_err(|_| AuthError::invalid_credentials())?;
-
-        // Return user_id on success
-        Ok(user.id)
+        // Always execute password verification (constant-time operation)
+        let verification_result = argon2.verify_password(password.as_bytes(), &parsed_hash);
+        
+        // Handle result based on whether user exists and password is correct
+        match (user_id, verification_result) {
+            (Some(uid), Ok(_)) => {
+                // User exists and password is correct
+                if let Err(audit_err) = audit_logger::log_login_success(
+                    &self.audit_store,
+                    uid.clone(),
+                    ip_address,
+                ).await {
+                    tracing::error!("Failed to log login success: {:?}", audit_err);
+                }
+                Ok(uid)
+            }
+            (Some(uid), Err(_)) => {
+                // User exists but password is incorrect
+                // Audit log contains actual reason for forensic analysis
+                if let Err(audit_err) = audit_logger::log_login_failure(
+                    &self.audit_store,
+                    Some(uid),
+                    "invalid_password".to_string(),
+                    ip_address,
+                ).await {
+                    tracing::error!("Failed to log login failure: {:?}", audit_err);
+                }
+                // User-facing error remains generic to prevent information disclosure
+                Err(AuthError::invalid_credentials())
+            }
+            (None, _) => {
+                // User doesn't exist (verification will always fail with dummy hash)
+                // Audit log contains actual reason for forensic analysis
+                if let Err(audit_err) = audit_logger::log_login_failure(
+                    &self.audit_store,
+                    None,
+                    "user_not_found".to_string(),
+                    ip_address,
+                ).await {
+                    tracing::error!("Failed to log login failure: {:?}", audit_err);
+                }
+                // User-facing error remains generic to prevent username enumeration
+                Err(AuthError::invalid_credentials())
+            }
+        }
     }
     
     /// Store a refresh token in the database
+    /// 
+    /// Logs token issuance to audit database at point of action.
     /// 
     /// # Arguments
     /// * `token_hash` - The SHA-256 hash of the refresh token
     /// * `user_id` - The user_id (UUID string) this token belongs to
     /// * `expires_at` - Unix timestamp when the token expires
+    /// * `jwt_id` - The JWT ID associated with this refresh token
+    /// * `ip_address` - Client IP address for audit logging
     /// 
     /// # Returns
     /// * `Ok(())` - Token stored successfully
     /// * `Err(AuthError)` - Database error
-    pub async fn store_refresh_token(&self, token_hash: String, user_id: String, expires_at: i64) -> Result<(), AuthError> {
+    pub async fn store_refresh_token(
+        &self,
+        token_hash: String,
+        user_id: String,
+        expires_at: i64,
+        jwt_id: String,
+        ip_address: Option<String>,
+    ) -> Result<(), AuthError> {
         // Use a transaction to ensure atomicity
         let txn = self.db.begin().await
             .map_err(|e| AuthError::internal_error(format!("Failed to start transaction: {}", e)))?;
@@ -148,8 +222,8 @@ impl CredentialStore {
         
         let new_token = RefreshTokenActiveModel {
             id: sea_orm::ActiveValue::NotSet, // Auto-increment will handle this
-            token_hash: Set(token_hash),
-            user_id: Set(user_id),
+            token_hash: Set(token_hash.clone()),
+            user_id: Set(user_id.clone()),
             expires_at: Set(expires_at),
             created_at: Set(created_at),
         };
@@ -160,18 +234,32 @@ impl CredentialStore {
         txn.commit().await
             .map_err(|e| AuthError::internal_error(format!("Failed to commit transaction: {}", e)))?;
         
+        // Log refresh token issuance at point of action
+        if let Err(audit_err) = audit_logger::log_refresh_token_issued(
+            &self.audit_store,
+            user_id,
+            jwt_id,
+            token_hash,
+            ip_address,
+        ).await {
+            tracing::error!("Failed to log refresh token issuance: {:?}", audit_err);
+        }
+        
         Ok(())
     }
     
     /// Validate a refresh token and return the associated user_id
     /// 
+    /// Logs validation attempts (success/failure) to audit database at point of action.
+    /// 
     /// # Arguments
     /// * `token_hash` - The SHA-256 hash of the refresh token to validate
+    /// * `ip_address` - Client IP address for audit logging
     /// 
     /// # Returns
     /// * `Ok(String)` - The user_id (UUID) if token is valid and not expired
     /// * `Err(AuthError)` - InvalidRefreshToken if not found, ExpiredRefreshToken if expired
-    pub async fn validate_refresh_token(&self, token_hash: &str) -> Result<String, AuthError> {
+    pub async fn validate_refresh_token(&self, token_hash: &str, ip_address: Option<String>) -> Result<String, AuthError> {
         use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
         
         // Query token by hash
@@ -181,31 +269,54 @@ impl CredentialStore {
             .await
             .map_err(|e| AuthError::internal_error(format!("Database error: {}", e)))?;
         
-        // If token not found, return invalid refresh token error
-        let token = token.ok_or_else(|| AuthError::invalid_refresh_token())?;
+        // If token not found, log failure and return error
+        let token = match token {
+            Some(t) => t,
+            None => {
+                if let Err(audit_err) = audit_logger::log_refresh_token_validation_failure(
+                    &self.audit_store,
+                    token_hash.to_string(),
+                    "not_found".to_string(),
+                    ip_address,
+                ).await {
+                    tracing::error!("Failed to log refresh token validation failure: {:?}", audit_err);
+                }
+                return Err(AuthError::invalid_refresh_token());
+            }
+        };
         
         // Check if token is expired
         let now = Utc::now().timestamp();
         if token.expires_at < now {
+            if let Err(audit_err) = audit_logger::log_refresh_token_validation_failure(
+                &self.audit_store,
+                token_hash.to_string(),
+                "expired".to_string(),
+                ip_address,
+            ).await {
+                tracing::error!("Failed to log refresh token validation failure: {:?}", audit_err);
+            }
             return Err(AuthError::expired_refresh_token());
         }
         
-        // Return user_id on success
+        // Return user_id on success (no audit log for successful validation - logged at JWT issuance)
         Ok(token.user_id)
     }
     
     /// Revoke a refresh token by deleting it from the database
     /// 
     /// Does not verify user ownership - the refresh token itself is the authority.
+    /// Logs revocation to audit database at point of action.
     /// 
     /// # Arguments
     /// * `token_hash` - SHA-256 hash of the refresh token to revoke
+    /// * `jwt_id` - Optional JWT ID for audit logging (if authenticated)
     /// 
     /// # Returns
-    /// * `Ok(user_id)` - Token revoked successfully, returns the user_id for audit logging
+    /// * `Ok(user_id)` - Token revoked successfully, returns the user_id
     /// * `Err(AuthError::InvalidRefreshToken)` - Token not found in database
     /// * `Err(AuthError::InternalError)` - Database error
-    pub async fn revoke_refresh_token(&self, token_hash: &str) -> Result<String, AuthError> {
+    pub async fn revoke_refresh_token(&self, token_hash: &str, jwt_id: Option<String>) -> Result<String, AuthError> {
         use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
         
         let token = RefreshToken::find()
@@ -223,6 +334,16 @@ impl CredentialStore {
             .await
             .map_err(|e| AuthError::internal_error(format!("Failed to revoke refresh token: {}", e)))?;
         
+        // Log revocation at point of action
+        if let Err(audit_err) = audit_logger::log_refresh_token_revoked(
+            &self.audit_store,
+            user_id.clone(),
+            jwt_id,
+            token_hash.to_string(),
+        ).await {
+            tracing::error!("Failed to log refresh token revocation: {:?}", audit_err);
+        }
+        
         Ok(user_id)
     }
 }
@@ -232,13 +353,14 @@ impl std::fmt::Debug for CredentialStore {
         f.debug_struct("CredentialStore")
             .field("db", &"<connection>")
             .field("password_pepper", &"<redacted>")
+            .field("audit_store", &"<audit_store>")
             .finish()
     }
 }
 
 impl std::fmt::Display for CredentialStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CredentialStore {{ db: <connection>, password_pepper: <redacted> }}")
+        write!(f, "CredentialStore {{ db: <connection>, password_pepper: <redacted>, audit_store: <audit_store> }}")
     }
 }
 
@@ -259,9 +381,20 @@ mod tests {
             .await
             .expect("Failed to run migrations");
         
-        // Create credential store with test password pepper
+        // Create in-memory audit database for testing
+        let audit_db = Database::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create audit database");
+        
+        // Run audit migrations
+        migration::Migrator::up(&audit_db, None)
+            .await
+            .expect("Failed to run audit migrations");
+        
+        // Create credential store with test password pepper and audit store
         let password_pepper = "test-pepper-for-unit-tests".to_string();
-        let credential_store = CredentialStore::new(db.clone(), password_pepper);
+        let audit_store = Arc::new(AuditStore::new(audit_db));
+        let credential_store = CredentialStore::new(db.clone(), password_pepper, audit_store);
         
         (db, credential_store)
     }
@@ -280,7 +413,7 @@ mod tests {
         
         // Verify user can be found by verifying credentials
         let verify_result = credential_store
-            .verify_credentials("newuser", "password123")
+            .verify_credentials("newuser", "password123", None)
             .await;
         
         assert!(verify_result.is_ok());
@@ -350,7 +483,7 @@ mod tests {
         
         // Verify with correct password
         let result = credential_store
-            .verify_credentials("validuser", "correctpass")
+            .verify_credentials("validuser", "correctpass", None)
             .await;
         
         assert!(result.is_ok());
@@ -369,7 +502,7 @@ mod tests {
         
         // Verify with incorrect password
         let result = credential_store
-            .verify_credentials("validuser", "wrongpass")
+            .verify_credentials("validuser", "wrongpass", None)
             .await;
         
         assert!(result.is_err());
@@ -387,7 +520,7 @@ mod tests {
         
         // Try to verify credentials for non-existent user
         let result = credential_store
-            .verify_credentials("nonexistent", "anypassword")
+            .verify_credentials("nonexistent", "anypassword", None)
             .await;
         
         assert!(result.is_err());
@@ -412,9 +545,10 @@ mod tests {
         // Store a refresh token
         let token_hash = "test_hash_123";
         let expires_at = Utc::now().timestamp() + 604800; // 7 days
+        let jwt_id = "test-jwt-id".to_string();
         
         let result = credential_store
-            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at)
+            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at, jwt_id, None)
             .await;
         
         assert!(result.is_ok());
@@ -446,9 +580,10 @@ mod tests {
         // Store a token with a plaintext-looking value
         let plaintext_token = "my-plaintext-token";
         let expires_at = Utc::now().timestamp() + 604800;
+        let jwt_id = "test-jwt-id".to_string();
         
         let result = credential_store
-            .store_refresh_token(plaintext_token.to_string(), user_id.clone(), expires_at)
+            .store_refresh_token(plaintext_token.to_string(), user_id.clone(), expires_at, jwt_id, None)
             .await;
         
         assert!(result.is_ok());
@@ -480,9 +615,10 @@ mod tests {
         let token_hash = "expiry_test_hash";
         let now = Utc::now().timestamp();
         let expires_at = now + (7 * 24 * 60 * 60); // 7 days in seconds
+        let jwt_id = "test-jwt-id".to_string();
         
         let result = credential_store
-            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at)
+            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at, jwt_id, None)
             .await;
         
         assert!(result.is_ok());
@@ -516,14 +652,15 @@ mod tests {
         // Store a valid refresh token
         let token_hash = "valid_token_hash";
         let expires_at = Utc::now().timestamp() + 604800; // 7 days from now
+        let jwt_id = "test-jwt-id".to_string();
         
         credential_store
-            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at)
+            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at, jwt_id, None)
             .await
             .expect("Failed to store token");
         
         // Validate the token
-        let result = credential_store.validate_refresh_token(token_hash).await;
+        let result = credential_store.validate_refresh_token(token_hash, None).await;
         
         assert!(result.is_ok());
     }
@@ -541,14 +678,15 @@ mod tests {
         // Store a refresh token
         let token_hash = "userid_token_hash";
         let expires_at = Utc::now().timestamp() + 604800;
+        let jwt_id = "test-jwt-id".to_string();
         
         credential_store
-            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at)
+            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at, jwt_id, None)
             .await
             .expect("Failed to store token");
         
         // Validate and verify user_id
-        let result = credential_store.validate_refresh_token(token_hash).await;
+        let result = credential_store.validate_refresh_token(token_hash, None).await;
         
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), user_id);
@@ -559,7 +697,7 @@ mod tests {
         let (_db, credential_store) = setup_test_db().await;
         
         // Try to validate a token that doesn't exist
-        let result = credential_store.validate_refresh_token("nonexistent_token").await;
+        let result = credential_store.validate_refresh_token("nonexistent_token", None).await;
         
         assert!(result.is_err());
         match result {
@@ -583,14 +721,15 @@ mod tests {
         // Store an expired refresh token
         let token_hash = "expired_token_hash";
         let expires_at = Utc::now().timestamp() - 3600; // Expired 1 hour ago
+        let jwt_id = "test-jwt-id".to_string();
         
         credential_store
-            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at)
+            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at, jwt_id, None)
             .await
             .expect("Failed to store token");
         
         // Try to validate the expired token
-        let result = credential_store.validate_refresh_token(token_hash).await;
+        let result = credential_store.validate_refresh_token(token_hash, None).await;
         
         assert!(result.is_err());
         match result {
@@ -614,9 +753,10 @@ mod tests {
         // Store a refresh token
         let token_hash = "revoke_test_hash";
         let expires_at = Utc::now().timestamp() + 604800;
+        let jwt_id = "test-jwt-id".to_string();
         
         credential_store
-            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at)
+            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at, jwt_id, None)
             .await
             .expect("Failed to store token");
         
@@ -630,7 +770,7 @@ mod tests {
         assert!(token_before.is_some());
         
         // Revoke the token
-        let result = credential_store.revoke_refresh_token(token_hash).await;
+        let result = credential_store.revoke_refresh_token(token_hash, None).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), user_id);
         
@@ -654,7 +794,7 @@ mod tests {
             .expect("Failed to add user");
         
         // Try to revoke a token that doesn't exist
-        let result = credential_store.revoke_refresh_token("nonexistent_token").await;
+        let result = credential_store.revoke_refresh_token("nonexistent_token", None).await;
         
         // Should fail with invalid token error
         assert!(result.is_err());
@@ -678,14 +818,15 @@ mod tests {
         // Store a refresh token for user1
         let token_hash = "user1_token_hash";
         let expires_at = Utc::now().timestamp() + 604800;
+        let jwt_id = "test-jwt-id".to_string();
         
         credential_store
-            .store_refresh_token(token_hash.to_string(), user1_id.clone(), expires_at)
+            .store_refresh_token(token_hash.to_string(), user1_id.clone(), expires_at, jwt_id.clone(), None)
             .await
             .expect("Failed to store token");
         
         // Revoke the token (no user verification - RT is the authority)
-        let result = credential_store.revoke_refresh_token(token_hash).await;
+        let result = credential_store.revoke_refresh_token(token_hash, Some(jwt_id)).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), user1_id);
         
@@ -711,8 +852,17 @@ mod tests {
             .await
             .expect("Failed to run migrations");
         
+        let audit_db = Database::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create audit database");
+        
+        migration::Migrator::up(&audit_db, None)
+            .await
+            .expect("Failed to run audit migrations");
+        
         let password_pepper = "test-pepper-secret-key".to_string();
-        let credential_store = CredentialStore::new(db.clone(), password_pepper);
+        let audit_store = Arc::new(AuditStore::new(audit_db));
+        let credential_store = CredentialStore::new(db.clone(), password_pepper, audit_store);
         
         // Add user with peppered password
         let result = credential_store
@@ -747,8 +897,17 @@ mod tests {
             .await
             .expect("Failed to run migrations");
         
+        let audit_db = Database::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create audit database");
+        
+        migration::Migrator::up(&audit_db, None)
+            .await
+            .expect("Failed to run audit migrations");
+        
         let password_pepper = "verification-test-pepper".to_string();
-        let credential_store = CredentialStore::new(db.clone(), password_pepper);
+        let audit_store = Arc::new(AuditStore::new(audit_db));
+        let credential_store = CredentialStore::new(db.clone(), password_pepper, audit_store);
         
         let password = "correct-password";
         
@@ -760,14 +919,14 @@ mod tests {
         
         // Verify with correct password
         let result = credential_store
-            .verify_credentials("verifyuser", password)
+            .verify_credentials("verifyuser", password, None)
             .await;
         
         assert!(result.is_ok());
         
         // Verify with incorrect password
         let result = credential_store
-            .verify_credentials("verifyuser", "wrong-password")
+            .verify_credentials("verifyuser", "wrong-password", None)
             .await;
         
         assert!(result.is_err());
@@ -783,11 +942,20 @@ mod tests {
             .await
             .expect("Failed to run migrations");
         
+        let audit_db = Database::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create audit database");
+        
+        migration::Migrator::up(&audit_db, None)
+            .await
+            .expect("Failed to run audit migrations");
+        
         let password = "same-password";
+        let audit_store = Arc::new(AuditStore::new(audit_db));
         
         // Create first user with pepper1
         let pepper1 = "pepper-one-secret-key".to_string();
-        let store1 = CredentialStore::new(db.clone(), pepper1);
+        let store1 = CredentialStore::new(db.clone(), pepper1, audit_store.clone());
         
         store1
             .add_user("user1".to_string(), password.to_string())
@@ -796,7 +964,7 @@ mod tests {
         
         // Create second user with pepper2
         let pepper2 = "pepper-two-secret-key".to_string();
-        let store2 = CredentialStore::new(db.clone(), pepper2);
+        let store2 = CredentialStore::new(db.clone(), pepper2, audit_store.clone());
         
         store2
             .add_user("user2".to_string(), password.to_string())
@@ -822,19 +990,19 @@ mod tests {
         assert_ne!(user1.password_hash, user2.password_hash);
         
         // Verify user1 can only be verified with pepper1
-        let verify_result = store1.verify_credentials("user1", password).await;
+        let verify_result = store1.verify_credentials("user1", password, None).await;
         assert!(verify_result.is_ok());
         
         // Verify user2 can only be verified with pepper2
-        let verify_result = store2.verify_credentials("user2", password).await;
+        let verify_result = store2.verify_credentials("user2", password, None).await;
         assert!(verify_result.is_ok());
         
         // Verify cross-verification fails (user1 with pepper2)
-        let verify_result = store2.verify_credentials("user1", password).await;
+        let verify_result = store2.verify_credentials("user1", password, None).await;
         assert!(verify_result.is_err());
         
         // Verify cross-verification fails (user2 with pepper1)
-        let verify_result = store1.verify_credentials("user2", password).await;
+        let verify_result = store1.verify_credentials("user2", password, None).await;
         assert!(verify_result.is_err());
     }
 
@@ -848,8 +1016,17 @@ mod tests {
             .await
             .expect("Failed to run migrations");
         
+        let audit_db = Database::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create audit database");
+        
+        migration::Migrator::up(&audit_db, None)
+            .await
+            .expect("Failed to run audit migrations");
+        
         let password_pepper = "data-param-test-pepper".to_string();
-        let credential_store = CredentialStore::new(db.clone(), password_pepper);
+        let audit_store = Arc::new(AuditStore::new(audit_db));
+        let credential_store = CredentialStore::new(db.clone(), password_pepper, audit_store.clone());
         
         // Add user with peppered password
         credential_store
@@ -876,14 +1053,14 @@ mod tests {
         // However, argon2 crate may encode this differently, so we verify by testing
         // that verification fails without the correct pepper
         let wrong_pepper = "wrong-pepper-key".to_string();
-        let wrong_store = CredentialStore::new(db.clone(), wrong_pepper);
+        let wrong_store = CredentialStore::new(db.clone(), wrong_pepper, audit_store.clone());
         
         // Verification should fail with wrong pepper
-        let verify_result = wrong_store.verify_credentials("datauser", "password123").await;
+        let verify_result = wrong_store.verify_credentials("datauser", "password123", None).await;
         assert!(verify_result.is_err());
         
         // Verification should succeed with correct pepper
-        let verify_result = credential_store.verify_credentials("datauser", "password123").await;
+        let verify_result = credential_store.verify_credentials("datauser", "password123", None).await;
         assert!(verify_result.is_ok());
     }
 
@@ -899,8 +1076,17 @@ mod tests {
             .await
             .expect("Failed to run migrations");
         
+        let audit_db = Database::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create audit database");
+        
+        migration::Migrator::up(&audit_db, None)
+            .await
+            .expect("Failed to run audit migrations");
+        
         let password_pepper = "super-secret-pepper-value".to_string();
-        let credential_store = CredentialStore::new(db.clone(), password_pepper);
+        let audit_store = Arc::new(AuditStore::new(audit_db));
+        let credential_store = CredentialStore::new(db.clone(), password_pepper, audit_store);
         
         let debug_output = format!("{:?}", credential_store);
         
@@ -924,8 +1110,17 @@ mod tests {
             .await
             .expect("Failed to run migrations");
         
+        let audit_db = Database::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create audit database");
+        
+        migration::Migrator::up(&audit_db, None)
+            .await
+            .expect("Failed to run audit migrations");
+        
         let password_pepper = "another-secret-pepper".to_string();
-        let credential_store = CredentialStore::new(db.clone(), password_pepper);
+        let audit_store = Arc::new(AuditStore::new(audit_db));
+        let credential_store = CredentialStore::new(db.clone(), password_pepper, audit_store);
         
         let display_output = format!("{}", credential_store);
         
@@ -949,8 +1144,17 @@ mod tests {
             .await
             .expect("Failed to run migrations");
         
+        let audit_db = Database::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create audit database");
+        
+        migration::Migrator::up(&audit_db, None)
+            .await
+            .expect("Failed to run audit migrations");
+        
         let password_pepper = "test-pepper".to_string();
-        let credential_store = CredentialStore::new(db.clone(), password_pepper);
+        let audit_store = Arc::new(AuditStore::new(audit_db));
+        let credential_store = CredentialStore::new(db.clone(), password_pepper, audit_store);
         
         let debug_output = format!("{:?}", credential_store);
         

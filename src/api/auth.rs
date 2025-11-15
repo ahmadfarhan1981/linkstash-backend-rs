@@ -10,19 +10,16 @@ use std::sync::Arc;
 
 /// Authentication API endpoints
 pub struct AuthApi {
-    auth_service: Arc<AuthService>,
-    token_service: Arc<TokenService>,
+    auth_service: Arc<AuthService>
 }
 
 impl AuthApi {
     /// Create a new AuthApi with the given AuthService and TokenService
     pub fn new(
         auth_service: Arc<AuthService>,
-        token_service: Arc<TokenService>,
     ) -> Self {
         Self { 
-            auth_service,
-            token_service,
+            auth_service
         }
     }
     
@@ -245,9 +242,12 @@ mod tests {
             .await
             .expect("Failed to run audit migrations");
         
+        // Create audit store
+        let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
+        
         // Create credential store with test password pepper
         let password_pepper = "test-pepper-for-api-tests".to_string();
-        let credential_store = Arc::new(CredentialStore::new(db.clone(), password_pepper));
+        let credential_store = Arc::new(CredentialStore::new(db.clone(), password_pepper, audit_store.clone()));
         
         // Create token manager with test secret and refresh token secret
         let token_service = Arc::new(TokenService::new(
@@ -326,8 +326,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_login_with_valid_credentials() {
-        let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -356,8 +356,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_login_with_invalid_credentials() {
-        let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -379,8 +379,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_login_response_contains_required_fields() {
-        let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -402,8 +402,8 @@ mod tests {
     
     #[tokio::test]
     async fn test_login_with_nonexistent_user() {
-        let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -419,8 +419,8 @@ mod tests {
     
     #[tokio::test]
     async fn test_login_returns_decodable_jwt() {
-        let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -457,8 +457,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_whoami_with_valid_jwt_returns_200_and_user_id() {
-        let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service.clone(), token_service.clone());
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service.clone());
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -485,8 +485,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_whoami_with_invalid_jwt_returns_401() {
-        let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -501,8 +501,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_whoami_with_expired_jwt_returns_401() {
-        let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -539,8 +539,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_login_refresh_token_is_not_placeholder() {
-        let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -563,7 +563,7 @@ mod tests {
     #[tokio::test]
     async fn test_login_stores_refresh_token_in_database() {
         let (db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service.clone());
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -603,8 +603,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_refresh_with_valid_token_returns_200_and_new_jwt() {
-        let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -637,8 +637,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_refresh_with_invalid_token_returns_401() {
-        let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -654,7 +654,7 @@ mod tests {
     #[tokio::test]
     async fn test_refresh_with_expired_token_returns_401() {
         let (_db, _audit_db, auth_service, token_service, credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service.clone(), token_service.clone());
+        let api = AuthApi::new(auth_service.clone());
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -669,9 +669,10 @@ mod tests {
         let expired_token = token_service.generate_refresh_token();
         let token_hash = token_service.hash_refresh_token(&expired_token);
         let expires_at = chrono::Utc::now().timestamp() - 3600; // Expired 1 hour ago
+        let jwt_id = "test-jwt-id-1".to_string();
         
         credential_store
-            .store_refresh_token(token_hash, user_id, expires_at)
+            .store_refresh_token(token_hash, user_id, expires_at, jwt_id, None)
             .await
             .expect("Failed to store expired token");
         
@@ -685,8 +686,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_refresh_new_jwt_has_updated_expiration_time() {
-        let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service.clone());
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -733,8 +734,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_refresh_new_jwt_contains_correct_user_id() {
-        let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service.clone());
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -778,8 +779,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_logout_with_valid_token_returns_200() {
-        let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -808,7 +809,7 @@ mod tests {
     #[tokio::test]
     async fn test_logout_removes_token_from_database() {
         let (db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service.clone());
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -854,8 +855,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_logout_with_invalid_token_still_returns_200() {
-        let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -885,8 +886,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_refresh_fails_after_logout_with_401() {
-        let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -922,7 +923,7 @@ mod tests {
     #[tokio::test]
     async fn test_logout_revokes_any_refresh_token() {
         let (db, _audit_db, auth_service, token_service, credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service.clone(), token_service.clone());
+        let api = AuthApi::new(auth_service.clone());
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -980,8 +981,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_login_success_creates_audit_trail() {
-        let (_db, audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
+        let (_db, audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -1030,8 +1031,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_login_failure_creates_audit_trail() {
-        let (_db, audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
+        let (db, audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
+        
+        // Get the testuser's user_id for verification
+        use crate::types::db::user::{Entity as User, Column as UserColumn};
+        use sea_orm::{EntityTrait, QueryFilter, ColumnTrait};
+        let testuser = User::find()
+            .filter(UserColumn::Username.eq("testuser"))
+            .one(&db)
+            .await
+            .expect("Failed to query user")
+            .expect("testuser not found");
+        let expected_user_id = testuser.id;
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -1046,7 +1058,6 @@ mod tests {
         
         // Query audit database to verify login_failure event was created
         use crate::types::db::audit_event::Entity as AuditEvent;
-        use sea_orm::EntityTrait;
         
         let audit_events = AuditEvent::find()
             .all(&audit_db)
@@ -1058,7 +1069,8 @@ mod tests {
         
         let login_failure = &audit_events[0];
         assert_eq!(login_failure.event_type, "login_failure");
-        assert_eq!(login_failure.user_id, "unknown"); // No user_id for failed login
+        // Now logs actual user_id when user exists but password is wrong (better for auditing)
+        assert_eq!(login_failure.user_id, expected_user_id);
         // IP address is set to "unknown" when not available in request
         assert_eq!(login_failure.ip_address, Some("unknown".to_string()));
         
@@ -1070,8 +1082,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_refresh_creates_jwt_issued_audit_trail() {
-        let (_db, audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
+        let (_db, audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -1118,8 +1130,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_refresh_with_invalid_token_creates_validation_failure_audit_trail() {
-        let (_db, audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
+        let (_db, audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -1158,7 +1170,7 @@ mod tests {
     #[tokio::test]
     async fn test_refresh_with_expired_token_creates_validation_failure_audit_trail() {
         let (_db, audit_db, auth_service, token_service, credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service.clone(), token_service.clone());
+        let api = AuthApi::new(auth_service.clone());
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -1173,9 +1185,10 @@ mod tests {
         let expired_token = token_service.generate_refresh_token();
         let token_hash = token_service.hash_refresh_token(&expired_token);
         let expires_at = chrono::Utc::now().timestamp() - 3600; // Expired 1 hour ago
+        let jwt_id = "test-jwt-id-2".to_string();
         
         credential_store
-            .store_refresh_token(token_hash, user_id, expires_at)
+            .store_refresh_token(token_hash, user_id, expires_at, jwt_id, None)
             .await
             .expect("Failed to store expired token");
         
@@ -1195,11 +1208,14 @@ mod tests {
             .await
             .expect("Failed to query audit events");
         
-        // Should have 1 event: refresh_token_validation_failure
-        assert_eq!(audit_events.len(), 1, "Expected 1 audit event");
+        // Should have 2 events: refresh_token_issued (from store_refresh_token) and refresh_token_validation_failure
+        assert_eq!(audit_events.len(), 2, "Expected 2 audit events");
         
-        let validation_failure = &audit_events[0];
-        assert_eq!(validation_failure.event_type, "refresh_token_validation_failure");
+        // Find the validation_failure event
+        let validation_failure = audit_events
+            .iter()
+            .find(|e| e.event_type == "refresh_token_validation_failure")
+            .expect("refresh_token_validation_failure event not found");
         assert_eq!(validation_failure.user_id, "unknown");
         
         // Verify failure reason is expired
@@ -1210,8 +1226,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_logout_creates_refresh_token_revoked_audit_trail() {
-        let (_db, audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service.clone());
+        let (_db, audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -1262,9 +1278,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_whoami_with_expired_jwt_creates_validation_failure_audit_trail() {
-        let (_db, audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
-        
+        let (_db, audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
         
@@ -1319,8 +1334,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_whoami_with_tampered_jwt_creates_tampering_audit_trail() {
-        let (_db, audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service, token_service);
+        let (_db, audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();

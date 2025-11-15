@@ -41,7 +41,7 @@ async fn main() -> Result<(), std::io::Error> {
     let bind_address = format!("{}:{}", host, port);
     
     // Create AuthApi with AuthService (uses auth service's internal token service)
-    let auth_api = AuthApi::new(auth_service.clone(), auth_service.token_service());
+    let auth_api = AuthApi::new(auth_service.clone());
     
     // Create OpenAPI service with API implementation
     // Use localhost for the server URL since 0.0.0.0 is not accessible from browsers

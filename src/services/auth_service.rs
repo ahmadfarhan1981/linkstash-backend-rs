@@ -25,18 +25,20 @@ impl AuthService {
         audit_db: sea_orm::DatabaseConnection,
         secret_manager: Arc<crate::config::SecretManager>,
     ) -> Result<Self, AuthError> {
+        // Create audit store first (needed by credential store)
+        let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
+        
         // Create internal dependencies
         let credential_store = Arc::new(CredentialStore::new(
             db.clone(),
-            secret_manager.password_pepper().to_string()
+            secret_manager.password_pepper().to_string(),
+            audit_store.clone(),
         ));
         
         let token_service = Arc::new(TokenService::new(
             secret_manager.jwt_secret().to_string(),
             secret_manager.refresh_token_secret().to_string(),
         ));
-        
-        let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
         
         let service = Self {
             credential_store: credential_store.clone(),
@@ -100,29 +102,10 @@ impl AuthService {
         username: String,
         password: String,
     ) -> Result<(String, String), AuthError> {
-        let user_id_result = self.credential_store
-            .verify_credentials(&username, &password)
-            .await;
-        
-        if let Err(ref err) = user_id_result {
-            let failure_reason = match err {
-                AuthError::InvalidCredentials(_) => "invalid_credentials",
-                _ => "authentication_error",
-            };
-            
-            if let Err(audit_err) = audit_logger::log_login_failure(
-                &self.audit_store,
-                None,
-                failure_reason.to_string(),
-                ctx.ip_address.clone(),
-            ).await {
-                tracing::error!("Failed to log login failure: {:?}", audit_err);
-            }
-            
-            return Err(user_id_result.unwrap_err());
-        }
-        
-        let user_id_str = user_id_result.unwrap();
+        // Credential verification with audit logging happens in the store
+        let user_id_str = self.credential_store
+            .verify_credentials(&username, &password, ctx.ip_address.clone())
+            .await?;
         
         let user_id = Uuid::parse_str(&user_id_str)
             .map_err(|e| AuthError::internal_error(format!("Invalid user_id format: {}", e)))?;
@@ -133,18 +116,19 @@ impl AuthService {
         
         let token_hash = self.token_service.hash_refresh_token(&refresh_token);
         let expires_at = self.token_service.get_refresh_expiration();
+        
+        // Store refresh token with audit logging in the store
         self.credential_store
-            .store_refresh_token(token_hash.clone(), user_id_str.clone(), expires_at)
+            .store_refresh_token(
+                token_hash.clone(),
+                user_id_str.clone(),
+                expires_at,
+                jwt_id.clone(),
+                ctx.ip_address.clone(),
+            )
             .await?;
         
-        if let Err(audit_err) = audit_logger::log_login_success(
-            &self.audit_store,
-            user_id_str.clone(),
-            ctx.ip_address.clone(),
-        ).await {
-            tracing::error!("Failed to log login success: {:?}", audit_err);
-        }
-        
+        // Log JWT issuance (happens at service layer, not store)
         let expiration = DateTime::from_timestamp(expires_at, 0)
             .unwrap_or_else(|| chrono::Utc::now());
         if let Err(audit_err) = audit_logger::log_jwt_issued(
@@ -155,16 +139,6 @@ impl AuthService {
             ctx.ip_address.clone(),
         ).await {
             tracing::error!("Failed to log JWT issuance: {:?}", audit_err);
-        }
-        
-        if let Err(audit_err) = audit_logger::log_refresh_token_issued(
-            &self.audit_store,
-            user_id_str,
-            jwt_id,
-            token_hash,
-            ctx.ip_address.clone(),
-        ).await {
-            tracing::error!("Failed to log refresh token issuance: {:?}", audit_err);
         }
         
         Ok((access_token, refresh_token))
@@ -185,34 +159,17 @@ impl AuthService {
     ) -> Result<String, AuthError> {
         let token_hash = self.token_service.hash_refresh_token(&refresh_token);
         
-        let user_id_result = self.credential_store.validate_refresh_token(&token_hash).await;
-        
-        if let Err(ref err) = user_id_result {
-            let failure_reason = match err {
-                AuthError::InvalidRefreshToken(_) => "not_found",
-                AuthError::ExpiredRefreshToken(_) => "expired",
-                _ => "validation_error",
-            };
-            
-            if let Err(audit_err) = audit_logger::log_refresh_token_validation_failure(
-                &self.audit_store,
-                token_hash.clone(),
-                failure_reason.to_string(),
-                ctx.ip_address.clone(),
-            ).await {
-                tracing::error!("Failed to log refresh token validation failure: {:?}", audit_err);
-            }
-            
-            return Err(user_id_result.unwrap_err());
-        }
-        
-        let user_id_str = user_id_result.unwrap();
+        // Validation with audit logging happens in the store
+        let user_id_str = self.credential_store
+            .validate_refresh_token(&token_hash, ctx.ip_address.clone())
+            .await?;
         
         let user_id = Uuid::parse_str(&user_id_str)
             .map_err(|e| AuthError::internal_error(format!("Invalid user_id format: {}", e)))?;
         
         let (access_token, jwt_id) = self.token_service.generate_jwt(&user_id)?;
         
+        // Log JWT issuance (happens at service layer, not store)
         let expiration = DateTime::from_timestamp(
             self.token_service.get_refresh_expiration(),
             0
@@ -249,31 +206,17 @@ impl AuthService {
         refresh_token: String,
     ) -> Result<(), AuthError> {
         let token_hash = self.token_service.hash_refresh_token(&refresh_token);
-        let user_id = self.credential_store.revoke_refresh_token(&token_hash).await?;
         
-        if ctx.authenticated {
-            let claims = ctx.claims.as_ref().unwrap();
-            
-            if let Err(audit_err) = audit_logger::log_refresh_token_revoked(
-                &self.audit_store,
-                user_id,
-                claims.jti.clone(),
-                token_hash,
-            ).await {
-                tracing::error!("Failed to log refresh token revocation: {:?}", audit_err);
-            }
+        // Extract jwt_id if authenticated
+        let jwt_id = if ctx.authenticated {
+            ctx.claims.as_ref().and_then(|c| c.jti.clone())
         } else {
-            tracing::warn!("Unauthenticated logout from IP: {:?}, user_id: {}", ctx.ip_address, user_id);
-            
-            if let Err(audit_err) = audit_logger::log_refresh_token_revoked(
-                &self.audit_store,
-                user_id,
-                None,
-                token_hash,
-            ).await {
-                tracing::error!("Failed to log unauthenticated logout: {:?}", audit_err);
-            }
-        }
+            tracing::warn!("Unauthenticated logout from IP: {:?}", ctx.ip_address);
+            None
+        };
+        
+        // Revocation with audit logging happens in the store
+        self.credential_store.revoke_refresh_token(&token_hash, jwt_id).await?;
         
         Ok(())
     }
