@@ -160,6 +160,28 @@ pub async fn log_refresh_token_revoked(
     store.write_event(event).await
 }
 
+/// Log refresh token validation failure
+///
+/// # Arguments
+/// * `store` - Reference to the AuditStore
+/// * `token_hash` - Hash of the refresh token that failed validation
+/// * `failure_reason` - Reason for the validation failure (not_found, expired)
+/// * `ip_address` - Optional IP address of the client
+pub async fn log_refresh_token_validation_failure(
+    store: &AuditStore,
+    token_hash: String,
+    failure_reason: String,
+    ip_address: Option<String>,
+) -> Result<(), AuditError> {
+    let mut event = AuditEvent::new(EventType::RefreshTokenValidationFailure);
+    event.user_id = Some("unknown".to_string());
+    event.ip_address = ip_address;
+    event.data.insert("token_hash".to_string(), json!(token_hash));
+    event.data.insert("failure_reason".to_string(), json!(failure_reason));
+    
+    store.write_event(event).await
+}
+
 /// Builder for creating custom audit events
 ///
 /// Provides a fluent API for constructing audit events with type-safe field addition

@@ -88,36 +88,33 @@ impl AuthService {
     /// Perform a complete login flow with audit logging
     /// 
     /// # Arguments
+    /// * `ctx` - Request context with IP address and request_id
     /// * `username` - Username to authenticate
     /// * `password` - Password to verify
-    /// * `ip_address` - Optional IP address of the client for audit logging
     /// 
     /// # Returns
     /// * `Result<(String, String), AuthError>` - Tuple of (access_token, refresh_token) or error
     pub async fn login(
         &self,
+        ctx: &crate::types::internal::context::RequestContext,
         username: String,
         password: String,
-        ip_address: Option<String>,
     ) -> Result<(String, String), AuthError> {
-        // Verify credentials using database
         let user_id_result = self.credential_store
             .verify_credentials(&username, &password)
             .await;
         
-        // Handle authentication failure
         if let Err(ref err) = user_id_result {
             let failure_reason = match err {
                 AuthError::InvalidCredentials(_) => "invalid_credentials",
                 _ => "authentication_error",
             };
             
-            // Log login failure (without user_id since we don't have it)
             if let Err(audit_err) = audit_logger::log_login_failure(
                 &self.audit_store,
                 None,
                 failure_reason.to_string(),
-                ip_address,
+                ctx.ip_address.clone(),
             ).await {
                 tracing::error!("Failed to log login failure: {:?}", audit_err);
             }
@@ -127,35 +124,27 @@ impl AuthService {
         
         let user_id_str = user_id_result.unwrap();
         
-        // Parse user_id string to UUID
         let user_id = Uuid::parse_str(&user_id_str)
             .map_err(|e| AuthError::internal_error(format!("Invalid user_id format: {}", e)))?;
         
-        // Generate JWT
         let (access_token, jwt_id) = self.token_service.generate_jwt(&user_id)?;
         
-        // Generate refresh token
         let refresh_token = self.token_service.generate_refresh_token();
         
-        // Hash and store refresh token
         let token_hash = self.token_service.hash_refresh_token(&refresh_token);
         let expires_at = self.token_service.get_refresh_expiration();
         self.credential_store
             .store_refresh_token(token_hash.clone(), user_id_str.clone(), expires_at)
             .await?;
         
-        // Audit logging - all in one place
-        
-        // Log successful login
         if let Err(audit_err) = audit_logger::log_login_success(
             &self.audit_store,
             user_id_str.clone(),
-            ip_address.clone(),
+            ctx.ip_address.clone(),
         ).await {
             tracing::error!("Failed to log login success: {:?}", audit_err);
         }
         
-        // Log JWT issuance
         let expiration = DateTime::from_timestamp(expires_at, 0)
             .unwrap_or_else(|| chrono::Utc::now());
         if let Err(audit_err) = audit_logger::log_jwt_issued(
@@ -163,18 +152,17 @@ impl AuthService {
             user_id_str.clone(),
             jwt_id.clone(),
             expiration,
-            ip_address.clone(),
+            ctx.ip_address.clone(),
         ).await {
             tracing::error!("Failed to log JWT issuance: {:?}", audit_err);
         }
         
-        // Log refresh token issuance
         if let Err(audit_err) = audit_logger::log_refresh_token_issued(
             &self.audit_store,
             user_id_str,
             jwt_id,
             token_hash,
-            ip_address,
+            ctx.ip_address.clone(),
         ).await {
             tracing::error!("Failed to log refresh token issuance: {:?}", audit_err);
         }
@@ -185,25 +173,46 @@ impl AuthService {
     /// Refresh an access token using a refresh token
     /// 
     /// # Arguments
+    /// * `ctx` - Request context with IP address and request_id
     /// * `refresh_token` - The refresh token to validate
     /// 
     /// # Returns
     /// * `Result<String, AuthError>` - New access token or error
-    pub async fn refresh(&self, refresh_token: String) -> Result<String, AuthError> {
-        // Hash the refresh token
+    pub async fn refresh(
+        &self,
+        ctx: &crate::types::internal::context::RequestContext,
+        refresh_token: String,
+    ) -> Result<String, AuthError> {
         let token_hash = self.token_service.hash_refresh_token(&refresh_token);
         
-        // Validate refresh token and get user_id
-        let user_id_str = self.credential_store.validate_refresh_token(&token_hash).await?;
+        let user_id_result = self.credential_store.validate_refresh_token(&token_hash).await;
         
-        // Parse user_id string to UUID
+        if let Err(ref err) = user_id_result {
+            let failure_reason = match err {
+                AuthError::InvalidRefreshToken(_) => "not_found",
+                AuthError::ExpiredRefreshToken(_) => "expired",
+                _ => "validation_error",
+            };
+            
+            if let Err(audit_err) = audit_logger::log_refresh_token_validation_failure(
+                &self.audit_store,
+                token_hash.clone(),
+                failure_reason.to_string(),
+                ctx.ip_address.clone(),
+            ).await {
+                tracing::error!("Failed to log refresh token validation failure: {:?}", audit_err);
+            }
+            
+            return Err(user_id_result.unwrap_err());
+        }
+        
+        let user_id_str = user_id_result.unwrap();
+        
         let user_id = Uuid::parse_str(&user_id_str)
             .map_err(|e| AuthError::internal_error(format!("Invalid user_id format: {}", e)))?;
         
-        // Generate new JWT
         let (access_token, jwt_id) = self.token_service.generate_jwt(&user_id)?;
         
-        // Log JWT issuance
         let expiration = DateTime::from_timestamp(
             self.token_service.get_refresh_expiration(),
             0
@@ -214,7 +223,7 @@ impl AuthService {
             user_id_str,
             jwt_id,
             expiration,
-            None, // No IP address available in refresh flow
+            ctx.ip_address.clone(),
         ).await {
             tracing::error!("Failed to log JWT issuance: {:?}", audit_err);
         }

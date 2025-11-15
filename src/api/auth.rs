@@ -117,12 +117,10 @@ impl AuthApi {
     /// Login with username and password to receive authentication tokens
     #[oai(path = "/login", method = "post", tag = "AuthTags::Authentication")]
     async fn login(&self, req: &Request, body: Json<LoginRequest>) -> LoginApiResponse {
-        // Extract IP address from request
-        let ip_address = Self::extract_ip_address(req);
+        let ctx = self.create_request_context(req, None).await;
         
-        // Delegate to AuthService for complete login flow with audit logging
         match self.auth_service
-            .login(body.username.clone(), body.password.clone(), ip_address)
+            .login(&ctx, body.username.clone(), body.password.clone())
             .await
         {
             Ok((access_token, refresh_token)) => {
@@ -165,10 +163,11 @@ impl AuthApi {
     
     /// Refresh access token using a refresh token
     #[oai(path = "/refresh", method = "post", tag = "AuthTags::Authentication")]
-    async fn refresh(&self, body: Json<RefreshRequest>) -> RefreshApiResponse {
-        // Delegate to AuthService for refresh flow with audit logging
+    async fn refresh(&self, req: &Request, body: Json<RefreshRequest>) -> RefreshApiResponse {
+        let ctx = self.create_request_context(req, None).await;
+        
         match self.auth_service
-            .refresh(body.refresh_token.clone())
+            .refresh(&ctx, body.refresh_token.clone())
             .await
         {
             Ok(access_token) => {
@@ -624,7 +623,7 @@ mod tests {
         let refresh_request = Json(RefreshRequest {
             refresh_token: login_response.refresh_token.clone(),
         });
-        let result = api.refresh(refresh_request).await;
+        let result = api.refresh(&req, refresh_request).await;
         let response = unwrap_refresh_ok(result);
         
         // Verify response contains new JWT
@@ -641,11 +640,14 @@ mod tests {
         let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
         let api = AuthApi::new(auth_service, token_service);
         
+        // Create a mock request for testing
+        let req = poem::Request::builder().finish();
+        
         // Try to refresh with invalid token
         let refresh_request = Json(RefreshRequest {
             refresh_token: "invalid-token-12345".to_string(),
         });
-        let result = api.refresh(refresh_request).await;
+        let result = api.refresh(&req, refresh_request).await;
         assert_refresh_unauthorized(result);
     }
 
@@ -653,6 +655,9 @@ mod tests {
     async fn test_refresh_with_expired_token_returns_401() {
         let (_db, _audit_db, auth_service, token_service, credential_store) = setup_test_db().await;
         let api = AuthApi::new(auth_service.clone(), token_service.clone());
+        
+        // Create a mock request for testing
+        let req = poem::Request::builder().finish();
         
         // Add a user
         let user_id = credential_store
@@ -674,7 +679,7 @@ mod tests {
         let refresh_request = Json(RefreshRequest {
             refresh_token: expired_token,
         });
-        let result = api.refresh(refresh_request).await;
+        let result = api.refresh(&req, refresh_request).await;
         assert_refresh_unauthorized(result);
     }
 
@@ -700,7 +705,7 @@ mod tests {
         let refresh_request = Json(RefreshRequest {
             refresh_token: login_response.refresh_token.clone(),
         });
-        let refresh_response = unwrap_refresh_ok(api.refresh(refresh_request).await);
+        let refresh_response = unwrap_refresh_ok(api.refresh(&req, refresh_request).await);
         
         // Decode both JWTs and compare expiration times
         use jsonwebtoken::{decode, Validation, DecodingKey, Algorithm};
@@ -745,7 +750,7 @@ mod tests {
         let refresh_request = Json(RefreshRequest {
             refresh_token: login_response.refresh_token.clone(),
         });
-        let refresh_response = unwrap_refresh_ok(api.refresh(refresh_request).await);
+        let refresh_response = unwrap_refresh_ok(api.refresh(&req, refresh_request).await);
         
         // Decode both JWTs and verify user_id matches
         use jsonwebtoken::{decode, Validation, DecodingKey, Algorithm};
@@ -908,7 +913,7 @@ mod tests {
         let refresh_request = Json(RefreshRequest {
             refresh_token: login_response.refresh_token.clone(),
         });
-        let result = api.refresh(refresh_request).await;
+        let result = api.refresh(&req, refresh_request).await;
         
         // Should return 401 error
         assert_refresh_unauthorized(result);
@@ -966,7 +971,7 @@ mod tests {
         let refresh_request = Json(RefreshRequest {
             refresh_token: login2_response.refresh_token.clone(),
         });
-        let result = api.refresh(refresh_request).await;
+        let result = api.refresh(&req, refresh_request).await;
         // Should fail
         assert_refresh_unauthorized(result);
     }
@@ -1007,8 +1012,8 @@ mod tests {
             .find(|e| e.event_type == "login_success")
             .expect("login_success event not found");
         assert!(login_event.user_id.len() > 0);
-        // IP address is None in mock requests
-        assert!(login_event.ip_address.is_none());
+        // IP address is set to "unknown" when not available in request
+        assert_eq!(login_event.ip_address, Some("unknown".to_string()));
         
         // Verify jwt_issued event
         let jwt_event = audit_events.iter()
@@ -1054,8 +1059,8 @@ mod tests {
         let login_failure = &audit_events[0];
         assert_eq!(login_failure.event_type, "login_failure");
         assert_eq!(login_failure.user_id, "unknown"); // No user_id for failed login
-        // IP address is None in mock requests
-        assert!(login_failure.ip_address.is_none());
+        // IP address is set to "unknown" when not available in request
+        assert_eq!(login_failure.ip_address, Some("unknown".to_string()));
         
         // Verify failure reason is in data
         let data: serde_json::Value = serde_json::from_str(&login_failure.data)
@@ -1093,7 +1098,7 @@ mod tests {
         let refresh_request = Json(RefreshRequest {
             refresh_token: login_response.refresh_token.clone(),
         });
-        let result = api.refresh(refresh_request).await;
+        let result = api.refresh(&req, refresh_request).await;
         unwrap_refresh_ok(result);
         
         // Query audit database to verify jwt_issued event was created
@@ -1109,6 +1114,98 @@ mod tests {
         let jwt_event = events_after.last().expect("No events found");
         assert_eq!(jwt_event.event_type, "jwt_issued");
         assert!(jwt_event.jwt_id.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_refresh_with_invalid_token_creates_validation_failure_audit_trail() {
+        let (_db, audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service, token_service);
+        
+        // Create a mock request for testing
+        let req = poem::Request::builder().finish();
+        
+        // Try to refresh with invalid token
+        let refresh_request = Json(RefreshRequest {
+            refresh_token: "invalid-token-12345".to_string(),
+        });
+        let result = api.refresh(&req, refresh_request).await;
+        assert_refresh_unauthorized(result);
+        
+        // Query audit database to verify refresh_token_validation_failure event was created
+        use crate::types::db::audit_event::Entity as AuditEvent;
+        use sea_orm::EntityTrait;
+        
+        let audit_events = AuditEvent::find()
+            .all(&audit_db)
+            .await
+            .expect("Failed to query audit events");
+        
+        // Should have 1 event: refresh_token_validation_failure
+        assert_eq!(audit_events.len(), 1, "Expected 1 audit event");
+        
+        let validation_failure = &audit_events[0];
+        assert_eq!(validation_failure.event_type, "refresh_token_validation_failure");
+        assert_eq!(validation_failure.user_id, "unknown");
+        assert_eq!(validation_failure.ip_address, Some("unknown".to_string()));
+        
+        // Verify failure reason and token_hash are in data
+        let data: serde_json::Value = serde_json::from_str(&validation_failure.data)
+            .expect("Failed to parse audit data");
+        assert_eq!(data["failure_reason"], "not_found");
+        assert!(data["token_hash"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_refresh_with_expired_token_creates_validation_failure_audit_trail() {
+        let (_db, audit_db, auth_service, token_service, credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service.clone(), token_service.clone());
+        
+        // Create a mock request for testing
+        let req = poem::Request::builder().finish();
+        
+        // Add a user
+        let user_id = credential_store
+            .add_user("expireduser".to_string(), "password".to_string())
+            .await
+            .expect("Failed to add user");
+        
+        // Create an expired refresh token
+        let expired_token = token_service.generate_refresh_token();
+        let token_hash = token_service.hash_refresh_token(&expired_token);
+        let expires_at = chrono::Utc::now().timestamp() - 3600; // Expired 1 hour ago
+        
+        credential_store
+            .store_refresh_token(token_hash, user_id, expires_at)
+            .await
+            .expect("Failed to store expired token");
+        
+        // Try to refresh with expired token
+        let refresh_request = Json(RefreshRequest {
+            refresh_token: expired_token,
+        });
+        let result = api.refresh(&req, refresh_request).await;
+        assert_refresh_unauthorized(result);
+        
+        // Query audit database to verify refresh_token_validation_failure event was created
+        use crate::types::db::audit_event::Entity as AuditEvent;
+        use sea_orm::EntityTrait;
+        
+        let audit_events = AuditEvent::find()
+            .all(&audit_db)
+            .await
+            .expect("Failed to query audit events");
+        
+        // Should have 1 event: refresh_token_validation_failure
+        assert_eq!(audit_events.len(), 1, "Expected 1 audit event");
+        
+        let validation_failure = &audit_events[0];
+        assert_eq!(validation_failure.event_type, "refresh_token_validation_failure");
+        assert_eq!(validation_failure.user_id, "unknown");
+        
+        // Verify failure reason is expired
+        let data: serde_json::Value = serde_json::from_str(&validation_failure.data)
+            .expect("Failed to parse audit data");
+        assert_eq!(data["failure_reason"], "expired");
     }
 
     #[tokio::test]

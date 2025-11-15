@@ -11,6 +11,7 @@ pub enum EventType {
     JwtTampered,
     RefreshTokenIssued,
     RefreshTokenRevoked,
+    RefreshTokenValidationFailure,
     Custom(String),
 }
 
@@ -25,6 +26,7 @@ impl EventType {
             Self::JwtTampered => "jwt_tampered",
             Self::RefreshTokenIssued => "refresh_token_issued",
             Self::RefreshTokenRevoked => "refresh_token_revoked",
+            Self::RefreshTokenValidationFailure => "refresh_token_validation_failure",
             Self::Custom(s) => s.as_str(),
         }
     }
