@@ -52,6 +52,7 @@ sea-orm-cli migrate up # Run migrations
 - **ALWAYS** use `controlPwshProcess` with action "start" to run the server in the background for manual testing
 - **NEVER** use `executePwsh` with `cargo run` during manual tests (it blocks execution)
 - Environment variables are loaded from `.env` file automatically (no need to set manually)
+- **ALWAYS** modify `.env` file for environment variable changes during manual testing (never set via shell)
 - Ensure `.env` file exists with required variables before starting server
 - Use `getProcessOutput` to check server logs
 - Use `controlPwshProcess` with action "stop" to stop the server when done

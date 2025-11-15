@@ -1,8 +1,11 @@
 use poem_openapi::{payload::Json, OpenApi, Tags, SecurityScheme, auth::Bearer};
 use poem::Request;
 use crate::services::{AuthService, TokenService};
-use crate::types::dto::auth::{LoginRequest, TokenResponse, WhoAmIResponse, RefreshRequest, RefreshResponse, LogoutRequest, LogoutResponse};
-use crate::errors::auth::AuthError;
+use crate::types::dto::auth::{
+    LoginRequest, TokenResponse, WhoAmIResponse, RefreshRequest, RefreshResponse, 
+    LogoutRequest, LogoutResponse, LoginApiResponse, WhoAmIApiResponse, 
+    RefreshApiResponse, LogoutApiResponse, ErrorResponse
+};
 use std::sync::Arc;
 
 /// Authentication API endpoints
@@ -44,6 +47,52 @@ impl AuthApi {
             .as_socket_addr()
             .map(|addr| addr.ip().to_string())
     }
+    
+    /// Create RequestContext from request and optional authentication
+    /// 
+    /// This helper function should be called at the beginning of every endpoint.
+    /// It creates a RequestContext with IP address and request_id, and if authentication
+    /// is provided, validates the JWT and populates the claims.
+    /// 
+    /// # Arguments
+    /// * `req` - The HTTP request
+    /// * `auth` - Optional BearerAuth token (None for unauthenticated endpoints)
+    /// 
+    /// # Returns
+    /// RequestContext with authenticated=true if JWT is valid, false otherwise
+    async fn create_request_context(
+        &self,
+        req: &Request,
+        auth: Option<BearerAuth>,
+    ) -> crate::types::internal::context::RequestContext {
+        // Extract IP address
+        let ip_address = Self::extract_ip_address(req);
+        
+        // Create base context with IP and request_id
+        let mut ctx = crate::types::internal::context::RequestContext::new()
+            .with_ip_address(ip_address.unwrap_or_else(|| "unknown".to_string()));
+        
+        // If auth is provided, validate JWT and populate claims
+        if let Some(bearer) = auth {
+            // Validate JWT (handles all audit logging automatically)
+            match self.auth_service.validate_jwt(&bearer.0.token).await {
+                Ok(claims) => {
+                    // JWT is valid, set authenticated and claims
+                    ctx = ctx.with_auth(claims);
+                }
+                Err(_) => {
+                    // JWT validation failed (expired, invalid, tampered)
+                    // validate_jwt already logged the failure
+                    // Context remains with authenticated=false, claims=None
+                }
+            }
+        }
+        
+        // Temporary trace log to verify context creation (will be removed later)
+        tracing::trace!("Request context created: {:?}", ctx);
+        
+        ctx
+    }
 }
 
 /// JWT Bearer token authentication
@@ -67,32 +116,48 @@ enum AuthTags {
 impl AuthApi {
     /// Login with username and password to receive authentication tokens
     #[oai(path = "/login", method = "post", tag = "AuthTags::Authentication")]
-    async fn login(&self, req: &Request, body: Json<LoginRequest>) -> Result<Json<TokenResponse>, AuthError> {
+    async fn login(&self, req: &Request, body: Json<LoginRequest>) -> LoginApiResponse {
         // Extract IP address from request
         let ip_address = Self::extract_ip_address(req);
         
         // Delegate to AuthService for complete login flow with audit logging
-        let (access_token, refresh_token) = self.auth_service
+        match self.auth_service
             .login(body.username.clone(), body.password.clone(), ip_address)
-            .await?;
-        
-        // Return tokens
-        Ok(Json(TokenResponse {
-            access_token,
-            refresh_token,
-            token_type: "Bearer".to_string(),
-            expires_in: 900, // 15 minutes in seconds
-        }))
+            .await
+        {
+            Ok((access_token, refresh_token)) => {
+                LoginApiResponse::Ok(Json(TokenResponse {
+                    access_token,
+                    refresh_token,
+                    token_type: "Bearer".to_string(),
+                    expires_in: 900, // 15 minutes in seconds
+                }))
+            }
+            Err(e) => {
+                LoginApiResponse::Unauthorized(Json(ErrorResponse {
+                    error: e.to_string(),
+                }))
+            }
+        }
     }
     
     /// Verify JWT and return user information
     #[oai(path = "/whoami", method = "get", tag = "AuthTags::Authentication")]
-    async fn whoami(&self, auth: BearerAuth) -> Result<Json<WhoAmIResponse>, AuthError> {
-        // Validate JWT with audit logging
-        let claims = self.auth_service.validate_jwt_with_audit(&auth.0.token).await?;
+    async fn whoami(&self, req: &Request, auth: BearerAuth) -> WhoAmIApiResponse {
+        // Create request context with authentication
+        let ctx = self.create_request_context(req, Some(auth)).await;
         
-        // Return user info
-        Ok(Json(WhoAmIResponse {
+        // Check if authenticated
+        if !ctx.authenticated {
+            return WhoAmIApiResponse::Unauthorized(Json(ErrorResponse {
+                error: "Unauthenticated".to_string(),
+            }));
+        }
+        
+        // Get claims from context (safe because authenticated=true)
+        let claims = ctx.claims.unwrap();
+        
+        WhoAmIApiResponse::Ok(Json(WhoAmIResponse {
             user_id: claims.sub,
             expires_at: claims.exp,
         }))
@@ -100,33 +165,51 @@ impl AuthApi {
     
     /// Refresh access token using a refresh token
     #[oai(path = "/refresh", method = "post", tag = "AuthTags::Authentication")]
-    async fn refresh(&self, body: Json<RefreshRequest>) -> Result<Json<RefreshResponse>, AuthError> {
+    async fn refresh(&self, body: Json<RefreshRequest>) -> RefreshApiResponse {
         // Delegate to AuthService for refresh flow with audit logging
-        let access_token = self.auth_service
+        match self.auth_service
             .refresh(body.refresh_token.clone())
-            .await?;
-        
-        // Return new JWT (keep same refresh token)
-        Ok(Json(RefreshResponse {
-            access_token,
-            token_type: "Bearer".to_string(),
-            expires_in: 900, // 15 minutes in seconds
-        }))
+            .await
+        {
+            Ok(access_token) => {
+                RefreshApiResponse::Ok(Json(RefreshResponse {
+                    access_token,
+                    token_type: "Bearer".to_string(),
+                    expires_in: 900, // 15 minutes in seconds
+                }))
+            }
+            Err(e) => {
+                RefreshApiResponse::Unauthorized(Json(ErrorResponse {
+                    error: e.to_string(),
+                }))
+            }
+        }
     }
     
     /// Logout and revoke refresh token
+    /// 
+    /// Always returns 200 OK to avoid information leakage about token validity.
+    /// Authentication is optional - if provided, enables better audit logging.
+    /// 
+    /// # Arguments
+    /// * `req` - HTTP request (used to extract optional Authorization header and IP address)
+    /// * `body` - Logout request containing the refresh token to revoke
+    /// 
+    /// # Returns
+    /// Always returns 200 OK with success message, regardless of outcome
     #[oai(path = "/logout", method = "post", tag = "AuthTags::Authentication")]
-    async fn logout(&self, auth: BearerAuth, body: Json<LogoutRequest>) -> Result<Json<LogoutResponse>, AuthError> {
-        // Validate JWT to get authenticated user
-        let claims = self.token_service.validate_jwt(&auth.0.token)?;
+    async fn logout(&self, req: &Request, body: Json<LogoutRequest>) -> LogoutApiResponse {
+        // Manual header extraction because poem-openapi doesn't support Option<BearerAuth>
+        let auth = req.header("Authorization")
+            .and_then(|h| h.strip_prefix("Bearer "))
+            .map(|token| BearerAuth(Bearer { token: token.to_string() }));
         
-        // Delegate to AuthService for logout flow with audit logging
-        self.auth_service
-            .logout(body.refresh_token.clone(), claims.sub, claims.jti)
-            .await?;
+        let ctx = self.create_request_context(req, auth).await;
         
-        // Return success message
-        Ok(Json(LogoutResponse {
+        // Always return 200 to avoid leaking token validity information
+        let _ = self.auth_service.logout(&ctx, body.refresh_token.clone()).await;
+        
+        LogoutApiResponse::Ok(Json(LogoutResponse {
             message: "Logged out successfully".to_string(),
         }))
     }
@@ -191,6 +274,56 @@ mod tests {
         
         (db, audit_db, auth_service, token_service, credential_store)
     }
+    
+    // Helper functions to extract values from ApiResponse enums
+    fn unwrap_login_ok(response: LoginApiResponse) -> TokenResponse {
+        match response {
+            LoginApiResponse::Ok(json) => json.0,
+            LoginApiResponse::Unauthorized(_) => panic!("Expected Ok response, got Unauthorized"),
+        }
+    }
+    
+    fn unwrap_whoami_ok(response: WhoAmIApiResponse) -> WhoAmIResponse {
+        match response {
+            WhoAmIApiResponse::Ok(json) => json.0,
+            WhoAmIApiResponse::Unauthorized(_) => panic!("Expected Ok response, got Unauthorized"),
+        }
+    }
+    
+    fn unwrap_refresh_ok(response: RefreshApiResponse) -> RefreshResponse {
+        match response {
+            RefreshApiResponse::Ok(json) => json.0,
+            RefreshApiResponse::Unauthorized(_) => panic!("Expected Ok response, got Unauthorized"),
+        }
+    }
+    
+    fn unwrap_logout_ok(response: LogoutApiResponse) -> LogoutResponse {
+        match response {
+            LogoutApiResponse::Ok(json) => json.0,
+            LogoutApiResponse::Unauthorized(_) => panic!("Expected Ok response, got Unauthorized"),
+        }
+    }
+    
+    fn assert_login_unauthorized(response: LoginApiResponse) {
+        match response {
+            LoginApiResponse::Unauthorized(_) => {},
+            LoginApiResponse::Ok(_) => panic!("Expected Unauthorized response, got Ok"),
+        }
+    }
+    
+    fn assert_whoami_unauthorized(response: WhoAmIApiResponse) {
+        match response {
+            WhoAmIApiResponse::Unauthorized(_) => {},
+            WhoAmIApiResponse::Ok(_) => panic!("Expected Unauthorized response, got Ok"),
+        }
+    }
+    
+    fn assert_refresh_unauthorized(response: RefreshApiResponse) {
+        match response {
+            RefreshApiResponse::Unauthorized(_) => {},
+            RefreshApiResponse::Ok(_) => panic!("Expected Unauthorized response, got Ok"),
+        }
+    }
 
     #[tokio::test]
     async fn test_login_with_valid_credentials() {
@@ -207,16 +340,19 @@ mod tests {
 
         let result = api.login(&req, request).await;
         
-        assert!(result.is_ok());
-        let response = result.unwrap();
-        // JWT should no longer be placeholder
-        assert_ne!(response.access_token, "placeholder-jwt");
-        assert!(!response.access_token.is_empty());
-        // Refresh token should no longer be placeholder
-        assert_ne!(response.refresh_token, "placeholder-rt");
-        assert!(!response.refresh_token.is_empty());
-        assert_eq!(response.token_type, "Bearer");
-        assert_eq!(response.expires_in, 900);
+        match result {
+            LoginApiResponse::Ok(response) => {
+                // JWT should no longer be placeholder
+                assert_ne!(response.access_token, "placeholder-jwt");
+                assert!(!response.access_token.is_empty());
+                // Refresh token should no longer be placeholder
+                assert_ne!(response.refresh_token, "placeholder-rt");
+                assert!(!response.refresh_token.is_empty());
+                assert_eq!(response.token_type, "Bearer");
+                assert_eq!(response.expires_in, 900);
+            }
+            LoginApiResponse::Unauthorized(_) => panic!("Expected successful login"),
+        }
     }
 
     #[tokio::test]
@@ -234,12 +370,11 @@ mod tests {
 
         let result = api.login(&req, request).await;
         
-        assert!(result.is_err());
         match result {
-            Err(AuthError::InvalidCredentials(_)) => {
+            LoginApiResponse::Unauthorized(_) => {
                 // Expected error type
             }
-            _ => panic!("Expected InvalidCredentials error"),
+            LoginApiResponse::Ok(_) => panic!("Expected InvalidCredentials error"),
         }
     }
 
@@ -257,9 +392,7 @@ mod tests {
         });
 
         let result = api.login(&req, request).await;
-        
-        assert!(result.is_ok());
-        let response = result.unwrap();
+        let response = unwrap_login_ok(result);
         
         // Verify all required fields are present and non-empty
         assert!(!response.access_token.is_empty());
@@ -282,14 +415,7 @@ mod tests {
         });
 
         let result = api.login(&req, request).await;
-        
-        assert!(result.is_err());
-        match result {
-            Err(AuthError::InvalidCredentials(_)) => {
-                // Expected error type
-            }
-            _ => panic!("Expected InvalidCredentials error"),
-        }
+        assert_login_unauthorized(result);
     }
     
     #[tokio::test]
@@ -306,9 +432,7 @@ mod tests {
         });
 
         let result = api.login(&req, request).await;
-        
-        assert!(result.is_ok());
-        let response = result.unwrap();
+        let response = unwrap_login_ok(result);
         
         // Decode JWT and verify it contains expected claims
         use jsonwebtoken::{decode, Validation, DecodingKey, Algorithm};
@@ -345,16 +469,14 @@ mod tests {
             username: "testuser".to_string(),
             password: "testpass".to_string(),
         });
-        let login_response = api.login(&req, login_request).await.unwrap();
+        let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
         // Create BearerAuth with the JWT
         let auth = BearerAuth(Bearer { token: login_response.access_token.clone() });
         
         // Call whoami
-        let result = api.whoami(auth).await;
-        
-        assert!(result.is_ok());
-        let response = result.unwrap();
+        let result = api.whoami(&req, auth).await;
+        let response = unwrap_whoami_ok(result);
         assert!(!response.user_id.is_empty());
         assert!(response.expires_at > 0);
     }
@@ -367,25 +489,24 @@ mod tests {
         let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
         let api = AuthApi::new(auth_service, token_service);
         
+        // Create a mock request for testing
+        let req = poem::Request::builder().finish();
+        
         // Create BearerAuth with invalid JWT
         let auth = BearerAuth(Bearer { token: "invalid-jwt-token".to_string() });
         
         // Call whoami with invalid JWT
-        let result = api.whoami(auth).await;
-        
-        assert!(result.is_err());
-        match result {
-            Err(AuthError::InvalidToken(_)) => {
-                // Expected error type
-            }
-            _ => panic!("Expected InvalidToken error"),
-        }
+        let result = api.whoami(&req, auth).await;
+        assert_whoami_unauthorized(result);
     }
 
     #[tokio::test]
     async fn test_whoami_with_expired_jwt_returns_401() {
         let (_db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
         let api = AuthApi::new(auth_service, token_service);
+        
+        // Create a mock request for testing
+        let req = poem::Request::builder().finish();
         
         // Create an expired JWT manually
         use jsonwebtoken::{encode, Header, EncodingKey, Algorithm};
@@ -410,15 +531,8 @@ mod tests {
         let auth = BearerAuth(Bearer { token: expired_token });
         
         // Call whoami with expired JWT
-        let result = api.whoami(auth).await;
-        
-        assert!(result.is_err());
-        match result {
-            Err(AuthError::ExpiredToken(_)) => {
-                // Expected error type
-            }
-            _ => panic!("Expected ExpiredToken error"),
-        }
+        let result = api.whoami(&req, auth).await;
+        assert_whoami_unauthorized(result);
     }
 
     // Test removed: poem-openapi automatically handles malformed Authorization header
@@ -438,9 +552,7 @@ mod tests {
         });
 
         let result = api.login(&req, request).await;
-        
-        assert!(result.is_ok());
-        let response = result.unwrap();
+        let response = unwrap_login_ok(result);
         
         // Verify refresh token is not placeholder
         assert_ne!(response.refresh_token, "placeholder-rt");
@@ -463,9 +575,7 @@ mod tests {
         });
 
         let result = api.login(&req, request).await;
-        
-        assert!(result.is_ok());
-        let response = result.unwrap();
+        let response = unwrap_login_ok(result);
         
         // Hash the returned refresh token
         let token_hash = token_service.hash_refresh_token(&response.refresh_token);
@@ -505,7 +615,7 @@ mod tests {
             username: "testuser".to_string(),
             password: "testpass".to_string(),
         });
-        let login_response = api.login(&req, login_request).await.unwrap();
+        let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
         // Wait a moment to ensure timestamps differ
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -515,9 +625,7 @@ mod tests {
             refresh_token: login_response.refresh_token.clone(),
         });
         let result = api.refresh(refresh_request).await;
-        
-        assert!(result.is_ok());
-        let response = result.unwrap();
+        let response = unwrap_refresh_ok(result);
         
         // Verify response contains new JWT
         assert!(!response.access_token.is_empty());
@@ -538,14 +646,7 @@ mod tests {
             refresh_token: "invalid-token-12345".to_string(),
         });
         let result = api.refresh(refresh_request).await;
-        
-        assert!(result.is_err());
-        match result {
-            Err(AuthError::InvalidRefreshToken(_)) => {
-                // Expected error type
-            }
-            _ => panic!("Expected InvalidRefreshToken error"),
-        }
+        assert_refresh_unauthorized(result);
     }
 
     #[tokio::test]
@@ -574,14 +675,7 @@ mod tests {
             refresh_token: expired_token,
         });
         let result = api.refresh(refresh_request).await;
-        
-        assert!(result.is_err());
-        match result {
-            Err(AuthError::ExpiredRefreshToken(_)) => {
-                // Expected error type
-            }
-            _ => panic!("Expected ExpiredRefreshToken error"),
-        }
+        assert_refresh_unauthorized(result);
     }
 
     #[tokio::test]
@@ -597,7 +691,7 @@ mod tests {
             username: "testuser".to_string(),
             password: "testpass".to_string(),
         });
-        let login_response = api.login(&req, login_request).await.unwrap();
+        let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
         // Wait a moment to ensure timestamps differ
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -606,7 +700,7 @@ mod tests {
         let refresh_request = Json(RefreshRequest {
             refresh_token: login_response.refresh_token.clone(),
         });
-        let refresh_response = api.refresh(refresh_request).await.unwrap();
+        let refresh_response = unwrap_refresh_ok(api.refresh(refresh_request).await);
         
         // Decode both JWTs and compare expiration times
         use jsonwebtoken::{decode, Validation, DecodingKey, Algorithm};
@@ -645,13 +739,13 @@ mod tests {
             username: "testuser".to_string(),
             password: "testpass".to_string(),
         });
-        let login_response = api.login(&req, login_request).await.unwrap();
+        let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
         // Use refresh token to get new JWT
         let refresh_request = Json(RefreshRequest {
             refresh_token: login_response.refresh_token.clone(),
         });
-        let refresh_response = api.refresh(refresh_request).await.unwrap();
+        let refresh_response = unwrap_refresh_ok(api.refresh(refresh_request).await);
         
         // Decode both JWTs and verify user_id matches
         use jsonwebtoken::{decode, Validation, DecodingKey, Algorithm};
@@ -690,25 +784,25 @@ mod tests {
             username: "testuser".to_string(),
             password: "testpass".to_string(),
         });
-        let login_response = api.login(&req, login_request).await.unwrap();
+        let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
-        // Create BearerAuth with the JWT
-        let auth = BearerAuth(Bearer { token: login_response.access_token.clone() });
+        // Create request with Authorization header
+        let req_with_auth = poem::Request::builder()
+            .header("Authorization", format!("Bearer {}", login_response.access_token))
+            .finish();
         
         // Logout with valid refresh token
         let logout_request = Json(LogoutRequest {
             refresh_token: login_response.refresh_token.clone(),
         });
-        let result = api.logout(auth, logout_request).await;
-        
-        assert!(result.is_ok());
-        let response = result.unwrap();
+        let result = api.logout(&req_with_auth, logout_request).await;
+        let response = unwrap_logout_ok(result);
         assert_eq!(response.message, "Logged out successfully");
     }
 
     #[tokio::test]
     async fn test_logout_removes_token_from_database() {
-        let (db, audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
+        let (db, _audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
         let api = AuthApi::new(auth_service, token_service.clone());
         
         // Create a mock request for testing
@@ -719,7 +813,7 @@ mod tests {
             username: "testuser".to_string(),
             password: "testpass".to_string(),
         });
-        let login_response = api.login(&req, login_request).await.unwrap();
+        let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
         // Hash the refresh token to check database
         let token_hash = token_service.hash_refresh_token(&login_response.refresh_token);
@@ -733,14 +827,16 @@ mod tests {
             .expect("Failed to query token");
         assert!(token_before.is_some());
         
-        // Create BearerAuth with the JWT
-        let auth = BearerAuth(Bearer { token: login_response.access_token.clone() });
+        // Create request with Authorization header
+        let req_with_auth = poem::Request::builder()
+            .header("Authorization", format!("Bearer {}", login_response.access_token))
+            .finish();
         
         // Logout
         let logout_request = Json(LogoutRequest {
             refresh_token: login_response.refresh_token.clone(),
         });
-        api.logout(auth, logout_request).await.unwrap();
+        unwrap_logout_ok(api.logout(&req_with_auth, logout_request).await);
         
         // Verify token is removed from database
         let token_after = RefreshToken::find()
@@ -764,20 +860,21 @@ mod tests {
             username: "testuser".to_string(),
             password: "testpass".to_string(),
         });
-        let login_response = api.login(&req, login_request).await.unwrap();
+        let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
-        // Create BearerAuth with the JWT
-        let auth = BearerAuth(Bearer { token: login_response.access_token.clone() });
+        // Create request with Authorization header
+        let req_with_auth = poem::Request::builder()
+            .header("Authorization", format!("Bearer {}", login_response.access_token))
+            .finish();
         
         // Logout with invalid refresh token
         let logout_request = Json(LogoutRequest {
             refresh_token: "invalid-token-12345".to_string(),
         });
-        let result = api.logout(auth, logout_request).await;
+        let result = api.logout(&req_with_auth, logout_request).await;
         
         // Should still return success
-        assert!(result.is_ok());
-        let response = result.unwrap();
+        let response = unwrap_logout_ok(result);
         assert_eq!(response.message, "Logged out successfully");
     }
 
@@ -794,16 +891,18 @@ mod tests {
             username: "testuser".to_string(),
             password: "testpass".to_string(),
         });
-        let login_response = api.login(&req, login_request).await.unwrap();
+        let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
-        // Create BearerAuth with the JWT
-        let auth = BearerAuth(Bearer { token: login_response.access_token.clone() });
+        // Create request with Authorization header
+        let req_with_auth = poem::Request::builder()
+            .header("Authorization", format!("Bearer {}", login_response.access_token))
+            .finish();
         
         // Logout
         let logout_request = Json(LogoutRequest {
             refresh_token: login_response.refresh_token.clone(),
         });
-        api.logout(auth, logout_request).await.unwrap();
+        unwrap_logout_ok(api.logout(&req_with_auth, logout_request).await);
         
         // Try to refresh with revoked token
         let refresh_request = Json(RefreshRequest {
@@ -812,17 +911,11 @@ mod tests {
         let result = api.refresh(refresh_request).await;
         
         // Should return 401 error
-        assert!(result.is_err());
-        match result {
-            Err(AuthError::InvalidRefreshToken(_)) => {
-                // Expected error type
-            }
-            _ => panic!("Expected InvalidRefreshToken error"),
-        }
+        assert_refresh_unauthorized(result);
     }
 
     #[tokio::test]
-    async fn test_logout_cannot_revoke_another_users_token() {
+    async fn test_logout_revokes_any_refresh_token() {
         let (db, _audit_db, auth_service, token_service, credential_store) = setup_test_db().await;
         let api = AuthApi::new(auth_service.clone(), token_service.clone());
         
@@ -840,23 +933,26 @@ mod tests {
             username: "testuser".to_string(),
             password: "testpass".to_string(),
         });
-        let login1_response = api.login(&req, login1_request).await.unwrap();
+        let login1_response = unwrap_login_ok(api.login(&req, login1_request).await);
         
         // Login as user2
         let login2_request = Json(LoginRequest {
             username: "user2".to_string(),
             password: "password2".to_string(),
         });
-        let login2_response = api.login(&req, login2_request).await.unwrap();
+        let login2_response = unwrap_login_ok(api.login(&req, login2_request).await);
         
-        // Try to logout user2's token using testuser's JWT
-        let auth = BearerAuth(Bearer { token: login1_response.access_token.clone() });
+        // Logout user2's token using testuser's JWT (or any JWT)
+        // This works because RT is the authority, not the JWT
+        let req_with_auth = poem::Request::builder()
+            .header("Authorization", format!("Bearer {}", login1_response.access_token))
+            .finish();
         let logout_request = Json(LogoutRequest {
             refresh_token: login2_response.refresh_token.clone(),
         });
-        api.logout(auth, logout_request).await.unwrap();
+        unwrap_logout_ok(api.logout(&req_with_auth, logout_request).await);
         
-        // Verify user2's token still exists (wasn't deleted)
+        // Verify user2's token is deleted (RT is the authority)
         let token_hash = token_service.hash_refresh_token(&login2_response.refresh_token);
         use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
         let token_after = RefreshToken::find()
@@ -864,14 +960,15 @@ mod tests {
             .one(&db)
             .await
             .expect("Failed to query token");
-        assert!(token_after.is_some());
+        assert!(token_after.is_none());
         
-        // Verify user2 can still refresh
+        // Verify user2 cannot refresh anymore
         let refresh_request = Json(RefreshRequest {
             refresh_token: login2_response.refresh_token.clone(),
         });
         let result = api.refresh(refresh_request).await;
-        assert!(result.is_ok());
+        // Should fail
+        assert_refresh_unauthorized(result);
     }
 
     // ========== Audit Trail Tests ==========
@@ -890,10 +987,10 @@ mod tests {
             password: "testpass".to_string(),
         });
         let result = api.login(&req, request).await;
-        assert!(result.is_ok());
+        unwrap_login_ok(result);
         
         // Query audit database to verify events were created
-        use crate::types::db::audit_event::{Entity as AuditEvent, Column};
+        use crate::types::db::audit_event::Entity as AuditEvent;
         use sea_orm::EntityTrait;
         
         // Connect to audit database (same connection pool in tests)
@@ -940,10 +1037,10 @@ mod tests {
             password: "wrongpassword".to_string(),
         });
         let result = api.login(&req, request).await;
-        assert!(result.is_err());
+        assert_login_unauthorized(result);
         
         // Query audit database to verify login_failure event was created
-        use crate::types::db::audit_event::{Entity as AuditEvent, Column};
+        use crate::types::db::audit_event::Entity as AuditEvent;
         use sea_orm::EntityTrait;
         
         let audit_events = AuditEvent::find()
@@ -979,12 +1076,11 @@ mod tests {
             username: "testuser".to_string(),
             password: "testpass".to_string(),
         });
-        let login_response = api.login(&req, login_request).await.unwrap();
+        let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
         // Clear audit events from login
-        use crate::types::db::audit_event::{Entity as AuditEvent};
-        use sea_orm::{EntityTrait, QueryFilter, ColumnTrait};
-        use crate::types::db::audit_event::Column;
+        use crate::types::db::audit_event::Entity as AuditEvent;
+        use sea_orm::EntityTrait;
         
         // Count events before refresh
         let events_before = AuditEvent::find()
@@ -998,7 +1094,7 @@ mod tests {
             refresh_token: login_response.refresh_token.clone(),
         });
         let result = api.refresh(refresh_request).await;
-        assert!(result.is_ok());
+        unwrap_refresh_ok(result);
         
         // Query audit database to verify jwt_issued event was created
         let events_after = AuditEvent::find()
@@ -1028,7 +1124,7 @@ mod tests {
             username: "testuser".to_string(),
             password: "testpass".to_string(),
         });
-        let login_response = api.login(&req, login_request).await.unwrap();
+        let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
         // Count events before logout
         use crate::types::db::audit_event::{Entity as AuditEvent};
@@ -1040,15 +1136,17 @@ mod tests {
             .expect("Failed to query audit events")
             .len();
         
-        // Create BearerAuth with the JWT
-        let auth = BearerAuth(Bearer { token: login_response.access_token.clone() });
+        // Create request with Authorization header
+        let req_with_auth = poem::Request::builder()
+            .header("Authorization", format!("Bearer {}", login_response.access_token))
+            .finish();
         
         // Logout
         let logout_request = Json(LogoutRequest {
             refresh_token: login_response.refresh_token.clone(),
         });
-        let result = api.logout(auth, logout_request).await;
-        assert!(result.is_ok());
+        let result = api.logout(&req_with_auth, logout_request).await;
+        unwrap_logout_ok(result);
         
         // Query audit database to verify refresh_token_revoked event was created
         let events_after = AuditEvent::find()
@@ -1069,6 +1167,9 @@ mod tests {
     async fn test_whoami_with_expired_jwt_creates_validation_failure_audit_trail() {
         let (_db, audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
         let api = AuthApi::new(auth_service, token_service);
+        
+        // Create a mock request for testing
+        let req = poem::Request::builder().finish();
         
         // Create an expired JWT manually
         use jsonwebtoken::{encode, Header, EncodingKey, Algorithm};
@@ -1093,11 +1194,11 @@ mod tests {
         let auth = BearerAuth(Bearer { token: expired_token });
         
         // Call whoami with expired JWT
-        let result = api.whoami(auth).await;
-        assert!(result.is_err());
+        let result = api.whoami(&req, auth).await;
+        assert_whoami_unauthorized(result);
         
         // Query audit database to verify jwt_validation_failure event was created
-        use crate::types::db::audit_event::{Entity as AuditEvent};
+        use crate::types::db::audit_event::Entity as AuditEvent;
         use sea_orm::EntityTrait;
         
         let audit_events = AuditEvent::find()
@@ -1124,6 +1225,9 @@ mod tests {
         let (_db, audit_db, auth_service, token_service, _credential_store) = setup_test_db().await;
         let api = AuthApi::new(auth_service, token_service);
         
+        // Create a mock request for testing
+        let req = poem::Request::builder().finish();
+        
         // Create a JWT with wrong signature (tampered)
         use jsonwebtoken::{encode, Header, EncodingKey, Algorithm};
         use chrono::Utc;
@@ -1148,11 +1252,11 @@ mod tests {
         let auth = BearerAuth(Bearer { token: tampered_token.clone() });
         
         // Call whoami with tampered JWT
-        let result = api.whoami(auth).await;
-        assert!(result.is_err());
+        let result = api.whoami(&req, auth).await;
+        assert_whoami_unauthorized(result);
         
         // Query audit database to verify jwt_tampered event was created
-        use crate::types::db::audit_event::{Entity as AuditEvent};
+        use crate::types::db::audit_event::Entity as AuditEvent;
         use sea_orm::EntityTrait;
         
         let audit_events = AuditEvent::find()

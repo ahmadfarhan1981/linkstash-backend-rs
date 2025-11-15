@@ -196,25 +196,34 @@ impl CredentialStore {
     
     /// Revoke a refresh token by deleting it from the database
     /// 
+    /// Does not verify user ownership - the refresh token itself is the authority.
+    /// 
     /// # Arguments
-    /// * `token_hash` - The SHA-256 hash of the refresh token to revoke
-    /// * `user_id` - The user_id that must own the token (for authorization)
+    /// * `token_hash` - SHA-256 hash of the refresh token to revoke
     /// 
     /// # Returns
-    /// * `Ok(())` - Token revoked successfully (or didn't exist, or didn't belong to user)
-    /// * `Err(AuthError)` - Database error
-    pub async fn revoke_refresh_token(&self, token_hash: &str, user_id: &str) -> Result<(), AuthError> {
+    /// * `Ok(user_id)` - Token revoked successfully, returns the user_id for audit logging
+    /// * `Err(AuthError::InvalidRefreshToken)` - Token not found in database
+    /// * `Err(AuthError::InternalError)` - Database error
+    pub async fn revoke_refresh_token(&self, token_hash: &str) -> Result<String, AuthError> {
         use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
         
-        // Delete token by hash AND user_id (succeeds even if token doesn't exist or doesn't belong to user)
+        let token = RefreshToken::find()
+            .filter(Column::TokenHash.eq(token_hash))
+            .one(&self.db)
+            .await
+            .map_err(|e| AuthError::internal_error(format!("Failed to query refresh token: {}", e)))?
+            .ok_or_else(|| AuthError::invalid_refresh_token())?;
+        
+        let user_id = token.user_id.clone();
+        
         RefreshToken::delete_many()
             .filter(Column::TokenHash.eq(token_hash))
-            .filter(Column::UserId.eq(user_id))
             .exec(&self.db)
             .await
             .map_err(|e| AuthError::internal_error(format!("Failed to revoke refresh token: {}", e)))?;
         
-        Ok(())
+        Ok(user_id)
     }
 }
 
@@ -620,9 +629,10 @@ mod tests {
             .expect("Failed to query token");
         assert!(token_before.is_some());
         
-        // Revoke the token with correct user_id
-        let result = credential_store.revoke_refresh_token(token_hash, &user_id).await;
+        // Revoke the token
+        let result = credential_store.revoke_refresh_token(token_hash).await;
         assert!(result.is_ok());
+        assert_eq!(result.unwrap(), user_id);
         
         // Verify token is removed
         let token_after = RefreshToken::find()
@@ -638,16 +648,16 @@ mod tests {
         let (_db, credential_store) = setup_test_db().await;
         
         // Add a user
-        let user_id = credential_store
+        let _user_id = credential_store
             .add_user("testuser".to_string(), "password".to_string())
             .await
             .expect("Failed to add user");
         
         // Try to revoke a token that doesn't exist
-        let result = credential_store.revoke_refresh_token("nonexistent_token", &user_id).await;
+        let result = credential_store.revoke_refresh_token("nonexistent_token").await;
         
-        // Should succeed without error
-        assert!(result.is_ok());
+        // Should fail with invalid token error
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -660,7 +670,7 @@ mod tests {
             .await
             .expect("Failed to add user1");
         
-        let user2_id = credential_store
+        let _user2_id = credential_store
             .add_user("user2".to_string(), "password".to_string())
             .await
             .expect("Failed to add user2");
@@ -674,30 +684,19 @@ mod tests {
             .await
             .expect("Failed to store token");
         
-        // Try to revoke user1's token as user2 (should not delete)
-        let result = credential_store.revoke_refresh_token(token_hash, &user2_id).await;
+        // Revoke the token (no user verification - RT is the authority)
+        let result = credential_store.revoke_refresh_token(token_hash).await;
         assert!(result.is_ok());
+        assert_eq!(result.unwrap(), user1_id);
         
-        // Verify token still exists (wasn't deleted because user_id didn't match)
+        // Verify token is removed
         use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
         let token_after = RefreshToken::find()
             .filter(Column::TokenHash.eq(token_hash))
             .one(&db)
             .await
             .expect("Failed to query token");
-        assert!(token_after.is_some());
-        
-        // Now revoke with correct user_id
-        let result = credential_store.revoke_refresh_token(token_hash, &user1_id).await;
-        assert!(result.is_ok());
-        
-        // Verify token is now removed
-        let token_final = RefreshToken::find()
-            .filter(Column::TokenHash.eq(token_hash))
-            .one(&db)
-            .await
-            .expect("Failed to query token");
-        assert!(token_final.is_none());
+        assert!(token_after.is_none());
     }
 
     // Tests for password pepper functionality (subtask 3.1)

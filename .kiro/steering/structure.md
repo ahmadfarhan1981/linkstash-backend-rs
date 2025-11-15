@@ -90,6 +90,85 @@ src/
 - Always use SeaORM's async API
 - Stores encapsulate all database queries (no SeaORM usage outside stores)
 
+## Code Comments
+
+### Inline Comments
+
+- **DO NOT** comment what the code is doing (the code should be self-explanatory)
+- **DO** comment WHY something is done a certain way (reasoning, trade-offs, non-obvious decisions)
+- **DO** comment unusual patterns or workarounds
+- **DO NOT** use inline comments for obvious operations
+
+**Examples:**
+
+```rust
+// ❌ BAD - Commenting what the code does
+// Extract IP address from request
+let ip = extract_ip_address(req);
+
+// ✅ GOOD - No comment needed, code is clear
+let ip = extract_ip_address(req);
+
+// ✅ GOOD - Explaining WHY
+// Always return 200 to avoid leaking token validity information
+let _ = self.auth_service.logout(&ctx, refresh_token).await;
+return Ok("Logged out successfully");
+
+// ✅ GOOD - Explaining unusual pattern
+// Manual header extraction because poem-openapi doesn't support Option<BearerAuth>
+let auth = req.header("Authorization")
+    .and_then(|h| h.strip_prefix("Bearer "))
+    .map(|token| BearerAuth(Bearer { token: token.to_string() }));
+```
+
+### Doc Comments (Public APIs)
+
+Use structured doc comments for public functions with `# Arguments`, `# Returns`, and `# Errors` sections:
+
+```rust
+/// Brief one-line description of what the function does
+/// 
+/// More detailed explanation if needed, including important behavior,
+/// edge cases, or non-obvious aspects.
+/// 
+/// # Arguments
+/// * `param_name` - Description (only if not obvious from name/type)
+/// 
+/// # Returns
+/// * `Ok(value)` - Success case description
+/// * `Err(error)` - Error case description
+/// 
+/// # Errors
+/// Returns `ErrorType` when specific condition occurs (if not covered in Returns)
+pub fn function_name(param_name: Type) -> Result<ReturnType, ErrorType>
+```
+
+**When to document parameters:**
+- ✅ Parameter has constraints or special meaning
+- ✅ Parameter purpose is not obvious from name/type
+- ❌ Name and type make it obvious (e.g., `user_id: &str`)
+
+**When to document returns:**
+- ✅ Return value meaning is not obvious
+- ✅ Multiple success/error cases need explanation
+- ❌ `Result<T, E>` is self-explanatory from context
+
+**Example:**
+
+```rust
+/// Revoke a refresh token by deleting it from the database
+/// 
+/// Does not verify user ownership - the refresh token itself is the authority.
+/// 
+/// # Arguments
+/// * `token_hash` - SHA-256 hash of the refresh token to revoke
+/// 
+/// # Returns
+/// * `Ok(user_id)` - Token revoked successfully, returns the user_id for audit logging
+/// * `Err(AuthError)` - Token not found or database error
+pub async fn revoke_refresh_token(&self, token_hash: &str) -> Result<String, AuthError>
+```
+
 ## Security Rules
 
 - Hash ALL passwords with argon2 (Argon2id variant) before storage

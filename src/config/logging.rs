@@ -45,7 +45,10 @@ pub enum LoggingError {
 }
 
 /// Initialize the tracing subscriber with console and optional file output
-pub fn init_logging(config: &LoggingConfig) -> Result<(), LoggingError> {
+/// Reads configuration from environment variables automatically
+pub fn init_logging() -> Result<(), LoggingError> {
+    let config = LoggingConfig::from_env();
+    
     // Create the environment filter for log level
     let env_filter = EnvFilter::try_new(&config.log_level)
         .map_err(|e| LoggingError::InvalidLogLevel(format!("{}: {}", config.log_level, e)))?;

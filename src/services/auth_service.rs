@@ -17,7 +17,47 @@ pub struct AuthService {
 }
 
 impl AuthService {
-    /// Create a new AuthService
+    /// Initialize AuthService with all dependencies
+    /// 
+    /// Creates internal stores and services, optionally seeds test user in development
+    pub async fn init(
+        db: sea_orm::DatabaseConnection,
+        audit_db: sea_orm::DatabaseConnection,
+        secret_manager: Arc<crate::config::SecretManager>,
+    ) -> Result<Self, AuthError> {
+        // Create internal dependencies
+        let credential_store = Arc::new(CredentialStore::new(
+            db.clone(),
+            secret_manager.password_pepper().to_string()
+        ));
+        
+        let token_service = Arc::new(TokenService::new(
+            secret_manager.jwt_secret().to_string(),
+            secret_manager.refresh_token_secret().to_string(),
+        ));
+        
+        let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
+        
+        let service = Self {
+            credential_store: credential_store.clone(),
+            token_service,
+            audit_store,
+        };
+        
+        // Seed test user for development
+        service.seed_test_user().await;
+        
+        Ok(service)
+    }
+    
+    /// Get a reference to the internal TokenService
+    /// 
+    /// Useful for API layer that needs direct access to token validation
+    pub fn token_service(&self) -> Arc<TokenService> {
+        self.token_service.clone()
+    }
+    
+    /// Create a new AuthService (for testing or manual construction)
     pub fn new(
         credential_store: Arc<CredentialStore>,
         token_service: Arc<TokenService>,
@@ -27,6 +67,21 @@ impl AuthService {
             credential_store,
             token_service,
             audit_store,
+        }
+    }
+    
+    /// Seed test user for development (TODO: Remove in production)
+    async fn seed_test_user(&self) {
+        match self.credential_store.add_user("testuser".to_string(), "testpass".to_string()).await {
+            Ok(user_id) => {
+                tracing::info!("Test user created successfully with ID: {}", user_id);
+            }
+            Err(AuthError::DuplicateUsername(_)) => {
+                tracing::debug!("Test user already exists, skipping creation");
+            }
+            Err(e) => {
+                tracing::error!("Failed to create test user: {:?}", e);
+            }
         }
     }
     
@@ -169,35 +224,46 @@ impl AuthService {
     
     /// Logout by revoking a refresh token
     /// 
+    /// The refresh token itself is the authority - no user ownership verification.
+    /// Authentication is optional and only affects audit log quality.
+    /// 
     /// # Arguments
+    /// * `ctx` - Request context (may or may not be authenticated)
     /// * `refresh_token` - The refresh token to revoke
-    /// * `authenticated_user_id` - The user ID from the validated JWT (for authorization)
-    /// * `jwt_id` - Optional JWT ID from the access token
     /// 
     /// # Returns
-    /// * `Result<(), AuthError>` - Success or error
+    /// * `Ok(())` - Token revoked successfully
+    /// * `Err(AuthError)` - Token not found or database error
     pub async fn logout(
         &self,
+        ctx: &crate::types::internal::context::RequestContext,
         refresh_token: String,
-        authenticated_user_id: String,
-        jwt_id: Option<String>,
     ) -> Result<(), AuthError> {
-        // Hash the refresh token
         let token_hash = self.token_service.hash_refresh_token(&refresh_token);
+        let user_id = self.credential_store.revoke_refresh_token(&token_hash).await?;
         
-        // Revoke refresh token only if it belongs to the authenticated user
-        self.credential_store
-            .revoke_refresh_token(&token_hash, &authenticated_user_id)
-            .await?;
-        
-        // Log refresh token revocation
-        if let Err(audit_err) = audit_logger::log_refresh_token_revoked(
-            &self.audit_store,
-            authenticated_user_id,
-            jwt_id,
-            token_hash,
-        ).await {
-            tracing::error!("Failed to log refresh token revocation: {:?}", audit_err);
+        if ctx.authenticated {
+            let claims = ctx.claims.as_ref().unwrap();
+            
+            if let Err(audit_err) = audit_logger::log_refresh_token_revoked(
+                &self.audit_store,
+                user_id,
+                claims.jti.clone(),
+                token_hash,
+            ).await {
+                tracing::error!("Failed to log refresh token revocation: {:?}", audit_err);
+            }
+        } else {
+            tracing::warn!("Unauthenticated logout from IP: {:?}, user_id: {}", ctx.ip_address, user_id);
+            
+            if let Err(audit_err) = audit_logger::log_refresh_token_revoked(
+                &self.audit_store,
+                user_id,
+                None,
+                token_hash,
+            ).await {
+                tracing::error!("Failed to log unauthenticated logout: {:?}", audit_err);
+            }
         }
         
         Ok(())
@@ -210,7 +276,7 @@ impl AuthService {
     /// 
     /// # Returns
     /// * `Result<Claims, AuthError>` - Decoded claims or error
-    pub async fn validate_jwt_with_audit(
+    pub async fn validate_jwt(
         &self,
         token: &str,
     ) -> Result<crate::types::internal::auth::Claims, AuthError> {

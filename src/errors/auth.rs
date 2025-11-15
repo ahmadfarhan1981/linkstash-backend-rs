@@ -1,4 +1,5 @@
 use poem_openapi::{payload::Json, ApiResponse, Object};
+use std::fmt;
 
 /// Standardized error response for authentication endpoints
 #[derive(Object, Debug)]
@@ -133,5 +134,26 @@ impl AuthError {
             message,
             status_code: 500,
         }))
+    }
+    
+    /// Get the error message from the error variant
+    pub fn message(&self) -> String {
+        match self {
+            AuthError::InvalidCredentials(json) => json.0.message.clone(),
+            AuthError::DuplicateUsername(json) => json.0.message.clone(),
+            AuthError::InvalidToken(json) => json.0.message.clone(),
+            AuthError::ExpiredToken(json) => json.0.message.clone(),
+            AuthError::MissingAuthHeader(json) => json.0.message.clone(),
+            AuthError::InvalidAuthHeader(json) => json.0.message.clone(),
+            AuthError::InvalidRefreshToken(json) => json.0.message.clone(),
+            AuthError::ExpiredRefreshToken(json) => json.0.message.clone(),
+            AuthError::InternalError(json) => json.0.message.clone(),
+        }
+    }
+}
+
+impl fmt::Display for AuthError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message())
     }
 }

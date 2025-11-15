@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// JWT Claims structure
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     /// Subject (user_id)
     pub sub: String,

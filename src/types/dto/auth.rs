@@ -1,4 +1,4 @@
-use poem_openapi::Object;
+use poem_openapi::{Object, ApiResponse};
 use serde::{Deserialize, Serialize};
 
 /// Request model for user login
@@ -70,3 +70,60 @@ pub struct LogoutResponse {
     /// Success message
     pub message: String,
 }
+
+/// API response for login endpoint
+#[derive(ApiResponse)]
+pub enum LoginApiResponse {
+    /// Authentication successful, tokens provided
+    #[oai(status = 200)]
+    Ok(Json<TokenResponse>),
+    
+    /// Invalid username or password
+    #[oai(status = 401)]
+    Unauthorized(Json<ErrorResponse>),
+}
+
+/// API response for whoami endpoint
+#[derive(ApiResponse)]
+pub enum WhoAmIApiResponse {
+    /// User information retrieved
+    #[oai(status = 200)]
+    Ok(Json<WhoAmIResponse>),
+    
+    /// Invalid or expired JWT token
+    #[oai(status = 401)]
+    Unauthorized(Json<ErrorResponse>),
+}
+
+/// API response for refresh endpoint
+#[derive(ApiResponse)]
+pub enum RefreshApiResponse {
+    /// New access token issued
+    #[oai(status = 200)]
+    Ok(Json<RefreshResponse>),
+    
+    /// Invalid or expired refresh token
+    #[oai(status = 401)]
+    Unauthorized(Json<ErrorResponse>),
+}
+
+/// API response for logout endpoint
+#[derive(ApiResponse)]
+pub enum LogoutApiResponse {
+    /// Logout successful, session terminated
+    #[oai(status = 200)]
+    Ok(Json<LogoutResponse>),
+    
+    /// Invalid JWT token
+    #[oai(status = 401)]
+    Unauthorized(Json<ErrorResponse>),
+}
+
+/// Generic error response
+#[derive(Object, Debug, Serialize, Deserialize)]
+pub struct ErrorResponse {
+    /// Error message
+    pub error: String,
+}
+
+use poem_openapi::payload::Json;
