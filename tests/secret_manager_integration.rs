@@ -3,7 +3,10 @@ use std::sync::{Arc, Mutex};
 // Import from the main crate
 use linkstash_backend::config::{SecretManager, SecretError};
 use linkstash_backend::services::TokenService;
+use linkstash_backend::stores::AuditStore;
 use uuid::Uuid;
+use sea_orm::Database;
+use migration::MigratorTrait;
 
 // Global mutex to ensure tests run serially (environment variables are global)
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -35,6 +38,18 @@ impl Drop for EnvGuard {
             }
         }
     }
+}
+
+async fn create_test_audit_store() -> Arc<AuditStore> {
+    let audit_db = Database::connect("sqlite::memory:")
+        .await
+        .expect("Failed to create audit database");
+    
+    migration::Migrator::up(&audit_db, None)
+        .await
+        .expect("Failed to run audit migrations");
+    
+    Arc::new(AuditStore::new(audit_db))
 }
 
 #[test]
@@ -179,8 +194,8 @@ fn test_application_fails_gracefully_with_invalid_password_pepper_length() {
     }
 }
 
-#[test]
-fn test_token_service_integration_with_secret_manager() {
+#[tokio::test]
+async fn test_token_service_integration_with_secret_manager() {
     let _lock = TEST_MUTEX.lock().unwrap();
     let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
@@ -194,21 +209,25 @@ fn test_token_service_integration_with_secret_manager() {
     // Initialize SecretManager
     let secret_manager = Arc::new(SecretManager::init().unwrap());
     
+    // Create audit store for TokenService
+    let audit_store = create_test_audit_store().await;
+    
     // Create TokenService with JWT secret and refresh token secret from SecretManager
     let token_service = Arc::new(TokenService::new(
         secret_manager.jwt_secret().to_string(),
         secret_manager.refresh_token_secret().to_string(),
+        audit_store,
     ));
     
     // Verify TokenService was created successfully
     let user_id = Uuid::new_v4();
-    let jwt_result = token_service.generate_jwt(&user_id);
+    let jwt_result = token_service.generate_jwt(&user_id, None).await;
     
     assert!(jwt_result.is_ok(), "TokenService should generate JWT successfully");
 }
 
-#[test]
-fn test_jwt_generation_works_with_secrets_from_secret_manager() {
+#[tokio::test]
+async fn test_jwt_generation_works_with_secrets_from_secret_manager() {
     let _lock = TEST_MUTEX.lock().unwrap();
     let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
@@ -222,29 +241,34 @@ fn test_jwt_generation_works_with_secrets_from_secret_manager() {
     // Initialize SecretManager
     let secret_manager = Arc::new(SecretManager::init().unwrap());
     
+    // Create audit store for TokenService
+    let audit_store = create_test_audit_store().await;
+    
     // Create TokenService with JWT secret and refresh token secret from SecretManager
     let token_service = Arc::new(TokenService::new(
         secret_manager.jwt_secret().to_string(),
         secret_manager.refresh_token_secret().to_string(),
+        audit_store,
     ));
     
     // Generate JWT
     let user_id = Uuid::new_v4();
-    let jwt = token_service.generate_jwt(&user_id).expect("JWT generation should succeed");
+    let (jwt, jwt_id) = token_service.generate_jwt(&user_id, None).await.expect("JWT generation should succeed");
     
     // Verify JWT is not empty
     assert!(!jwt.is_empty(), "Generated JWT should not be empty");
+    assert!(!jwt_id.is_empty(), "JWT ID should not be empty");
     
     // Verify JWT can be validated
-    let claims_result = token_service.validate_jwt(&jwt);
+    let claims_result = token_service.validate_jwt(&jwt).await;
     assert!(claims_result.is_ok(), "Generated JWT should be valid");
     
     let claims = claims_result.unwrap();
     assert_eq!(claims.sub, user_id.to_string(), "JWT should contain correct user_id");
 }
 
-#[test]
-fn test_jwt_validation_works_with_secrets_from_secret_manager() {
+#[tokio::test]
+async fn test_jwt_validation_works_with_secrets_from_secret_manager() {
     let _lock = TEST_MUTEX.lock().unwrap();
     let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
@@ -258,16 +282,20 @@ fn test_jwt_validation_works_with_secrets_from_secret_manager() {
     // Initialize SecretManager
     let secret_manager = Arc::new(SecretManager::init().unwrap());
     
+    // Create audit store for TokenService
+    let audit_store = create_test_audit_store().await;
+    
     // Create TokenService with JWT secret and refresh token secret from SecretManager
     let token_service = Arc::new(TokenService::new(
         secret_manager.jwt_secret().to_string(),
         secret_manager.refresh_token_secret().to_string(),
+        audit_store,
     ));
     
     // Generate and validate JWT
     let user_id = Uuid::new_v4();
-    let jwt = token_service.generate_jwt(&user_id).unwrap();
-    let claims = token_service.validate_jwt(&jwt).unwrap();
+    let (jwt, _jwt_id) = token_service.generate_jwt(&user_id, None).await.unwrap();
+    let claims = token_service.validate_jwt(&jwt).await.unwrap();
     
     // Verify claims
     assert_eq!(claims.sub, user_id.to_string());
@@ -275,8 +303,8 @@ fn test_jwt_validation_works_with_secrets_from_secret_manager() {
     assert_eq!(claims.exp - claims.iat, 900); // 15 minutes = 900 seconds
 }
 
-#[test]
-fn test_multiple_token_services_can_share_secret_manager() {
+#[tokio::test]
+async fn test_multiple_token_services_can_share_secret_manager() {
     let _lock = TEST_MUTEX.lock().unwrap();
     let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
@@ -290,21 +318,27 @@ fn test_multiple_token_services_can_share_secret_manager() {
     // Initialize SecretManager
     let secret_manager = Arc::new(SecretManager::init().unwrap());
     
+    // Create audit stores for TokenServices
+    let audit_store1 = create_test_audit_store().await;
+    let audit_store2 = create_test_audit_store().await;
+    
     // Create multiple TokenService instances with the same secret
     let token_service1 = Arc::new(TokenService::new(
         secret_manager.jwt_secret().to_string(),
         secret_manager.refresh_token_secret().to_string(),
+        audit_store1,
     ));
     let token_service2 = Arc::new(TokenService::new(
         secret_manager.jwt_secret().to_string(),
         secret_manager.refresh_token_secret().to_string(),
+        audit_store2,
     ));
     
     // Generate JWT with first service
     let user_id = Uuid::new_v4();
-    let jwt = token_service1.generate_jwt(&user_id).unwrap();
+    let (jwt, _jwt_id) = token_service1.generate_jwt(&user_id, None).await.unwrap();
     
     // Validate JWT with second service (should work because they share the same secret)
-    let claims = token_service2.validate_jwt(&jwt).unwrap();
+    let claims = token_service2.validate_jwt(&jwt).await.unwrap();
     assert_eq!(claims.sub, user_id.to_string());
 }

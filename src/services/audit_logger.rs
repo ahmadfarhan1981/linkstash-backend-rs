@@ -190,12 +190,12 @@ pub async fn log_refresh_token_validation_failure(
 /// # Example
 /// ```
 /// use std::sync::Arc;
-/// use crate::services::audit_logger::AuditBuilder;
-/// use crate::stores::audit_store::AuditStore;
+/// use linkstash_backend::services::audit_logger::AuditBuilder;
+/// use linkstash_backend::stores::audit_store::AuditStore;
 ///
 /// async fn example(audit_store: Arc<AuditStore>) {
 ///     AuditBuilder::new(audit_store.clone(), "password_reset_requested")
-///         .user_id(123)
+///         .user_id(123.to_string())
 ///         .ip_address("192.168.1.1")
 ///         .add_field("reset_token_id", "abc123")
 ///         .add_sensitive("email", "user@example.com")
