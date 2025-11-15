@@ -1,9 +1,8 @@
 use std::sync::Arc;
 use uuid::Uuid;
-use chrono::DateTime;
 
 use crate::stores::{CredentialStore, AuditStore};
-use crate::services::{TokenService, audit_logger};
+use crate::services::TokenService;
 use crate::errors::auth::AuthError;
 
 /// Authentication service that orchestrates login, logout, and token refresh flows
@@ -38,6 +37,7 @@ impl AuthService {
         let token_service = Arc::new(TokenService::new(
             secret_manager.jwt_secret().to_string(),
             secret_manager.refresh_token_secret().to_string(),
+            audit_store.clone(),
         ));
         
         let service = Self {
@@ -110,7 +110,8 @@ impl AuthService {
         let user_id = Uuid::parse_str(&user_id_str)
             .map_err(|e| AuthError::internal_error(format!("Invalid user_id format: {}", e)))?;
         
-        let (access_token, jwt_id) = self.token_service.generate_jwt(&user_id)?;
+        // Generate JWT with audit logging at point of action
+        let (access_token, jwt_id) = self.token_service.generate_jwt(&user_id, ctx.ip_address.clone()).await?;
         
         let refresh_token = self.token_service.generate_refresh_token();
         
@@ -127,19 +128,6 @@ impl AuthService {
                 ctx.ip_address.clone(),
             )
             .await?;
-        
-        // Log JWT issuance (happens at service layer, not store)
-        let expiration = DateTime::from_timestamp(expires_at, 0)
-            .unwrap_or_else(|| chrono::Utc::now());
-        if let Err(audit_err) = audit_logger::log_jwt_issued(
-            &self.audit_store,
-            user_id_str.clone(),
-            jwt_id.clone(),
-            expiration,
-            ctx.ip_address.clone(),
-        ).await {
-            tracing::error!("Failed to log JWT issuance: {:?}", audit_err);
-        }
         
         Ok((access_token, refresh_token))
     }
@@ -167,23 +155,8 @@ impl AuthService {
         let user_id = Uuid::parse_str(&user_id_str)
             .map_err(|e| AuthError::internal_error(format!("Invalid user_id format: {}", e)))?;
         
-        let (access_token, jwt_id) = self.token_service.generate_jwt(&user_id)?;
-        
-        // Log JWT issuance (happens at service layer, not store)
-        let expiration = DateTime::from_timestamp(
-            self.token_service.get_refresh_expiration(),
-            0
-        ).unwrap_or_else(|| chrono::Utc::now());
-        
-        if let Err(audit_err) = audit_logger::log_jwt_issued(
-            &self.audit_store,
-            user_id_str,
-            jwt_id,
-            expiration,
-            ctx.ip_address.clone(),
-        ).await {
-            tracing::error!("Failed to log JWT issuance: {:?}", audit_err);
-        }
+        // Generate JWT with audit logging at point of action
+        let (access_token, _jwt_id) = self.token_service.generate_jwt(&user_id, ctx.ip_address.clone()).await?;
         
         Ok(access_token)
     }
@@ -221,71 +194,5 @@ impl AuthService {
         Ok(())
     }
     
-    /// Validate a JWT and log any validation failures
-    /// 
-    /// # Arguments
-    /// * `token` - The JWT to validate
-    /// 
-    /// # Returns
-    /// * `Result<Claims, AuthError>` - Decoded claims or error
-    pub async fn validate_jwt(
-        &self,
-        token: &str,
-    ) -> Result<crate::types::internal::auth::Claims, AuthError> {
-        let result = self.token_service.validate_jwt(token);
-        
-        // If validation failed, try to extract claims for audit logging
-        if let Err(ref err) = result {
-            if let Ok(unverified_claims) = self.extract_unverified_claims(token) {
-                let failure_reason = match err {
-                    AuthError::ExpiredToken(_) => "expired",
-                    AuthError::InvalidToken(_) => "invalid_signature",
-                    _ => "validation_error",
-                };
-                
-                // Check if this is a tampering attempt (invalid signature)
-                if matches!(err, AuthError::InvalidToken(_)) {
-                    if let Err(audit_err) = audit_logger::log_jwt_tampered(
-                        &self.audit_store,
-                        unverified_claims.sub.clone(),
-                        unverified_claims.jti.clone(),
-                        token.to_string(),
-                        failure_reason.to_string(),
-                    ).await {
-                        tracing::error!("Failed to log JWT tampering: {:?}", audit_err);
-                    }
-                } else {
-                    // Normal validation failure (expired, etc.)
-                    if let Err(audit_err) = audit_logger::log_jwt_validation_failure(
-                        &self.audit_store,
-                        unverified_claims.sub.clone(),
-                        unverified_claims.jti.clone(),
-                        failure_reason.to_string(),
-                    ).await {
-                        tracing::error!("Failed to log JWT validation failure: {:?}", audit_err);
-                    }
-                }
-            }
-        }
-        
-        result
-    }
-    
-    /// Extract claims from JWT without validation (for audit logging only)
-    fn extract_unverified_claims(&self, token: &str) -> Result<crate::types::internal::auth::Claims, AuthError> {
-        use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
-        
-        let mut validation = Validation::new(Algorithm::HS256);
-        validation.insecure_disable_signature_validation();
-        validation.validate_exp = false;
-        
-        let token_data = decode::<crate::types::internal::auth::Claims>(
-            token,
-            &DecodingKey::from_secret(b"dummy"),
-            &validation,
-        )
-        .map_err(|_| AuthError::invalid_token())?;
-        
-        Ok(token_data.claims)
-    }
+
 }

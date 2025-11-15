@@ -71,15 +71,15 @@ impl AuthApi {
         
         // If auth is provided, validate JWT and populate claims
         if let Some(bearer) = auth {
-            // Validate JWT (handles all audit logging automatically)
-            match self.auth_service.validate_jwt(&bearer.0.token).await {
+            // Validate JWT (handles all audit logging at point of action in TokenService)
+            match self.auth_service.token_service().validate_jwt(&bearer.0.token).await {
                 Ok(claims) => {
                     // JWT is valid, set authenticated and claims
                     ctx = ctx.with_auth(claims);
                 }
                 Err(_) => {
                     // JWT validation failed (expired, invalid, tampered)
-                    // validate_jwt already logged the failure
+                    // TokenService.validate_jwt already logged the failure
                     // Context remains with authenticated=false, claims=None
                 }
             }
@@ -253,6 +253,7 @@ mod tests {
         let token_service = Arc::new(TokenService::new(
             "test-secret-key-minimum-32-characters-long".to_string(),
             "test-refresh-secret-minimum-32-chars".to_string(),
+            audit_store.clone(),
         ));
         
         // Create audit store
@@ -1074,10 +1075,10 @@ mod tests {
         // IP address is set to "unknown" when not available in request
         assert_eq!(login_failure.ip_address, Some("unknown".to_string()));
         
-        // Verify failure reason is in data
+        // Verify failure reason is in data (specific for audit forensics)
         let data: serde_json::Value = serde_json::from_str(&login_failure.data)
             .expect("Failed to parse audit data");
-        assert_eq!(data["failure_reason"], "invalid_credentials");
+        assert_eq!(data["failure_reason"], "invalid_password");
     }
 
     #[tokio::test]

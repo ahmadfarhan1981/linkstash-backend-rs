@@ -1,12 +1,14 @@
 use jsonwebtoken::{encode, decode, Header, EncodingKey, DecodingKey, Validation, Algorithm};
-use chrono::Utc;
+use chrono::{Utc, DateTime};
 use uuid::Uuid;
 use rand::prelude::*;
 use base64::{Engine as _, engine::general_purpose};
 use std::fmt;
+use std::sync::Arc;
 use crate::types::internal::auth::Claims;
 use crate::errors::auth::AuthError;
-use crate::services::crypto;
+use crate::services::{crypto, audit_logger};
+use crate::stores::AuditStore;
 
 /// Manages JWT token generation and validation
 pub struct TokenService {
@@ -14,29 +16,38 @@ pub struct TokenService {
     jwt_expiration_minutes: i64,
     refresh_expiration_days: i64,
     refresh_token_secret: String,
+    audit_store: Arc<AuditStore>,
 }
 
 impl TokenService {
-    /// Create a new TokenService with the given JWT secret and refresh token secret
-    pub fn new(jwt_secret: String, refresh_token_secret: String) -> Self {
+    /// Create a new TokenService with the given JWT secret, refresh token secret, and audit store
+    pub fn new(jwt_secret: String, refresh_token_secret: String, audit_store: Arc<AuditStore>) -> Self {
         Self {
             jwt_secret,
             jwt_expiration_minutes: 15, // 15 minutes as per requirements
             refresh_expiration_days: 7, // 7 days as per requirements
             refresh_token_secret,
+            audit_store,
         }
     }
     
     /// Generate a JWT for the given user_id
     /// 
+    /// Logs JWT issuance to audit database at point of action.
+    /// 
     /// # Arguments
     /// * `user_id` - The UUID of the user
+    /// * `ip_address` - Client IP address for audit logging
     /// 
     /// # Returns
     /// * `Result<(String, String), AuthError>` - Tuple of (encoded JWT, JWT ID) or an error
-    pub fn generate_jwt(&self, user_id: &Uuid) -> Result<(String, String), AuthError> {
+    pub async fn generate_jwt(&self, user_id: &Uuid, ip_address: Option<String>) -> Result<(String, String), AuthError> {
         let now = Utc::now().timestamp();
         let expiration = now + (self.jwt_expiration_minutes * 60);
+        
+        // Validate expiration timestamp before creating JWT
+        let expiration_dt = DateTime::from_timestamp(expiration, 0)
+            .ok_or_else(|| AuthError::internal_error(format!("Invalid expiration timestamp: {}", expiration)))?;
         
         // Generate unique JWT ID
         let jti = Uuid::new_v4().to_string();
@@ -55,17 +66,30 @@ impl TokenService {
         )
         .map_err(|e| AuthError::internal_error(format!("Failed to generate JWT: {}", e)))?;
         
+        // Log JWT issuance at point of action (expiration_dt already validated above)
+        if let Err(audit_err) = audit_logger::log_jwt_issued(
+            &self.audit_store,
+            user_id.to_string(),
+            jti.clone(),
+            expiration_dt,
+            ip_address,
+        ).await {
+            tracing::error!("Failed to log JWT issuance: {:?}", audit_err);
+        }
+        
         Ok((token, jti))
     }
     
     /// Validate a JWT and return the claims
+    /// 
+    /// Logs validation failures to audit database at point of action.
     /// 
     /// # Arguments
     /// * `token` - The JWT to validate
     /// 
     /// # Returns
     /// * `Result<Claims, AuthError>` - The decoded claims or an error
-    pub fn validate_jwt(&self, token: &str) -> Result<Claims, AuthError> {
+    pub async fn validate_jwt(&self, token: &str) -> Result<Claims, AuthError> {
         let validation = Validation::new(Algorithm::HS256);
         
         let token_data = decode::<Claims>(
@@ -80,7 +104,60 @@ impl TokenService {
             } else {
                 AuthError::invalid_token()
             }
-        })?;
+        });
+        
+        // Log validation failures at point of action
+        if let Err(ref err) = token_data {
+            // Try to extract claims without validation for audit logging
+            if let Ok(unverified_claims) = self.extract_unverified_claims(token) {
+                let failure_reason = match err {
+                    AuthError::ExpiredToken(_) => "expired",
+                    AuthError::InvalidToken(_) => "invalid_signature",
+                    _ => "validation_error",
+                };
+                
+                // Check if this is a tampering attempt (invalid signature)
+                if matches!(err, AuthError::InvalidToken(_)) {
+                    if let Err(audit_err) = audit_logger::log_jwt_tampered(
+                        &self.audit_store,
+                        unverified_claims.sub.clone(),
+                        unverified_claims.jti.clone(),
+                        token.to_string(),
+                        failure_reason.to_string(),
+                    ).await {
+                        tracing::error!("Failed to log JWT tampering: {:?}", audit_err);
+                    }
+                } else {
+                    // Normal validation failure (expired, etc.)
+                    if let Err(audit_err) = audit_logger::log_jwt_validation_failure(
+                        &self.audit_store,
+                        unverified_claims.sub.clone(),
+                        unverified_claims.jti.clone(),
+                        failure_reason.to_string(),
+                    ).await {
+                        tracing::error!("Failed to log JWT validation failure: {:?}", audit_err);
+                    }
+                }
+            }
+        }
+        
+        token_data.map(|td| td.claims)
+    }
+    
+    /// Extract claims from JWT without validation (for audit logging only)
+    fn extract_unverified_claims(&self, token: &str) -> Result<Claims, AuthError> {
+        use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
+        
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.insecure_disable_signature_validation();
+        validation.validate_exp = false;
+        
+        let token_data = decode::<Claims>(
+            token,
+            &DecodingKey::from_secret(b"dummy"),
+            &validation,
+        )
+        .map_err(|_| AuthError::invalid_token())?;
         
         Ok(token_data.claims)
     }
@@ -123,6 +200,7 @@ impl fmt::Debug for TokenService {
             .field("jwt_expiration_minutes", &self.jwt_expiration_minutes)
             .field("refresh_expiration_days", &self.refresh_expiration_days)
             .field("refresh_token_secret", &"<redacted>")
+            .field("audit_store", &"<audit_store>")
             .finish()
     }
 }
@@ -141,16 +219,33 @@ impl fmt::Display for TokenService {
 mod tests {
     use super::*;
     use jsonwebtoken::{decode, Validation, DecodingKey, Algorithm};
+    use sea_orm::Database;
+    use migration::MigratorTrait;
 
-    #[test]
-    fn test_generate_jwt_creates_valid_jwt() {
-        let token_manager = TokenService::new(
+    async fn create_test_token_service() -> TokenService {
+        let audit_db = Database::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create audit database");
+        
+        migration::Migrator::up(&audit_db, None)
+            .await
+            .expect("Failed to run audit migrations");
+        
+        let audit_store = Arc::new(AuditStore::new(audit_db));
+        
+        TokenService::new(
             "test-secret-key-minimum-32-characters-long".to_string(),
             "test-refresh-secret-minimum-32-chars".to_string(),
-        );
+            audit_store,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_generate_jwt_creates_valid_jwt() {
+        let token_manager = create_test_token_service().await;
         let user_id = Uuid::new_v4();
         
-        let result = token_manager.generate_jwt(&user_id);
+        let result = token_manager.generate_jwt(&user_id, None).await;
         
         assert!(result.is_ok());
         let (token, jwt_id) = result.unwrap();
@@ -171,15 +266,12 @@ mod tests {
         assert!(decoded.is_ok());
     }
 
-    #[test]
-    fn test_jwt_contains_correct_user_id() {
-        let token_manager = TokenService::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "test-refresh-secret-minimum-32-chars".to_string(),
-        );
+    #[tokio::test]
+    async fn test_jwt_contains_correct_user_id() {
+        let token_manager = create_test_token_service().await;
         let user_id = Uuid::new_v4();
         
-        let (token, _jwt_id) = token_manager.generate_jwt(&user_id).unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, None).await.unwrap();
         
         // Decode and verify user_id in sub claim
         let mut validation = Validation::new(Algorithm::HS256);
@@ -194,15 +286,12 @@ mod tests {
         assert_eq!(decoded.claims.sub, user_id.to_string());
     }
 
-    #[test]
-    fn test_jwt_expiration_is_15_minutes() {
-        let token_manager = TokenService::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "test-refresh-secret-minimum-32-chars".to_string(),
-        );
+    #[tokio::test]
+    async fn test_jwt_expiration_is_15_minutes() {
+        let token_manager = create_test_token_service().await;
         let user_id = Uuid::new_v4();
         
-        let (token, _jwt_id) = token_manager.generate_jwt(&user_id).unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, None).await.unwrap();
         
         // Decode and verify expiration
         let mut validation = Validation::new(Algorithm::HS256);
@@ -218,16 +307,13 @@ mod tests {
         assert_eq!(time_diff, 900); // 15 minutes = 900 seconds
     }
 
-    #[test]
-    fn test_jwt_has_iat_timestamp() {
-        let token_manager = TokenService::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "test-refresh-secret-minimum-32-chars".to_string(),
-        );
+    #[tokio::test]
+    async fn test_jwt_has_iat_timestamp() {
+        let token_manager = create_test_token_service().await;
         let user_id = Uuid::new_v4();
         
         let before = Utc::now().timestamp();
-        let (token, _jwt_id) = token_manager.generate_jwt(&user_id).unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, None).await.unwrap();
         let after = Utc::now().timestamp();
         
         // Decode and verify iat is within reasonable range
@@ -244,53 +330,54 @@ mod tests {
         assert!(decoded.claims.iat <= after);
     }
 
-    #[test]
-    fn test_validate_jwt_succeeds_with_valid_jwt() {
-        let token_manager = TokenService::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "test-refresh-secret-minimum-32-chars".to_string(),
-        );
+    #[tokio::test]
+    async fn test_validate_jwt_succeeds_with_valid_jwt() {
+        let token_manager = create_test_token_service().await;
         let user_id = Uuid::new_v4();
         
-        let (token, _jwt_id) = token_manager.generate_jwt(&user_id).unwrap();
-        let result = token_manager.validate_jwt(&token);
+        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, None).await.unwrap();
+        let result = token_manager.validate_jwt(&token).await;
         
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_validate_jwt_returns_correct_claims() {
-        let token_manager = TokenService::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "test-refresh-secret-minimum-32-chars".to_string(),
-        );
+    #[tokio::test]
+    async fn test_validate_jwt_returns_correct_claims() {
+        let token_manager = create_test_token_service().await;
         let user_id = Uuid::new_v4();
         
-        let (token, _jwt_id) = token_manager.generate_jwt(&user_id).unwrap();
-        let claims = token_manager.validate_jwt(&token).unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, None).await.unwrap();
+        let claims = token_manager.validate_jwt(&token).await.unwrap();
         
         assert_eq!(claims.sub, user_id.to_string());
         assert!(claims.exp > claims.iat);
         assert_eq!(claims.exp - claims.iat, 900); // 15 minutes
     }
 
-    #[test]
-    fn test_validate_jwt_fails_with_invalid_signature() {
-        let token_manager = TokenService::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "test-refresh-secret-minimum-32-chars".to_string(),
-        );
+    #[tokio::test]
+    async fn test_validate_jwt_fails_with_invalid_signature() {
+        let token_manager = create_test_token_service().await;
+        
+        let audit_db = Database::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create audit database");
+        migration::Migrator::up(&audit_db, None)
+            .await
+            .expect("Failed to run audit migrations");
+        let audit_store = Arc::new(AuditStore::new(audit_db));
+        
         let wrong_token_manager = TokenService::new(
             "wrong-secret-key-minimum-32-characters".to_string(),
             "test-refresh-secret-minimum-32-chars".to_string(),
+            audit_store,
         );
         let user_id = Uuid::new_v4();
         
         // Generate token with one secret
-        let (token, _jwt_id) = token_manager.generate_jwt(&user_id).unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, None).await.unwrap();
         
         // Try to validate with different secret
-        let result = wrong_token_manager.validate_jwt(&token);
+        let result = wrong_token_manager.validate_jwt(&token).await;
         
         assert!(result.is_err());
         match result {
@@ -301,12 +388,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_validate_jwt_fails_with_expired_jwt() {
-        let token_manager = TokenService::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "test-refresh-secret-minimum-32-chars".to_string(),
-        );
+    #[tokio::test]
+    async fn test_validate_jwt_fails_with_expired_jwt() {
+        let token_manager = create_test_token_service().await;
         
         // Create an expired token manually
         let now = Utc::now().timestamp();
@@ -323,7 +407,7 @@ mod tests {
             &EncodingKey::from_secret("test-secret-key-minimum-32-characters-long".as_bytes()),
         ).unwrap();
         
-        let result = token_manager.validate_jwt(&expired_token);
+        let result = token_manager.validate_jwt(&expired_token).await;
         
         assert!(result.is_err());
         match result {
@@ -334,12 +418,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_generate_refresh_token_creates_unique_tokens() {
-        let token_manager = TokenService::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "test-refresh-secret-minimum-32-chars".to_string(),
-        );
+    #[tokio::test]
+    async fn test_generate_refresh_token_creates_unique_tokens() {
+        let token_manager = create_test_token_service().await;
         
         let token1 = token_manager.generate_refresh_token();
         let token2 = token_manager.generate_refresh_token();
@@ -352,12 +433,9 @@ mod tests {
         assert_eq!(token2.len(), 44);
     }
 
-    #[test]
-    fn test_hash_refresh_token_produces_consistent_hashes() {
-        let token_manager = TokenService::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "test-refresh-secret-minimum-32-chars".to_string(),
-        );
+    #[tokio::test]
+    async fn test_hash_refresh_token_produces_consistent_hashes() {
+        let token_manager = create_test_token_service().await;
         
         let token = "test-refresh-token";
         let hash1 = token_manager.hash_refresh_token(token);
@@ -370,12 +448,9 @@ mod tests {
         assert_eq!(hash1.len(), 64);
     }
 
-    #[test]
-    fn test_hash_refresh_token_produces_different_hashes_for_different_tokens() {
-        let token_manager = TokenService::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "test-refresh-secret-minimum-32-chars".to_string(),
-        );
+    #[tokio::test]
+    async fn test_hash_refresh_token_produces_different_hashes_for_different_tokens() {
+        let token_manager = create_test_token_service().await;
         
         let token1 = "token1";
         let token2 = "token2";
@@ -389,12 +464,9 @@ mod tests {
 
     // Tests for HMAC-based refresh token hashing (Requirement 7.4, 2.4)
     
-    #[test]
-    fn test_hmac_refresh_token_hashing_produces_consistent_output() {
-        let token_manager = TokenService::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "test-refresh-secret-minimum-32-chars".to_string(),
-        );
+    #[tokio::test]
+    async fn test_hmac_refresh_token_hashing_produces_consistent_output() {
+        let token_manager = create_test_token_service().await;
         
         let token = "test-refresh-token-12345";
         
@@ -412,18 +484,28 @@ mod tests {
         assert!(hash1.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
-    #[test]
-    fn test_hmac_different_secrets_produce_different_hashes() {
+    #[tokio::test]
+    async fn test_hmac_different_secrets_produce_different_hashes() {
         let token = "test-refresh-token-12345";
+        
+        let audit_db1 = Database::connect("sqlite::memory:").await.expect("Failed to create audit database");
+        migration::Migrator::up(&audit_db1, None).await.expect("Failed to run audit migrations");
+        let audit_store1 = Arc::new(AuditStore::new(audit_db1));
+        
+        let audit_db2 = Database::connect("sqlite::memory:").await.expect("Failed to create audit database");
+        migration::Migrator::up(&audit_db2, None).await.expect("Failed to run audit migrations");
+        let audit_store2 = Arc::new(AuditStore::new(audit_db2));
         
         let token_manager1 = TokenService::new(
             "test-secret-key-minimum-32-characters-long".to_string(),
             "refresh-secret-one-minimum-32-chars".to_string(),
+            audit_store1,
         );
         
         let token_manager2 = TokenService::new(
             "test-secret-key-minimum-32-characters-long".to_string(),
             "refresh-secret-two-minimum-32-chars".to_string(),
+            audit_store2,
         );
         
         let hash1 = token_manager1.hash_refresh_token(token);
@@ -433,20 +515,30 @@ mod tests {
         assert_ne!(hash1, hash2);
     }
 
-    #[test]
-    fn test_token_minting_prevention_without_correct_secret() {
+    #[tokio::test]
+    async fn test_token_minting_prevention_without_correct_secret() {
         let token = "malicious-token-attempt";
+        
+        let audit_db1 = Database::connect("sqlite::memory:").await.expect("Failed to create audit database");
+        migration::Migrator::up(&audit_db1, None).await.expect("Failed to run audit migrations");
+        let audit_store1 = Arc::new(AuditStore::new(audit_db1));
+        
+        let audit_db2 = Database::connect("sqlite::memory:").await.expect("Failed to create audit database");
+        migration::Migrator::up(&audit_db2, None).await.expect("Failed to run audit migrations");
+        let audit_store2 = Arc::new(AuditStore::new(audit_db2));
         
         // Attacker tries to mint a token with wrong secret
         let attacker_token_manager = TokenService::new(
             "test-secret-key-minimum-32-characters-long".to_string(),
             "attacker-guessed-secret-wrong-value".to_string(),
+            audit_store1,
         );
         
         // Legitimate server with correct secret
         let legitimate_token_manager = TokenService::new(
             "test-secret-key-minimum-32-characters-long".to_string(),
             "correct-refresh-secret-minimum-32-ch".to_string(),
+            audit_store2,
         );
         
         let attacker_hash = attacker_token_manager.hash_refresh_token(token);
@@ -459,20 +551,30 @@ mod tests {
         // in database because it was computed with wrong secret
     }
 
-    #[test]
-    fn test_hmac_output_is_deterministic_across_instances() {
+    #[tokio::test]
+    async fn test_hmac_output_is_deterministic_across_instances() {
         let token = "test-token-for-determinism";
         let secret = "shared-refresh-secret-minimum-32-c";
+        
+        let audit_db1 = Database::connect("sqlite::memory:").await.expect("Failed to create audit database");
+        migration::Migrator::up(&audit_db1, None).await.expect("Failed to run audit migrations");
+        let audit_store1 = Arc::new(AuditStore::new(audit_db1));
+        
+        let audit_db2 = Database::connect("sqlite::memory:").await.expect("Failed to create audit database");
+        migration::Migrator::up(&audit_db2, None).await.expect("Failed to run audit migrations");
+        let audit_store2 = Arc::new(AuditStore::new(audit_db2));
         
         // Create multiple TokenService instances with same secret
         let manager1 = TokenService::new(
             "test-secret-key-minimum-32-characters-long".to_string(),
             secret.to_string(),
+            audit_store1,
         );
         
         let manager2 = TokenService::new(
             "test-secret-key-minimum-32-characters-long".to_string(),
             secret.to_string(),
+            audit_store2,
         );
         
         let hash1 = manager1.hash_refresh_token(token);
@@ -484,30 +586,24 @@ mod tests {
 
     // Tests for Debug and Display trait protection
     
-    #[test]
-    fn test_debug_trait_does_not_expose_jwt_secret() {
-        let token_service = TokenService::new(
-            "super-secret-jwt-key-minimum-32-characters".to_string(),
-            "super-secret-refresh-key-minimum-32-ch".to_string(),
-        );
+    #[tokio::test]
+    async fn test_debug_trait_does_not_expose_jwt_secret() {
+        let token_service = create_test_token_service().await;
         
         let debug_output = format!("{:?}", token_service);
         
         // Debug output should not contain the actual secrets
-        assert!(!debug_output.contains("super-secret-jwt-key"));
-        assert!(!debug_output.contains("super-secret-refresh-key"));
+        assert!(!debug_output.contains("test-secret-key"));
+        assert!(!debug_output.contains("test-refresh-secret"));
         
         // Debug output should contain redacted markers
         assert!(debug_output.contains("<redacted>"));
         assert!(debug_output.contains("TokenService"));
     }
 
-    #[test]
-    fn test_debug_trait_does_not_expose_refresh_token_secret() {
-        let token_service = TokenService::new(
-            "test-jwt-secret-minimum-32-characters-long".to_string(),
-            "test-refresh-secret-minimum-32-chars".to_string(),
-        );
+    #[tokio::test]
+    async fn test_debug_trait_does_not_expose_refresh_token_secret() {
+        let token_service = create_test_token_service().await;
         
         let debug_output = format!("{:?}", token_service);
         
@@ -519,12 +615,9 @@ mod tests {
         assert_eq!(redacted_count, 2, "Should have 2 redacted fields (jwt_secret and refresh_token_secret)");
     }
 
-    #[test]
-    fn test_debug_trait_shows_non_sensitive_fields() {
-        let token_service = TokenService::new(
-            "test-jwt-secret-minimum-32-characters-long".to_string(),
-            "test-refresh-secret-minimum-32-chars".to_string(),
-        );
+    #[tokio::test]
+    async fn test_debug_trait_shows_non_sensitive_fields() {
+        let token_service = create_test_token_service().await;
         
         let debug_output = format!("{:?}", token_service);
         
@@ -535,18 +628,15 @@ mod tests {
         assert!(debug_output.contains("7"));
     }
 
-    #[test]
-    fn test_display_trait_does_not_expose_secrets() {
-        let token_service = TokenService::new(
-            "super-secret-jwt-key-minimum-32-characters".to_string(),
-            "super-secret-refresh-key-minimum-32-ch".to_string(),
-        );
+    #[tokio::test]
+    async fn test_display_trait_does_not_expose_secrets() {
+        let token_service = create_test_token_service().await;
         
         let display_output = format!("{}", token_service);
         
         // Display output should not contain the actual secrets
-        assert!(!display_output.contains("super-secret-jwt-key"));
-        assert!(!display_output.contains("super-secret-refresh-key"));
+        assert!(!display_output.contains("test-secret-key"));
+        assert!(!display_output.contains("test-refresh-secret"));
         
         // Display output should show metadata only
         assert!(display_output.contains("TokenService"));
@@ -554,12 +644,9 @@ mod tests {
         assert!(display_output.contains("7days"));
     }
 
-    #[test]
-    fn test_display_trait_shows_configuration_summary() {
-        let token_service = TokenService::new(
-            "test-jwt-secret-minimum-32-characters-long".to_string(),
-            "test-refresh-secret-minimum-32-chars".to_string(),
-        );
+    #[tokio::test]
+    async fn test_display_trait_shows_configuration_summary() {
+        let token_service = create_test_token_service().await;
         
         let display_output = format!("{}", token_service);
         
