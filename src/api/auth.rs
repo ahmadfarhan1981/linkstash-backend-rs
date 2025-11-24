@@ -65,7 +65,7 @@ impl AuthApi {
         // Extract IP address
         let ip_address = Self::extract_ip_address(req);
         
-        // Create base context with IP and request_id
+        // Create base context with IP and request_id (defaults to API source)
         let mut ctx = crate::types::internal::context::RequestContext::new()
             .with_ip_address(ip_address.unwrap_or_else(|| "unknown".to_string()));
         
@@ -74,6 +74,8 @@ impl AuthApi {
             // Validate JWT (handles all audit logging at point of action in TokenService)
             match self.auth_service.token_service().validate_jwt(&bearer.0.token).await {
                 Ok(claims) => {
+                    // Set actor_id from JWT subject (user_id)
+                    ctx.actor_id = claims.sub.clone();
                     // JWT is valid, set authenticated and claims
                     ctx = ctx.with_auth(claims);
                 }
@@ -216,7 +218,7 @@ mod tests {
     use super::*;
     use poem_openapi::payload::Json;
     use sea_orm::{Database, DatabaseConnection, EntityTrait, ColumnTrait, QueryFilter};
-    use migration::{Migrator, MigratorTrait};
+    use migration::{AuthMigrator, AuditMigrator, MigratorTrait};
     use crate::services::AuthService;
     use crate::stores::{AuditStore, CredentialStore};
 
@@ -228,7 +230,7 @@ mod tests {
             .expect("Failed to create test database");
         
         // Run migrations
-        Migrator::up(&db, None)
+        AuthMigrator::up(&db, None)
             .await
             .expect("Failed to run migrations");
         
@@ -238,7 +240,7 @@ mod tests {
             .expect("Failed to create audit test database");
         
         // Run migrations on audit database
-        Migrator::up(&audit_db, None)
+        AuditMigrator::up(&audit_db, None)
             .await
             .expect("Failed to run audit migrations");
         
@@ -519,6 +521,10 @@ mod tests {
             exp: now - 3600, // Expired 1 hour ago
             iat: now - 7200, // Issued 2 hours ago
             jti: Some(uuid::Uuid::new_v4().to_string()),
+            is_owner: false,
+            is_system_admin: false,
+            is_role_admin: false,
+            app_roles: vec![],
         };
         
         let expired_token = encode(
@@ -1295,6 +1301,10 @@ mod tests {
             exp: now - 3600, // Expired 1 hour ago
             iat: now - 7200, // Issued 2 hours ago
             jti: Some(uuid::Uuid::new_v4().to_string()),
+            is_owner: false,
+            is_system_admin: false,
+            is_role_admin: false,
+            app_roles: vec![],
         };
         
         let expired_token = encode(
@@ -1352,6 +1362,10 @@ mod tests {
             exp: now + 3600, // Valid expiration
             iat: now,
             jti: Some(uuid::Uuid::new_v4().to_string()),
+            is_owner: false,
+            is_system_admin: false,
+            is_role_admin: false,
+            app_roles: vec![],
         };
         
         // Sign with wrong secret (simulating tampering)

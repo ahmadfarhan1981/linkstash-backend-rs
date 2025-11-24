@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::stores::audit_store::AuditStore;
 use crate::types::internal::audit::{AuditError, AuditEvent, EventType};
+use crate::types::internal::context::RequestContext;
 
 /// Log a successful login event
 ///
@@ -178,6 +179,274 @@ pub async fn log_refresh_token_validation_failure(
     event.ip_address = ip_address;
     event.data.insert("token_hash".to_string(), json!(token_hash));
     event.data.insert("failure_reason".to_string(), json!(failure_reason));
+    
+    store.write_event(event).await
+}
+
+/// Log bootstrap completion
+///
+/// # Arguments
+/// * `store` - Reference to the AuditStore
+/// * `actor_user_id` - ID of the user who performed the bootstrap (typically "system")
+/// * `ip_address` - Optional IP address of the client
+/// * `owner_username` - Username of the created owner account
+/// * `system_admin_count` - Number of System Admin accounts created
+/// * `role_admin_count` - Number of Role Admin accounts created
+pub async fn log_bootstrap_completed(
+    store: &AuditStore,
+    actor_user_id: String,
+    ip_address: Option<String>,
+    owner_username: String,
+    system_admin_count: u32,
+    role_admin_count: u32,
+) -> Result<(), AuditError> {
+    let mut event = AuditEvent::new(EventType::BootstrapCompleted);
+    event.user_id = Some(actor_user_id);
+    event.ip_address = ip_address;
+    event.data.insert("activation_method".to_string(), json!("cli"));
+    event.data.insert("owner_username".to_string(), json!(owner_username));
+    event.data.insert("system_admin_count".to_string(), json!(system_admin_count));
+    event.data.insert("role_admin_count".to_string(), json!(role_admin_count));
+    
+    store.write_event(event).await
+}
+
+/// Log owner activation
+///
+/// # Arguments
+/// * `store` - Reference to the AuditStore
+/// * `actor_user_id` - ID of the user who performed the activation
+/// * `ip_address` - Optional IP address of the client
+/// * `activation_method` - Method used for activation ("cli" or "api")
+pub async fn log_owner_activated(
+    store: &AuditStore,
+    actor_user_id: String,
+    ip_address: Option<String>,
+    activation_method: String,
+) -> Result<(), AuditError> {
+    let mut event = AuditEvent::new(EventType::OwnerActivated);
+    event.user_id = Some(actor_user_id);
+    event.ip_address = ip_address;
+    event.data.insert("activation_method".to_string(), json!(activation_method));
+    
+    store.write_event(event).await
+}
+
+/// Log owner deactivation
+///
+/// # Arguments
+/// * `store` - Reference to the AuditStore
+/// * `actor_user_id` - ID of the user who performed the deactivation
+/// * `ip_address` - Optional IP address of the client
+/// * `activation_method` - Method used for deactivation ("cli" or "api")
+pub async fn log_owner_deactivated(
+    store: &AuditStore,
+    actor_user_id: String,
+    ip_address: Option<String>,
+    activation_method: String,
+) -> Result<(), AuditError> {
+    let mut event = AuditEvent::new(EventType::OwnerDeactivated);
+    event.user_id = Some(actor_user_id);
+    event.ip_address = ip_address;
+    event.data.insert("activation_method".to_string(), json!(activation_method));
+    
+    store.write_event(event).await
+}
+
+/// Log admin role assignment
+///
+/// # Arguments
+/// * `store` - Reference to the AuditStore
+/// * `actor_user_id` - ID of the user who performed the assignment
+/// * `target_user_id` - ID of the user who received the role
+/// * `role_type` - Type of role assigned ("system_admin" or "role_admin")
+/// * `ip_address` - Optional IP address of the client
+pub async fn log_admin_role_assigned(
+    store: &AuditStore,
+    actor_user_id: String,
+    target_user_id: String,
+    role_type: String,
+    ip_address: Option<String>,
+) -> Result<(), AuditError> {
+    let mut event = AuditEvent::new(EventType::AdminRoleAssigned);
+    event.user_id = Some(actor_user_id);
+    event.ip_address = ip_address;
+    event.data.insert("target_user_id".to_string(), json!(target_user_id));
+    event.data.insert("role_type".to_string(), json!(role_type));
+    
+    store.write_event(event).await
+}
+
+/// Log admin role removal
+///
+/// # Arguments
+/// * `store` - Reference to the AuditStore
+/// * `actor_user_id` - ID of the user who performed the removal
+/// * `target_user_id` - ID of the user who lost the role
+/// * `role_type` - Type of role removed ("system_admin" or "role_admin")
+/// * `ip_address` - Optional IP address of the client
+pub async fn log_admin_role_removed(
+    store: &AuditStore,
+    actor_user_id: String,
+    target_user_id: String,
+    role_type: String,
+    ip_address: Option<String>,
+) -> Result<(), AuditError> {
+    let mut event = AuditEvent::new(EventType::AdminRoleRemoved);
+    event.user_id = Some(actor_user_id);
+    event.ip_address = ip_address;
+    event.data.insert("target_user_id".to_string(), json!(target_user_id));
+    event.data.insert("role_type".to_string(), json!(role_type));
+    
+    store.write_event(event).await
+}
+
+/// Log CLI session start
+///
+/// # Arguments
+/// * `store` - Reference to the AuditStore
+/// * `ctx` - Request context containing CLI source and actor information
+/// * `command_name` - Name of the CLI command being executed
+/// * `args` - Command arguments (sanitized, no sensitive data)
+pub async fn log_cli_session_start(
+    store: &AuditStore,
+    ctx: &RequestContext,
+    command_name: &str,
+    args: Vec<String>,
+) -> Result<(), AuditError> {
+    let mut event = AuditEvent::new(EventType::CliSessionStart);
+    event.user_id = Some(ctx.actor_id.clone());
+    event.ip_address = ctx.ip_address.clone();
+    event.data.insert("command_name".to_string(), json!(command_name));
+    event.data.insert("args".to_string(), json!(args));
+    event.data.insert("source".to_string(), json!("CLI"));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id));
+    
+    store.write_event(event).await
+}
+
+/// Log CLI session end
+///
+/// # Arguments
+/// * `store` - Reference to the AuditStore
+/// * `ctx` - Request context containing CLI source and actor information
+/// * `command_name` - Name of the CLI command that completed
+/// * `success` - Whether the command completed successfully
+/// * `error_message` - Optional error message if the command failed
+pub async fn log_cli_session_end(
+    store: &AuditStore,
+    ctx: &RequestContext,
+    command_name: &str,
+    success: bool,
+    error_message: Option<String>,
+) -> Result<(), AuditError> {
+    let mut event = AuditEvent::new(EventType::CliSessionEnd);
+    event.user_id = Some(ctx.actor_id.clone());
+    event.ip_address = ctx.ip_address.clone();
+    event.data.insert("command_name".to_string(), json!(command_name));
+    event.data.insert("success".to_string(), json!(success));
+    event.data.insert("source".to_string(), json!("CLI"));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id));
+    
+    if let Some(error) = error_message {
+        event.data.insert("error_message".to_string(), json!(error));
+    }
+    
+    store.write_event(event).await
+}
+
+/// Log user creation (primitive operation)
+///
+/// # Arguments
+/// * `store` - Reference to the AuditStore
+/// * `ctx` - Request context containing source and actor information
+/// * `user_id` - ID of the created user
+/// * `username` - Username of the created user
+pub async fn log_user_created(
+    store: &AuditStore,
+    ctx: &RequestContext,
+    user_id: &str,
+    username: &str,
+) -> Result<(), AuditError> {
+    let mut event = AuditEvent::new(EventType::UserCreated);
+    event.user_id = Some(ctx.actor_id.clone());
+    event.ip_address = ctx.ip_address.clone();
+    event.data.insert("target_user_id".to_string(), json!(user_id));
+    event.data.insert("username".to_string(), json!(username));
+    event.data.insert("source".to_string(), json!(format!("{:?}", ctx.source)));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id));
+    
+    store.write_event(event).await
+}
+
+/// Log privilege change (assignment/removal)
+///
+/// Logs the before and after state of all privilege flags.
+/// This provides a complete audit trail of what changed.
+///
+/// # Arguments
+/// * `store` - Reference to the AuditStore
+/// * `ctx` - Request context containing source and actor information
+/// * `target_user_id` - ID of the user whose privileges changed
+/// * `old_is_owner` - Previous owner flag value
+/// * `new_is_owner` - New owner flag value
+/// * `old_is_system_admin` - Previous system admin flag value
+/// * `new_is_system_admin` - New system admin flag value
+/// * `old_is_role_admin` - Previous role admin flag value
+/// * `new_is_role_admin` - New role admin flag value
+pub async fn log_privileges_changed(
+    store: &AuditStore,
+    ctx: &RequestContext,
+    target_user_id: &str,
+    old_is_owner: bool,
+    new_is_owner: bool,
+    old_is_system_admin: bool,
+    new_is_system_admin: bool,
+    old_is_role_admin: bool,
+    new_is_role_admin: bool,
+) -> Result<(), AuditError> {
+    let mut event = AuditEvent::new(EventType::PrivilegesChanged);
+    event.user_id = Some(ctx.actor_id.clone());
+    event.ip_address = ctx.ip_address.clone();
+    event.data.insert("target_user_id".to_string(), json!(target_user_id));
+    event.data.insert("old_is_owner".to_string(), json!(old_is_owner));
+    event.data.insert("new_is_owner".to_string(), json!(new_is_owner));
+    event.data.insert("old_is_system_admin".to_string(), json!(old_is_system_admin));
+    event.data.insert("new_is_system_admin".to_string(), json!(new_is_system_admin));
+    event.data.insert("old_is_role_admin".to_string(), json!(old_is_role_admin));
+    event.data.insert("new_is_role_admin".to_string(), json!(new_is_role_admin));
+    event.data.insert("source".to_string(), json!(format!("{:?}", ctx.source)));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id));
+    
+    store.write_event(event).await
+}
+
+/// Log operation rollback
+///
+/// # Arguments
+/// * `store` - Reference to the AuditStore
+/// * `ctx` - Request context containing source and actor information
+/// * `operation_type` - Type of operation that was rolled back (e.g., "user_creation_with_privileges")
+/// * `reason` - Reason for rollback (e.g., "privilege_assignment_failed")
+/// * `affected_user_id` - User ID involved in the rolled-back operation (if applicable)
+pub async fn log_operation_rolled_back(
+    store: &AuditStore,
+    ctx: &RequestContext,
+    operation_type: &str,
+    reason: &str,
+    affected_user_id: Option<&str>,
+) -> Result<(), AuditError> {
+    let mut event = AuditEvent::new(EventType::OperationRolledBack);
+    event.user_id = Some(ctx.actor_id.clone());
+    event.ip_address = ctx.ip_address.clone();
+    event.data.insert("operation_type".to_string(), json!(operation_type));
+    event.data.insert("reason".to_string(), json!(reason));
+    event.data.insert("source".to_string(), json!(format!("{:?}", ctx.source)));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id));
+    
+    if let Some(user_id) = affected_user_id {
+        event.data.insert("affected_user_id".to_string(), json!(user_id));
+    }
     
     store.write_event(event).await
 }

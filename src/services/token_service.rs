@@ -31,17 +31,29 @@ impl TokenService {
         }
     }
     
-    /// Generate a JWT for the given user_id
+    /// Generate a JWT for the given user with admin roles
     /// 
     /// Logs JWT issuance to audit database at point of action.
     /// 
     /// # Arguments
     /// * `user_id` - The UUID of the user
+    /// * `is_owner` - Owner role flag
+    /// * `is_system_admin` - System Admin role flag
+    /// * `is_role_admin` - Role Admin role flag
+    /// * `app_roles` - Application roles (list of role names)
     /// * `ip_address` - Client IP address for audit logging
     /// 
     /// # Returns
     /// * `Result<(String, String), AuthError>` - Tuple of (encoded JWT, JWT ID) or an error
-    pub async fn generate_jwt(&self, user_id: &Uuid, ip_address: Option<String>) -> Result<(String, String), AuthError> {
+    pub async fn generate_jwt(
+        &self,
+        user_id: &Uuid,
+        is_owner: bool,
+        is_system_admin: bool,
+        is_role_admin: bool,
+        app_roles: Vec<String>,
+        ip_address: Option<String>,
+    ) -> Result<(String, String), AuthError> {
         let now = Utc::now().timestamp();
         let expiration = now + (self.jwt_expiration_minutes * 60);
         
@@ -57,6 +69,10 @@ impl TokenService {
             exp: expiration,
             iat: now,
             jti: Some(jti.clone()),
+            is_owner,
+            is_system_admin,
+            is_role_admin,
+            app_roles,
         };
         
         let token = encode(
@@ -220,14 +236,14 @@ mod tests {
     use super::*;
     use jsonwebtoken::{decode, Validation, DecodingKey, Algorithm};
     use sea_orm::Database;
-    use migration::MigratorTrait;
+    use migration::{AuditMigrator, MigratorTrait};
 
     async fn create_test_token_service() -> TokenService {
         let audit_db = Database::connect("sqlite::memory:")
             .await
             .expect("Failed to create audit database");
         
-        migration::Migrator::up(&audit_db, None)
+        AuditMigrator::up(&audit_db, None)
             .await
             .expect("Failed to run audit migrations");
         
@@ -245,7 +261,7 @@ mod tests {
         let token_manager = create_test_token_service().await;
         let user_id = Uuid::new_v4();
         
-        let result = token_manager.generate_jwt(&user_id, None).await;
+        let result = token_manager.generate_jwt(&user_id, false, false, false, vec![], None).await;
         
         assert!(result.is_ok());
         let (token, jwt_id) = result.unwrap();
@@ -271,7 +287,7 @@ mod tests {
         let token_manager = create_test_token_service().await;
         let user_id = Uuid::new_v4();
         
-        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, None).await.unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, false, false, false, vec![], None).await.unwrap();
         
         // Decode and verify user_id in sub claim
         let mut validation = Validation::new(Algorithm::HS256);
@@ -291,7 +307,7 @@ mod tests {
         let token_manager = create_test_token_service().await;
         let user_id = Uuid::new_v4();
         
-        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, None).await.unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, false, false, false, vec![], None).await.unwrap();
         
         // Decode and verify expiration
         let mut validation = Validation::new(Algorithm::HS256);
@@ -313,7 +329,7 @@ mod tests {
         let user_id = Uuid::new_v4();
         
         let before = Utc::now().timestamp();
-        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, None).await.unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, false, false, false, vec![], None).await.unwrap();
         let after = Utc::now().timestamp();
         
         // Decode and verify iat is within reasonable range
@@ -335,7 +351,7 @@ mod tests {
         let token_manager = create_test_token_service().await;
         let user_id = Uuid::new_v4();
         
-        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, None).await.unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, false, false, false, vec![], None).await.unwrap();
         let result = token_manager.validate_jwt(&token).await;
         
         assert!(result.is_ok());
@@ -346,7 +362,7 @@ mod tests {
         let token_manager = create_test_token_service().await;
         let user_id = Uuid::new_v4();
         
-        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, None).await.unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, false, false, false, vec![], None).await.unwrap();
         let claims = token_manager.validate_jwt(&token).await.unwrap();
         
         assert_eq!(claims.sub, user_id.to_string());
@@ -361,7 +377,7 @@ mod tests {
         let audit_db = Database::connect("sqlite::memory:")
             .await
             .expect("Failed to create audit database");
-        migration::Migrator::up(&audit_db, None)
+        AuditMigrator::up(&audit_db, None)
             .await
             .expect("Failed to run audit migrations");
         let audit_store = Arc::new(AuditStore::new(audit_db));
@@ -374,7 +390,7 @@ mod tests {
         let user_id = Uuid::new_v4();
         
         // Generate token with one secret
-        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, None).await.unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, false, false, false, vec![], None).await.unwrap();
         
         // Try to validate with different secret
         let result = wrong_token_manager.validate_jwt(&token).await;
@@ -399,6 +415,10 @@ mod tests {
             exp: now - 3600, // Expired 1 hour ago
             iat: now - 7200, // Issued 2 hours ago
             jti: Some(Uuid::new_v4().to_string()),
+            is_owner: false,
+            is_system_admin: false,
+            is_role_admin: false,
+            app_roles: vec![],
         };
         
         let expired_token = encode(
@@ -489,11 +509,11 @@ mod tests {
         let token = "test-refresh-token-12345";
         
         let audit_db1 = Database::connect("sqlite::memory:").await.expect("Failed to create audit database");
-        migration::Migrator::up(&audit_db1, None).await.expect("Failed to run audit migrations");
+        AuditMigrator::up(&audit_db1, None).await.expect("Failed to run audit migrations");
         let audit_store1 = Arc::new(AuditStore::new(audit_db1));
         
         let audit_db2 = Database::connect("sqlite::memory:").await.expect("Failed to create audit database");
-        migration::Migrator::up(&audit_db2, None).await.expect("Failed to run audit migrations");
+        AuditMigrator::up(&audit_db2, None).await.expect("Failed to run audit migrations");
         let audit_store2 = Arc::new(AuditStore::new(audit_db2));
         
         let token_manager1 = TokenService::new(
@@ -520,11 +540,11 @@ mod tests {
         let token = "malicious-token-attempt";
         
         let audit_db1 = Database::connect("sqlite::memory:").await.expect("Failed to create audit database");
-        migration::Migrator::up(&audit_db1, None).await.expect("Failed to run audit migrations");
+        AuditMigrator::up(&audit_db1, None).await.expect("Failed to run audit migrations");
         let audit_store1 = Arc::new(AuditStore::new(audit_db1));
         
         let audit_db2 = Database::connect("sqlite::memory:").await.expect("Failed to create audit database");
-        migration::Migrator::up(&audit_db2, None).await.expect("Failed to run audit migrations");
+        AuditMigrator::up(&audit_db2, None).await.expect("Failed to run audit migrations");
         let audit_store2 = Arc::new(AuditStore::new(audit_db2));
         
         // Attacker tries to mint a token with wrong secret
@@ -557,11 +577,11 @@ mod tests {
         let secret = "shared-refresh-secret-minimum-32-c";
         
         let audit_db1 = Database::connect("sqlite::memory:").await.expect("Failed to create audit database");
-        migration::Migrator::up(&audit_db1, None).await.expect("Failed to run audit migrations");
+        AuditMigrator::up(&audit_db1, None).await.expect("Failed to run audit migrations");
         let audit_store1 = Arc::new(AuditStore::new(audit_db1));
         
         let audit_db2 = Database::connect("sqlite::memory:").await.expect("Failed to create audit database");
-        migration::Migrator::up(&audit_db2, None).await.expect("Failed to run audit migrations");
+        AuditMigrator::up(&audit_db2, None).await.expect("Failed to run audit migrations");
         let audit_store2 = Arc::new(AuditStore::new(audit_db2));
         
         // Create multiple TokenService instances with same secret
@@ -653,6 +673,68 @@ mod tests {
         // Display should show a human-readable summary
         assert!(display_output.contains("jwt_expiration: 15min"));
         assert!(display_output.contains("refresh_expiration: 7days"));
+    }
+
+    #[tokio::test]
+    async fn test_jwt_includes_admin_roles() {
+        let token_manager = create_test_token_service().await;
+        let user_id = Uuid::new_v4();
+        
+        // Generate JWT with admin roles
+        let (token, _jwt_id) = token_manager.generate_jwt(
+            &user_id,
+            true,  // is_owner
+            true,  // is_system_admin
+            false, // is_role_admin
+            vec!["editor".to_string(), "viewer".to_string()],
+            None
+        ).await.unwrap();
+        
+        // Decode and verify admin roles in claims
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.validate_exp = false;
+        
+        let decoded = decode::<Claims>(
+            &token,
+            &DecodingKey::from_secret("test-secret-key-minimum-32-characters-long".as_bytes()),
+            &validation,
+        ).unwrap();
+        
+        assert_eq!(decoded.claims.is_owner, true);
+        assert_eq!(decoded.claims.is_system_admin, true);
+        assert_eq!(decoded.claims.is_role_admin, false);
+        assert_eq!(decoded.claims.app_roles, vec!["editor".to_string(), "viewer".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_jwt_with_no_admin_roles() {
+        let token_manager = create_test_token_service().await;
+        let user_id = Uuid::new_v4();
+        
+        // Generate JWT with no admin roles
+        let (token, _jwt_id) = token_manager.generate_jwt(
+            &user_id,
+            false, // is_owner
+            false, // is_system_admin
+            false, // is_role_admin
+            vec![],
+            None
+        ).await.unwrap();
+        
+        // Decode and verify no admin roles in claims
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.validate_exp = false;
+        
+        let decoded = decode::<Claims>(
+            &token,
+            &DecodingKey::from_secret("test-secret-key-minimum-32-characters-long".as_bytes()),
+            &validation,
+        ).unwrap();
+        
+        assert_eq!(decoded.claims.is_owner, false);
+        assert_eq!(decoded.claims.is_system_admin, false);
+        assert_eq!(decoded.claims.is_role_admin, false);
+        assert_eq!(decoded.claims.app_roles.len(), 0);
     }
 }
 

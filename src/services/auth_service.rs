@@ -110,8 +110,26 @@ impl AuthService {
         let user_id = Uuid::parse_str(&user_id_str)
             .map_err(|e| AuthError::internal_error(format!("Invalid user_id format: {}", e)))?;
         
-        // Generate JWT with audit logging at point of action
-        let (access_token, jwt_id) = self.token_service.generate_jwt(&user_id, ctx.ip_address.clone()).await?;
+        // Fetch user data to get admin roles
+        let user = self.credential_store.get_user_by_id(&user_id_str).await?;
+        
+        // Parse app_roles from JSON
+        let app_roles = if let Some(roles_json) = &user.app_roles {
+            serde_json::from_str::<Vec<String>>(roles_json)
+                .unwrap_or_else(|_| vec![])
+        } else {
+            vec![]
+        };
+        
+        // Generate JWT with admin roles and audit logging at point of action
+        let (access_token, jwt_id) = self.token_service.generate_jwt(
+            &user_id,
+            user.is_owner,
+            user.is_system_admin,
+            user.is_role_admin,
+            app_roles,
+            ctx.ip_address.clone(),
+        ).await?;
         
         let refresh_token = self.token_service.generate_refresh_token();
         
@@ -155,8 +173,26 @@ impl AuthService {
         let user_id = Uuid::parse_str(&user_id_str)
             .map_err(|e| AuthError::internal_error(format!("Invalid user_id format: {}", e)))?;
         
-        // Generate JWT with audit logging at point of action
-        let (access_token, _jwt_id) = self.token_service.generate_jwt(&user_id, ctx.ip_address.clone()).await?;
+        // Fetch user data to get admin roles
+        let user = self.credential_store.get_user_by_id(&user_id_str).await?;
+        
+        // Parse app_roles from JSON
+        let app_roles = if let Some(roles_json) = &user.app_roles {
+            serde_json::from_str::<Vec<String>>(roles_json)
+                .unwrap_or_else(|_| vec![])
+        } else {
+            vec![]
+        };
+        
+        // Generate JWT with admin roles and audit logging at point of action
+        let (access_token, _jwt_id) = self.token_service.generate_jwt(
+            &user_id,
+            user.is_owner,
+            user.is_system_admin,
+            user.is_role_admin,
+            app_roles,
+            ctx.ip_address.clone(),
+        ).await?;
         
         Ok(access_token)
     }

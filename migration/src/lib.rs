@@ -1,18 +1,26 @@
 pub use sea_orm_migration::prelude::*;
 
-mod m20240101_000001_create_users;
-mod m20240101_000002_create_refresh_tokens;
-mod m20240101_000003_create_audit_events;
+mod m20250123_000001_create_auth_schema;
+mod m20250123_000002_create_audit_schema;
 
-pub struct Migrator;
+pub struct AuthMigrator;
 
 #[async_trait::async_trait]
-impl MigratorTrait for Migrator {
+impl MigratorTrait for AuthMigrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         vec![
-            Box::new(m20240101_000001_create_users::Migration),
-            Box::new(m20240101_000002_create_refresh_tokens::Migration),
-            Box::new(m20240101_000003_create_audit_events::Migration),
+            Box::new(m20250123_000001_create_auth_schema::Migration),
+        ]
+    }
+}
+
+pub struct AuditMigrator;
+
+#[async_trait::async_trait]
+impl MigratorTrait for AuditMigrator {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+        vec![
+            Box::new(m20250123_000002_create_audit_schema::Migration),
         ]
     }
 }

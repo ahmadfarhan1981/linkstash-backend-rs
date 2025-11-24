@@ -12,6 +12,19 @@ pub enum EventType {
     RefreshTokenIssued,
     RefreshTokenRevoked,
     RefreshTokenValidationFailure,
+    // Bootstrap and owner management events
+    BootstrapCompleted,
+    OwnerActivated,
+    OwnerDeactivated,
+    AdminRoleAssigned,
+    AdminRoleRemoved,
+    // CLI session events
+    CliSessionStart,
+    CliSessionEnd,
+    // User management events
+    UserCreated,
+    PrivilegesChanged,
+    OperationRolledBack,
     Custom(String),
 }
 
@@ -27,6 +40,16 @@ impl EventType {
             Self::RefreshTokenIssued => "refresh_token_issued",
             Self::RefreshTokenRevoked => "refresh_token_revoked",
             Self::RefreshTokenValidationFailure => "refresh_token_validation_failure",
+            Self::BootstrapCompleted => "bootstrap_completed",
+            Self::OwnerActivated => "owner_activated",
+            Self::OwnerDeactivated => "owner_deactivated",
+            Self::AdminRoleAssigned => "admin_role_assigned",
+            Self::AdminRoleRemoved => "admin_role_removed",
+            Self::CliSessionStart => "cli_session_start",
+            Self::CliSessionEnd => "cli_session_end",
+            Self::UserCreated => "user_created",
+            Self::PrivilegesChanged => "privileges_changed",
+            Self::OperationRolledBack => "operation_rolled_back",
             Self::Custom(s) => s.as_str(),
         }
     }

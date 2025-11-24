@@ -4,11 +4,13 @@ mod types;
 mod errors;
 mod stores;
 mod services;
+mod cli;
 
-use poem::{Route, Server, handler, listener::{self, TcpListener}, web::Html};
+use poem::{Route, Server, handler, listener::TcpListener, web::Html};
 use poem_openapi::OpenApiService;
 use api::{HealthApi, AuthApi};
 use config::{SecretManager, init_logging, init_database, init_audit_database};
+use clap::Parser;
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
@@ -21,6 +23,32 @@ async fn main() -> Result<(), std::io::Error> {
     // Initialize databases
     let db = init_database().await?;
     let audit_db = init_audit_database().await?;
+    
+    // Check if CLI arguments are present
+    let args: Vec<String> = std::env::args().collect();
+    
+    // If CLI arguments present (more than just the binary name), run CLI mode
+    if args.len() > 1 {
+        // Initialize secrets for CLI mode
+        let secret_manager = SecretManager::init()
+            .expect("Failed to initialize secrets. Please ensure all required environment variables are set with valid values.");
+        
+        // Parse CLI arguments
+        let cli = cli::Cli::parse();
+        
+        // Execute CLI command
+        match cli::execute_command(cli, &db, &audit_db, &secret_manager).await {
+            Ok(()) => {
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+    
+    // No CLI arguments - run server mode
     
     // Initialize secrets
     let secret_manager = std::sync::Arc::new(

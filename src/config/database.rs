@@ -1,5 +1,5 @@
 use sea_orm::{Database, DatabaseConnection};
-use migration::{Migrator, MigratorTrait};
+use migration::{AuthMigrator, AuditMigrator, MigratorTrait};
 
 /// Initialize the main database connection and run migrations
 /// 
@@ -14,7 +14,7 @@ pub async fn init_database() -> Result<DatabaseConnection, std::io::Error> {
     
     tracing::info!("Connected to database: {}", database_url);
     
-    Migrator::up(&db, None)
+    AuthMigrator::up(&db, None)
         .await
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to run migrations: {}", e)))?;
     
@@ -37,7 +37,7 @@ pub async fn init_audit_database() -> Result<DatabaseConnection, std::io::Error>
     
     tracing::info!("Connected to audit database: {}", audit_database_url);
     
-    Migrator::up(&audit_db, None)
+    AuditMigrator::up(&audit_db, None)
         .await
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to run audit database migrations: {}", e)))?;
     
