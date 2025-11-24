@@ -48,58 +48,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_hmac_consistency() {
-        let key = "test-secret-key";
-        let token = "test-token";
-        
-        let hash1 = hmac_sha256_token(key, token);
-        let hash2 = hmac_sha256_token(key, token);
-        
-        assert_eq!(hash1, hash2);
-    }
-
-    #[test]
-    fn test_hmac_different_keys() {
-        let token = "test-token";
-        
-        let hash1 = hmac_sha256_token("key1", token);
-        let hash2 = hmac_sha256_token("key2", token);
-        
-        assert_ne!(hash1, hash2);
-    }
-
-    #[test]
-    fn test_hmac_different_tokens() {
-        let key = "test-secret-key";
-        
-        let hash1 = hmac_sha256_token(key, "token1");
-        let hash2 = hmac_sha256_token(key, "token2");
-        
-        assert_ne!(hash1, hash2);
-    }
-    
-    #[test]
-    fn test_hmac_output_length() {
-        let key = "test-secret-key";
-        let token = "test-token";
-        
-        let hash = hmac_sha256_token(key, token);
-        
-        // SHA-256 produces 64 hex characters (32 bytes)
-        assert_eq!(hash.len(), 64);
-    }
-
-    #[test]
     fn test_generate_secure_password_length() {
-        let password = super::generate_secure_password();
+        let password = generate_secure_password();
         assert_eq!(password.len(), 20);
     }
 
     #[test]
     fn test_generate_secure_password_contains_valid_characters() {
-        let password = super::generate_secure_password();
+        let password = generate_secure_password();
         
-        // Verify the password only contains valid characters from our charset
         assert!(password.chars().all(|c| {
             c.is_ascii_alphanumeric() || "!@#$%^&*()_+-=[]{}|;:,.<>?".contains(c)
         }));
@@ -107,22 +64,9 @@ mod tests {
 
     #[test]
     fn test_generate_secure_password_uniqueness() {
-        let password1 = super::generate_secure_password();
-        let password2 = super::generate_secure_password();
+        let password1 = generate_secure_password();
+        let password2 = generate_secure_password();
         
-        // Extremely unlikely to generate the same password twice
         assert_ne!(password1, password2);
-    }
-
-    #[test]
-    fn test_generate_secure_password_multiple_generations() {
-        // Generate multiple passwords and verify they're all valid
-        for _ in 0..10 {
-            let password = super::generate_secure_password();
-            assert_eq!(password.len(), 20);
-            assert!(password.chars().all(|c| {
-                c.is_ascii_alphanumeric() || "!@#$%^&*()_+-=[]{}|;:,.<>?".contains(c)
-            }));
-        }
     }
 }

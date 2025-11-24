@@ -1,31 +1,11 @@
-use linkstash_backend::stores::{SystemConfigStore, AuditStore};
-use sea_orm::{Database, DatabaseConnection};
-use migration::{Migrator, MigratorTrait};
-use std::sync::Arc;
+mod common;
+
+use linkstash_backend::stores::SystemConfigStore;
+use sea_orm::DatabaseConnection;
 
 async fn setup_test_db() -> (DatabaseConnection, SystemConfigStore) {
-    // Create in-memory SQLite database for testing
-    let db = Database::connect("sqlite::memory:")
-        .await
-        .expect("Failed to create test database");
-    
-    // Run migrations
-    Migrator::up(&db, None)
-        .await
-        .expect("Failed to run migrations");
-    
-    // Create in-memory audit database for testing
-    let audit_db = Database::connect("sqlite::memory:")
-        .await
-        .expect("Failed to create audit database");
-    
-    // Run audit migrations
-    Migrator::up(&audit_db, None)
-        .await
-        .expect("Failed to run audit migrations");
-    
-    // Create system config store with audit store
-    let audit_store = Arc::new(AuditStore::new(audit_db));
+    let db = common::setup_test_auth_db().await;
+    let audit_store = common::create_test_audit_store().await;
     let system_config_store = SystemConfigStore::new(db.clone(), audit_store);
     
     (db, system_config_store)

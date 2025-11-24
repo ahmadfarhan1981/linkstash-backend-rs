@@ -176,34 +176,11 @@ impl std::fmt::Display for SystemConfigStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm::{Database, DatabaseConnection};
-    use migration::{AuthMigrator, MigratorTrait};
+    use crate::test::utils::setup_test_stores;
 
-    async fn setup_test_db() -> (DatabaseConnection, SystemConfigStore) {
-        // Create in-memory SQLite database for testing
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create test database");
-        
-        // Run migrations
-        AuthMigrator::up(&db, None)
-            .await
-            .expect("Failed to run migrations");
-        
-        // Create in-memory audit database for testing
-        let audit_db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create audit database");
-        
-        // Run audit migrations
-        migration::AuditMigrator::up(&audit_db, None)
-            .await
-            .expect("Failed to run audit migrations");
-        
-        // Create system config store with audit store
-        let audit_store = Arc::new(AuditStore::new(audit_db));
-        let system_config_store = SystemConfigStore::new(db.clone(), audit_store);
-        
+    async fn setup_test_db() -> (sea_orm::DatabaseConnection, Arc<SystemConfigStore>) {
+        let (db, _audit_db, _credential_store, audit_store) = setup_test_stores().await;
+        let system_config_store = Arc::new(SystemConfigStore::new(db.clone(), audit_store));
         (db, system_config_store)
     }
 

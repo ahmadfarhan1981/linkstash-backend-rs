@@ -217,63 +217,13 @@ impl AuthApi {
 mod tests {
     use super::*;
     use poem_openapi::payload::Json;
-    use sea_orm::{Database, DatabaseConnection, EntityTrait, ColumnTrait, QueryFilter};
-    use migration::{AuthMigrator, AuditMigrator, MigratorTrait};
+    use sea_orm::{DatabaseConnection, EntityTrait, ColumnTrait, QueryFilter};
     use crate::services::AuthService;
-    use crate::stores::{AuditStore, CredentialStore};
+    use crate::stores::CredentialStore;
+    use crate::test::utils::setup_test_auth_services;
 
     async fn setup_test_db() -> (DatabaseConnection, DatabaseConnection, Arc<AuthService>, Arc<TokenService>, Arc<CredentialStore>) {
-        
-        // Create in-memory SQLite database for testing
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create test database");
-        
-        // Run migrations
-        AuthMigrator::up(&db, None)
-            .await
-            .expect("Failed to run migrations");
-        
-        // Create in-memory audit database for testing
-        let audit_db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create audit test database");
-        
-        // Run migrations on audit database
-        AuditMigrator::up(&audit_db, None)
-            .await
-            .expect("Failed to run audit migrations");
-        
-        // Create audit store
-        let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
-        
-        // Create credential store with test password pepper
-        let password_pepper = "test-pepper-for-api-tests".to_string();
-        let credential_store = Arc::new(CredentialStore::new(db.clone(), password_pepper, audit_store.clone()));
-        
-        // Create token manager with test secret and refresh token secret
-        let token_service = Arc::new(TokenService::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "test-refresh-secret-minimum-32-chars".to_string(),
-            audit_store.clone(),
-        ));
-        
-        // Create audit store
-        let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
-        
-        // Create auth service
-        let auth_service = Arc::new(AuthService::new(
-            credential_store.clone(),
-            token_service.clone(),
-            audit_store.clone(),
-        ));
-        
-        // Add test user
-        credential_store
-            .add_user("testuser".to_string(), "testpass".to_string())
-            .await
-            .expect("Failed to create test user");
-        
+        let (db, audit_db, credential_store, _audit_store, auth_service, token_service) = setup_test_auth_services().await;
         (db, audit_db, auth_service, token_service, credential_store)
     }
     

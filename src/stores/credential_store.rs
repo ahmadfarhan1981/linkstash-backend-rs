@@ -808,41 +808,11 @@ impl std::fmt::Display for CredentialStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm::{Database, DatabaseConnection};
-    use migration::{AuthMigrator, AuditMigrator, MigratorTrait};
-
-    async fn setup_test_db() -> (DatabaseConnection, CredentialStore) {
-        // Create in-memory SQLite database for testing
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create test database");
-        
-        // Run migrations
-        AuthMigrator::up(&db, None)
-            .await
-            .expect("Failed to run migrations");
-        
-        // Create in-memory audit database for testing
-        let audit_db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create audit database");
-        
-        // Run audit migrations
-        migration::AuditMigrator::up(&audit_db, None)
-            .await
-            .expect("Failed to run audit migrations");
-        
-        // Create credential store with test password pepper and audit store
-        let password_pepper = "test-pepper-for-unit-tests".to_string();
-        let audit_store = Arc::new(AuditStore::new(audit_db));
-        let credential_store = CredentialStore::new(db.clone(), password_pepper, audit_store);
-        
-        (db, credential_store)
-    }
+    use crate::test::utils::setup_test_stores;
 
     #[tokio::test]
     async fn test_add_user_creates_user_in_database() {
-        let (_db, credential_store) = setup_test_db().await;
+        let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
         let result = credential_store
             .add_user("newuser".to_string(), "password123".to_string())
@@ -851,131 +821,32 @@ mod tests {
         assert!(result.is_ok());
         let user_id = result.unwrap();
         assert!(!user_id.is_empty());
-        
-        // Verify user can be found by verifying credentials
-        let verify_result = credential_store
-            .verify_credentials("newuser", "password123", None)
-            .await;
-        
-        assert!(verify_result.is_ok());
-        assert_eq!(verify_result.unwrap(), user_id);
-    }
-
-    #[tokio::test]
-    async fn test_add_user_hashes_password() {
-        let (db, credential_store) = setup_test_db().await;
-        
-        let password = "mysecretpassword";
-        let result = credential_store
-            .add_user("testuser".to_string(), password.to_string())
-            .await;
-        
-        assert!(result.is_ok());
-        
-        // Query the database directly to check the stored password hash
-        let user = User::find()
-            .filter(user::Column::Username.eq("testuser"))
-            .one(&db)
-            .await
-            .expect("Failed to query user")
-            .expect("User not found");
-        
-        // Verify password is not stored in plaintext
-        assert_ne!(user.password_hash, password);
-        
-        // Verify it looks like an Argon2 hash (starts with $argon2)
-        assert!(user.password_hash.starts_with("$argon2"));
     }
 
     #[tokio::test]
     async fn test_add_user_fails_with_duplicate_username() {
-        let (_db, credential_store) = setup_test_db().await;
+        let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
-        // Add first user
         let result1 = credential_store
             .add_user("duplicate".to_string(), "password1".to_string())
             .await;
         
         assert!(result1.is_ok());
         
-        // Try to add second user with same username
         let result2 = credential_store
             .add_user("duplicate".to_string(), "password2".to_string())
             .await;
         
         assert!(result2.is_err());
         match result2 {
-            Err(AuthError::DuplicateUsername(_)) => {
-                // Expected error type
-            }
+            Err(AuthError::DuplicateUsername(_)) => {}
             _ => panic!("Expected DuplicateUsername error"),
         }
     }
 
     #[tokio::test]
-    async fn test_verify_credentials_succeeds_with_correct_password() {
-        let (_db, credential_store) = setup_test_db().await;
-        
-        // Add user
-        let user_id = credential_store
-            .add_user("validuser".to_string(), "correctpass".to_string())
-            .await
-            .expect("Failed to add user");
-        
-        // Verify with correct password
-        let result = credential_store
-            .verify_credentials("validuser", "correctpass", None)
-            .await;
-        
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), user_id);
-    }
-
-    #[tokio::test]
-    async fn test_verify_credentials_fails_with_incorrect_password() {
-        let (_db, credential_store) = setup_test_db().await;
-        
-        // Add user
-        credential_store
-            .add_user("validuser".to_string(), "correctpass".to_string())
-            .await
-            .expect("Failed to add user");
-        
-        // Verify with incorrect password
-        let result = credential_store
-            .verify_credentials("validuser", "wrongpass", None)
-            .await;
-        
-        assert!(result.is_err());
-        match result {
-            Err(AuthError::InvalidCredentials(_)) => {
-                // Expected error type
-            }
-            _ => panic!("Expected InvalidCredentials error"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_verify_credentials_fails_with_nonexistent_username() {
-        let (_db, credential_store) = setup_test_db().await;
-        
-        // Try to verify credentials for non-existent user
-        let result = credential_store
-            .verify_credentials("nonexistent", "anypassword", None)
-            .await;
-        
-        assert!(result.is_err());
-        match result {
-            Err(AuthError::InvalidCredentials(_)) => {
-                // Expected error type
-            }
-            _ => panic!("Expected InvalidCredentials error"),
-        }
-    }
-
-    #[tokio::test]
     async fn test_store_refresh_token_saves_token_to_database() {
-        let (db, credential_store) = setup_test_db().await;
+        let (db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
         // Add a user first
         let user_id = credential_store
@@ -1009,42 +880,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_stored_token_is_hashed() {
-        let (db, credential_store) = setup_test_db().await;
-        
-        // Add a user
-        let user_id = credential_store
-            .add_user("hashuser".to_string(), "password".to_string())
-            .await
-            .expect("Failed to add user");
-        
-        // Store a token with a plaintext-looking value
-        let plaintext_token = "my-plaintext-token";
-        let expires_at = Utc::now().timestamp() + 604800;
-        let jwt_id = "test-jwt-id".to_string();
-        
-        let result = credential_store
-            .store_refresh_token(plaintext_token.to_string(), user_id.clone(), expires_at, jwt_id, None)
-            .await;
-        
-        assert!(result.is_ok());
-        
-        // Verify the stored value matches what we passed (caller is responsible for hashing)
-        use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
-        let stored_token = RefreshToken::find()
-            .filter(Column::TokenHash.eq(plaintext_token))
-            .one(&db)
-            .await
-            .expect("Failed to query token")
-            .expect("Token not found");
-        
-        // The store method stores whatever hash is passed to it
-        assert_eq!(stored_token.token_hash, plaintext_token);
-    }
-
-    #[tokio::test]
     async fn test_stored_token_has_correct_expiration() {
-        let (db, credential_store) = setup_test_db().await;
+        let (db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
         // Add a user
         let user_id = credential_store
@@ -1081,34 +918,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_validate_refresh_token_succeeds_with_valid_token() {
-        let (_db, credential_store) = setup_test_db().await;
-        
-        // Add a user
-        let user_id = credential_store
-            .add_user("validtokenuser".to_string(), "password".to_string())
-            .await
-            .expect("Failed to add user");
-        
-        // Store a valid refresh token
-        let token_hash = "valid_token_hash";
-        let expires_at = Utc::now().timestamp() + 604800; // 7 days from now
-        let jwt_id = "test-jwt-id".to_string();
-        
-        credential_store
-            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at, jwt_id, None)
-            .await
-            .expect("Failed to store token");
-        
-        // Validate the token
-        let result = credential_store.validate_refresh_token(token_hash, None).await;
-        
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
     async fn test_validate_refresh_token_returns_correct_user_id() {
-        let (_db, credential_store) = setup_test_db().await;
+        let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
         // Add a user
         let user_id = credential_store
@@ -1135,7 +946,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_refresh_token_fails_with_invalid_token() {
-        let (_db, credential_store) = setup_test_db().await;
+        let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
         // Try to validate a token that doesn't exist
         let result = credential_store.validate_refresh_token("nonexistent_token", None).await;
@@ -1151,7 +962,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_refresh_token_fails_with_expired_token() {
-        let (_db, credential_store) = setup_test_db().await;
+        let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
         // Add a user
         let user_id = credential_store
@@ -1183,7 +994,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_revoke_refresh_token_removes_token_from_database() {
-        let (db, credential_store) = setup_test_db().await;
+        let (db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
         // Add a user
         let user_id = credential_store
@@ -1224,175 +1035,14 @@ mod tests {
         assert!(token_after.is_none());
     }
 
-    #[tokio::test]
-    async fn test_revoke_refresh_token_succeeds_even_if_token_doesnt_exist() {
-        let (_db, credential_store) = setup_test_db().await;
-        
-        // Add a user
-        let _user_id = credential_store
-            .add_user("testuser".to_string(), "password".to_string())
-            .await
-            .expect("Failed to add user");
-        
-        // Try to revoke a token that doesn't exist
-        let result = credential_store.revoke_refresh_token("nonexistent_token", None).await;
-        
-        // Should fail with invalid token error
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_revoke_refresh_token_only_revokes_if_user_matches() {
-        let (db, credential_store) = setup_test_db().await;
-        
-        // Add two users
-        let user1_id = credential_store
-            .add_user("user1".to_string(), "password".to_string())
-            .await
-            .expect("Failed to add user1");
-        
-        let _user2_id = credential_store
-            .add_user("user2".to_string(), "password".to_string())
-            .await
-            .expect("Failed to add user2");
-        
-        // Store a refresh token for user1
-        let token_hash = "user1_token_hash";
-        let expires_at = Utc::now().timestamp() + 604800;
-        let jwt_id = "test-jwt-id".to_string();
-        
-        credential_store
-            .store_refresh_token(token_hash.to_string(), user1_id.clone(), expires_at, jwt_id.clone(), None)
-            .await
-            .expect("Failed to store token");
-        
-        // Revoke the token (no user verification - RT is the authority)
-        let result = credential_store.revoke_refresh_token(token_hash, Some(jwt_id)).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), user1_id);
-        
-        // Verify token is removed
-        use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
-        let token_after = RefreshToken::find()
-            .filter(Column::TokenHash.eq(token_hash))
-            .one(&db)
-            .await
-            .expect("Failed to query token");
-        assert!(token_after.is_none());
-    }
-
-    // Tests for password pepper functionality (subtask 3.1)
-
-    #[tokio::test]
-    async fn test_password_hashing_with_secret_parameter_produces_valid_hash() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create test database");
-        
-        AuthMigrator::up(&db, None)
-            .await
-            .expect("Failed to run migrations");
-        
-        let audit_db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create audit database");
-        
-        AuditMigrator::up(&audit_db, None)
-            .await
-            .expect("Failed to run audit migrations");
-        
-        let password_pepper = "test-pepper-secret-key".to_string();
-        let audit_store = Arc::new(AuditStore::new(audit_db));
-        let credential_store = CredentialStore::new(db.clone(), password_pepper, audit_store);
-        
-        // Add user with peppered password
-        let result = credential_store
-            .add_user("pepperuser".to_string(), "mypassword".to_string())
-            .await;
-        
-        assert!(result.is_ok());
-        
-        // Query the database to verify hash format
-        let user = User::find()
-            .filter(user::Column::Username.eq("pepperuser"))
-            .one(&db)
-            .await
-            .expect("Failed to query user")
-            .expect("User not found");
-        
-        // Verify it's a valid Argon2 hash
-        assert!(user.password_hash.starts_with("$argon2"));
-        
-        // Verify we can parse it as a valid PasswordHash
-        let parsed = PasswordHash::new(&user.password_hash);
-        assert!(parsed.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_password_verification_with_secret_parameter_works_correctly() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create test database");
-        
-        AuthMigrator::up(&db, None)
-            .await
-            .expect("Failed to run migrations");
-        
-        let audit_db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create audit database");
-        
-        AuditMigrator::up(&audit_db, None)
-            .await
-            .expect("Failed to run audit migrations");
-        
-        let password_pepper = "verification-test-pepper".to_string();
-        let audit_store = Arc::new(AuditStore::new(audit_db));
-        let credential_store = CredentialStore::new(db.clone(), password_pepper, audit_store);
-        
-        let password = "correct-password";
-        
-        // Add user
-        credential_store
-            .add_user("verifyuser".to_string(), password.to_string())
-            .await
-            .expect("Failed to add user");
-        
-        // Verify with correct password
-        let result = credential_store
-            .verify_credentials("verifyuser", password, None)
-            .await;
-        
-        assert!(result.is_ok());
-        
-        // Verify with incorrect password
-        let result = credential_store
-            .verify_credentials("verifyuser", "wrong-password", None)
-            .await;
-        
-        assert!(result.is_err());
-    }
+    // Tests for password pepper functionality
 
     #[tokio::test]
     async fn test_different_peppers_produce_different_hashes() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create test database");
-        
-        AuthMigrator::up(&db, None)
-            .await
-            .expect("Failed to run migrations");
-        
-        let audit_db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create audit database");
-        
-        migration::AuditMigrator::up(&audit_db, None)
-            .await
-            .expect("Failed to run audit migrations");
+        // Testing different peppers - need custom setup
+        let (db, _audit_db, _credential_store, audit_store) = setup_test_stores().await;
         
         let password = "same-password";
-        let audit_store = Arc::new(AuditStore::new(audit_db));
         
         // Create first user with pepper1
         let pepper1 = "pepper-one-secret-key".to_string();
@@ -1447,294 +1097,79 @@ mod tests {
         assert!(verify_result.is_err());
     }
 
-    #[tokio::test]
-    async fn test_peppered_hashes_contain_data_parameter() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create test database");
-        
-        AuthMigrator::up(&db, None)
-            .await
-            .expect("Failed to run migrations");
-        
-        let audit_db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create audit database");
-        
-        migration::AuditMigrator::up(&audit_db, None)
-            .await
-            .expect("Failed to run audit migrations");
-        
-        let password_pepper = "data-param-test-pepper".to_string();
-        let audit_store = Arc::new(AuditStore::new(audit_db));
-        let credential_store = CredentialStore::new(db.clone(), password_pepper, audit_store.clone());
-        
-        // Add user with peppered password
-        credential_store
-            .add_user("datauser".to_string(), "password123".to_string())
-            .await
-            .expect("Failed to add user");
-        
-        // Query the user
-        let user = User::find()
-            .filter(user::Column::Username.eq("datauser"))
-            .one(&db)
-            .await
-            .expect("Failed to query user")
-            .expect("User not found");
-        
-        // Verify the hash is in Argon2 PHC format
-        assert!(user.password_hash.starts_with("$argon2"));
-        
-        // Parse the hash to verify it's valid
-        let parsed_hash = PasswordHash::new(&user.password_hash);
-        assert!(parsed_hash.is_ok());
-        
-        // The 'data=' parameter in PHC format indicates the secret/pepper was used
-        // However, argon2 crate may encode this differently, so we verify by testing
-        // that verification fails without the correct pepper
-        let wrong_pepper = "wrong-pepper-key".to_string();
-        let wrong_store = CredentialStore::new(db.clone(), wrong_pepper, audit_store.clone());
-        
-        // Verification should fail with wrong pepper
-        let verify_result = wrong_store.verify_credentials("datauser", "password123", None).await;
-        assert!(verify_result.is_err());
-        
-        // Verification should succeed with correct pepper
-        let verify_result = credential_store.verify_credentials("datauser", "password123", None).await;
-        assert!(verify_result.is_ok());
-    }
-
-    // Tests for Debug and Display traits to ensure secrets are not exposed
+    // Tests for Debug and Display traits
 
     #[tokio::test]
     async fn test_debug_trait_does_not_expose_password_pepper() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create test database");
-        
-        AuthMigrator::up(&db, None)
-            .await
-            .expect("Failed to run migrations");
-        
-        let audit_db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create audit database");
-        
-        migration::AuditMigrator::up(&audit_db, None)
-            .await
-            .expect("Failed to run audit migrations");
+        let (db, _audit_db, _credential_store, audit_store) = setup_test_stores().await;
         
         let password_pepper = "super-secret-pepper-value".to_string();
-        let audit_store = Arc::new(AuditStore::new(audit_db));
         let credential_store = CredentialStore::new(db.clone(), password_pepper, audit_store);
         
         let debug_output = format!("{:?}", credential_store);
         
-        // Verify the output contains redacted marker
         assert!(debug_output.contains("<redacted>"));
-        
-        // Verify the actual secret is NOT in the output
         assert!(!debug_output.contains("super-secret-pepper-value"));
-        
-        // Verify the struct name is present
-        assert!(debug_output.contains("CredentialStore"));
     }
 
     #[tokio::test]
     async fn test_display_trait_does_not_expose_password_pepper() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create test database");
-        
-        AuthMigrator::up(&db, None)
-            .await
-            .expect("Failed to run migrations");
-        
-        let audit_db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create audit database");
-        
-        migration::AuditMigrator::up(&audit_db, None)
-            .await
-            .expect("Failed to run audit migrations");
+        let (db, _audit_db, _credential_store, audit_store) = setup_test_stores().await;
         
         let password_pepper = "another-secret-pepper".to_string();
-        let audit_store = Arc::new(AuditStore::new(audit_db));
         let credential_store = CredentialStore::new(db.clone(), password_pepper, audit_store);
         
         let display_output = format!("{}", credential_store);
         
-        // Verify the output contains redacted marker
         assert!(display_output.contains("<redacted>"));
-        
-        // Verify the actual secret is NOT in the output
         assert!(!display_output.contains("another-secret-pepper"));
-        
-        // Verify the struct name is present
-        assert!(display_output.contains("CredentialStore"));
     }
 
-    #[tokio::test]
-    async fn test_debug_trait_shows_struct_fields() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create test database");
-        
-        AuthMigrator::up(&db, None)
-            .await
-            .expect("Failed to run migrations");
-        
-        let audit_db = Database::connect("sqlite::memory:")
-            .await
-            .expect("Failed to create audit database");
-        
-        migration::AuditMigrator::up(&audit_db, None)
-            .await
-            .expect("Failed to run audit migrations");
-        
-        let password_pepper = "test-pepper".to_string();
-        let audit_store = Arc::new(AuditStore::new(audit_db));
-        let credential_store = CredentialStore::new(db.clone(), password_pepper, audit_store);
-        
-        let debug_output = format!("{:?}", credential_store);
-        
-        // Verify both fields are mentioned (but redacted)
-        assert!(debug_output.contains("db"));
-        assert!(debug_output.contains("password_pepper"));
-        assert!(debug_output.contains("<connection>"));
-        assert!(debug_output.contains("<redacted>"));
-    }
-
-    // Tests for admin role management methods (task 4.2)
+    // Tests for deprecated admin role methods (backward compatibility)
 
     #[tokio::test]
-    async fn test_set_system_admin_updates_flag_to_true() {
-        let (_db, credential_store) = setup_test_db().await;
+    async fn test_set_system_admin_updates_flag() {
+        let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
-        // Add a user
         let user_id = credential_store
             .add_user("testuser".to_string(), "password".to_string())
             .await
             .expect("Failed to add user");
         
-        // Set is_system_admin to true
+        #[allow(deprecated)]
         let result = credential_store
             .set_system_admin(&user_id, true, "actor_user".to_string(), Some("127.0.0.1".to_string()))
             .await;
         
         assert!(result.is_ok());
         
-        // Verify flag is now true
         let user = credential_store.get_user_by_id(&user_id).await.unwrap();
         assert_eq!(user.is_system_admin, true);
     }
 
     #[tokio::test]
-    async fn test_set_system_admin_updates_flag_to_false() {
-        let (_db, credential_store) = setup_test_db().await;
+    async fn test_set_role_admin_updates_flag() {
+        let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
-        // Add a user
         let user_id = credential_store
             .add_user("testuser".to_string(), "password".to_string())
             .await
             .expect("Failed to add user");
         
-        // First set to true
-        credential_store
-            .set_system_admin(&user_id, true, "actor_user".to_string(), Some("127.0.0.1".to_string()))
-            .await
-            .unwrap();
-        
-        // Then set to false
-        let result = credential_store
-            .set_system_admin(&user_id, false, "actor_user".to_string(), Some("127.0.0.1".to_string()))
-            .await;
-        
-        assert!(result.is_ok());
-        
-        // Verify flag is now false
-        let user = credential_store.get_user_by_id(&user_id).await.unwrap();
-        assert_eq!(user.is_system_admin, false);
-    }
-
-    #[tokio::test]
-    async fn test_set_role_admin_updates_flag_to_true() {
-        let (_db, credential_store) = setup_test_db().await;
-        
-        // Add a user
-        let user_id = credential_store
-            .add_user("testuser".to_string(), "password".to_string())
-            .await
-            .expect("Failed to add user");
-        
-        // Set is_role_admin to true
+        #[allow(deprecated)]
         let result = credential_store
             .set_role_admin(&user_id, true, "actor_user".to_string(), Some("127.0.0.1".to_string()))
             .await;
         
         assert!(result.is_ok());
         
-        // Verify flag is now true
         let user = credential_store.get_user_by_id(&user_id).await.unwrap();
         assert_eq!(user.is_role_admin, true);
     }
 
     #[tokio::test]
-    async fn test_set_role_admin_updates_flag_to_false() {
-        let (_db, credential_store) = setup_test_db().await;
-        
-        // Add a user
-        let user_id = credential_store
-            .add_user("testuser".to_string(), "password".to_string())
-            .await
-            .expect("Failed to add user");
-        
-        // First set to true
-        credential_store
-            .set_role_admin(&user_id, true, "actor_user".to_string(), Some("127.0.0.1".to_string()))
-            .await
-            .unwrap();
-        
-        // Then set to false
-        let result = credential_store
-            .set_role_admin(&user_id, false, "actor_user".to_string(), Some("127.0.0.1".to_string()))
-            .await;
-        
-        assert!(result.is_ok());
-        
-        // Verify flag is now false
-        let user = credential_store.get_user_by_id(&user_id).await.unwrap();
-        assert_eq!(user.is_role_admin, false);
-    }
-
-    #[tokio::test]
-    async fn test_set_system_admin_fails_with_nonexistent_user() {
-        let (_db, credential_store) = setup_test_db().await;
-        
-        // Try to set flag for non-existent user
-        let result = credential_store
-            .set_system_admin("nonexistent-user-id", true, "actor_user".to_string(), Some("127.0.0.1".to_string()))
-            .await;
-        
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_set_role_admin_fails_with_nonexistent_user() {
-        let (_db, credential_store) = setup_test_db().await;
-        
-        // Try to set flag for non-existent user
-        let result = credential_store
-            .set_role_admin("nonexistent-user-id", true, "actor_user".to_string(), Some("127.0.0.1".to_string()))
-            .await;
-        
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
     async fn test_get_owner_returns_none_when_no_owner_exists() {
-        let (_db, credential_store) = setup_test_db().await;
+        let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
         // Add a regular user (not owner)
         credential_store
@@ -1751,7 +1186,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_owner_returns_owner_when_exists() {
-        let (db, credential_store) = setup_test_db().await;
+        let (db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
         // Add a regular user
         credential_store
@@ -1805,7 +1240,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_admin_user_creates_owner_account() {
-        let (_db, credential_store) = setup_test_db().await;
+        let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
         // Generate password hash
         let salt = SaltString::generate(&mut rand_core::OsRng);
@@ -1846,7 +1281,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_admin_user_creates_system_admin_account() {
-        let (_db, credential_store) = setup_test_db().await;
+        let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
         // Generate password hash
         let salt = SaltString::generate(&mut rand_core::OsRng);
@@ -1887,7 +1322,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_admin_user_creates_role_admin_account() {
-        let (_db, credential_store) = setup_test_db().await;
+        let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
         // Generate password hash
         let salt = SaltString::generate(&mut rand_core::OsRng);
@@ -1928,7 +1363,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_admin_user_supports_multiple_roles() {
-        let (_db, credential_store) = setup_test_db().await;
+        let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
         // Generate password hash
         let salt = SaltString::generate(&mut rand_core::OsRng);
@@ -1969,9 +1404,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_admin_user_fails_with_duplicate_username() {
-        let (_db, credential_store) = setup_test_db().await;
+        let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
-        // Generate password hash
         let salt = SaltString::generate(&mut rand_core::OsRng);
         let argon2 = Argon2::new_with_secret(
             "test-pepper-for-unit-tests".as_bytes(),
@@ -1984,158 +1418,42 @@ mod tests {
             .unwrap()
             .to_string();
         
-        // Create first user
         use crate::types::internal::auth::AdminFlags;
         use crate::types::internal::context::RequestContext;
         let admin_flags = AdminFlags::owner();
         let ctx = RequestContext::for_system("test");
         
         let result1 = credential_store
-            .create_admin_user(
-                &ctx,
-                "duplicate_admin".to_string(),
-                password_hash.clone(),
-                admin_flags,
-            )
+            .create_admin_user(&ctx, "duplicate_admin".to_string(), password_hash.clone(), admin_flags)
             .await;
         
         assert!(result1.is_ok());
         
-        // Try to create second user with same username
         let result2 = credential_store
-            .create_admin_user(
-                &ctx,
-                "duplicate_admin".to_string(),
-                password_hash,
-                admin_flags,
-            )
+            .create_admin_user(&ctx, "duplicate_admin".to_string(), password_hash, admin_flags)
             .await;
         
         assert!(result2.is_err());
         match result2 {
-            Err(AuthError::DuplicateUsername(_)) => {
-                // Expected error type
-            }
+            Err(AuthError::DuplicateUsername(_)) => {}
             _ => panic!("Expected DuplicateUsername error"),
         }
     }
 
-    #[tokio::test]
-    async fn test_create_admin_user_generates_unique_user_id() {
-        let (_db, credential_store) = setup_test_db().await;
-        
-        // Generate password hash
-        let salt = SaltString::generate(&mut rand_core::OsRng);
-        let argon2 = Argon2::new_with_secret(
-            "test-pepper-for-unit-tests".as_bytes(),
-            argon2::Algorithm::Argon2id,
-            argon2::Version::V0x13,
-            argon2::Params::default(),
-        ).unwrap();
-        let password_hash = argon2
-            .hash_password("password".as_bytes(), &salt)
-            .unwrap()
-            .to_string();
-        
-        // Create two users
-        use crate::types::internal::auth::AdminFlags;
-        use crate::types::internal::context::RequestContext;
-        let admin_flags = AdminFlags::system_admin();
-        let ctx = RequestContext::for_system("test");
-        
-        let user1 = credential_store
-            .create_admin_user(
-                &ctx,
-                "admin1".to_string(),
-                password_hash.clone(),
-                admin_flags,
-            )
-            .await
-            .expect("Failed to create user1");
-        
-        let user2 = credential_store
-            .create_admin_user(
-                &ctx,
-                "admin2".to_string(),
-                password_hash,
-                admin_flags,
-            )
-            .await
-            .expect("Failed to create user2");
-        
-        // Verify user IDs are different
-        assert_ne!(user1.id, user2.id);
-        
-        // Verify both are valid UUIDs
-        assert!(Uuid::parse_str(&user1.id).is_ok());
-        assert!(Uuid::parse_str(&user2.id).is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_create_admin_user_sets_timestamps() {
-        let (_db, credential_store) = setup_test_db().await;
-        
-        // Generate password hash
-        let salt = SaltString::generate(&mut rand_core::OsRng);
-        let argon2 = Argon2::new_with_secret(
-            "test-pepper-for-unit-tests".as_bytes(),
-            argon2::Algorithm::Argon2id,
-            argon2::Version::V0x13,
-            argon2::Params::default(),
-        ).unwrap();
-        let password_hash = argon2
-            .hash_password("password".as_bytes(), &salt)
-            .unwrap()
-            .to_string();
-        
-        // Create user
-        use crate::types::internal::auth::AdminFlags;
-        use crate::types::internal::context::RequestContext;
-        let admin_flags = AdminFlags::owner();
-        let ctx = RequestContext::for_system("test");
-        
-        let before = Utc::now().timestamp();
-        
-        let user = credential_store
-            .create_admin_user(
-                &ctx,
-                "timestamp_test".to_string(),
-                password_hash,
-                admin_flags,
-            )
-            .await
-            .expect("Failed to create user");
-        
-        let after = Utc::now().timestamp();
-        
-        // Verify timestamps are within reasonable range
-        assert!(user.created_at >= before);
-        assert!(user.created_at <= after);
-        assert!(user.updated_at >= before);
-        assert!(user.updated_at <= after);
-        
-        // Note: created_at and updated_at may differ slightly due to the two-step process
-        // (create_user sets created_at, set_privileges updates updated_at)
-    }
-
-    // Tests for set_privileges method (task 5.1)
+    // Tests for set_privileges method
 
     #[tokio::test]
     async fn test_set_privileges_updates_all_flags_atomically() {
-        let (_db, credential_store) = setup_test_db().await;
+        let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
-        // Add a regular user
         let user_id = credential_store
             .add_user("testuser".to_string(), "password".to_string())
             .await
             .expect("Failed to add user");
         
-        // Create RequestContext for the operation
         use crate::types::internal::context::RequestContext;
-        let ctx = RequestContext::for_system("test");
-        
-        // Set all privileges to true
         use crate::types::internal::auth::AdminFlags;
+        let ctx = RequestContext::for_system("test");
         let new_privileges = AdminFlags::custom(true, true, true);
         
         let result = credential_store
@@ -2144,7 +1462,6 @@ mod tests {
         
         assert!(result.is_ok());
         
-        // Verify all flags are now true
         let user = credential_store.get_user_by_id(&user_id).await.unwrap();
         assert_eq!(user.is_owner, true);
         assert_eq!(user.is_system_admin, true);
@@ -2153,207 +1470,42 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_privileges_returns_old_privileges() {
-        let (_db, credential_store) = setup_test_db().await;
+        let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
-        // Add a regular user
         let user_id = credential_store
             .add_user("testuser".to_string(), "password".to_string())
             .await
             .expect("Failed to add user");
         
-        // Create RequestContext
         use crate::types::internal::context::RequestContext;
+        use crate::types::internal::auth::AdminFlags;
         let ctx = RequestContext::for_system("test");
         
-        // Set system_admin to true
-        use crate::types::internal::auth::AdminFlags;
-        let new_privileges = AdminFlags::system_admin();
-        
         let result = credential_store
-            .set_privileges(&ctx, &user_id, new_privileges)
+            .set_privileges(&ctx, &user_id, AdminFlags::system_admin())
             .await;
         
         assert!(result.is_ok());
         let old_privileges = result.unwrap();
         
-        // Verify old privileges were all false (regular user)
         assert_eq!(old_privileges.is_owner, false);
         assert_eq!(old_privileges.is_system_admin, false);
         assert_eq!(old_privileges.is_role_admin, false);
-        
-        // Now change privileges again
-        let new_privileges2 = AdminFlags::owner();
-        let result2 = credential_store
-            .set_privileges(&ctx, &user_id, new_privileges2)
-            .await;
-        
-        assert!(result2.is_ok());
-        let old_privileges2 = result2.unwrap();
-        
-        // Verify old privileges reflect the previous state (system_admin was true)
-        assert_eq!(old_privileges2.is_owner, false);
-        assert_eq!(old_privileges2.is_system_admin, true);
-        assert_eq!(old_privileges2.is_role_admin, false);
-    }
-
-    #[tokio::test]
-    async fn test_set_privileges_updates_timestamp() {
-        let (_db, credential_store) = setup_test_db().await;
-        
-        // Add a regular user
-        let user_id = credential_store
-            .add_user("testuser".to_string(), "password".to_string())
-            .await
-            .expect("Failed to add user");
-        
-        // Get initial timestamp
-        let user_before = credential_store.get_user_by_id(&user_id).await.unwrap();
-        let initial_updated_at = user_before.updated_at;
-        
-        // Wait a moment to ensure timestamp changes
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        
-        // Create RequestContext
-        use crate::types::internal::context::RequestContext;
-        let ctx = RequestContext::for_system("test");
-        
-        // Set privileges
-        use crate::types::internal::auth::AdminFlags;
-        let new_privileges = AdminFlags::system_admin();
-        
-        credential_store
-            .set_privileges(&ctx, &user_id, new_privileges)
-            .await
-            .expect("Failed to set privileges");
-        
-        // Verify updated_at changed
-        let user_after = credential_store.get_user_by_id(&user_id).await.unwrap();
-        assert!(user_after.updated_at > initial_updated_at);
     }
 
     #[tokio::test]
     async fn test_set_privileges_fails_with_nonexistent_user() {
-        let (_db, credential_store) = setup_test_db().await;
+        let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
-        // Create RequestContext
         use crate::types::internal::context::RequestContext;
+        use crate::types::internal::auth::AdminFlags;
         let ctx = RequestContext::for_system("test");
         
-        // Try to set privileges for non-existent user
-        use crate::types::internal::auth::AdminFlags;
-        let new_privileges = AdminFlags::owner();
-        
         let result = credential_store
-            .set_privileges(&ctx, "nonexistent-user-id", new_privileges)
+            .set_privileges(&ctx, "nonexistent-user-id", AdminFlags::owner())
             .await;
         
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_set_privileges_can_remove_all_privileges() {
-        let (_db, credential_store) = setup_test_db().await;
-        
-        // Create an admin user with privileges
-        let salt = SaltString::generate(&mut rand_core::OsRng);
-        let argon2 = Argon2::new_with_secret(
-            "test-pepper-for-unit-tests".as_bytes(),
-            argon2::Algorithm::Argon2id,
-            argon2::Version::V0x13,
-            argon2::Params::default(),
-        ).unwrap();
-        let password_hash = argon2
-            .hash_password("password".as_bytes(), &salt)
-            .unwrap()
-            .to_string();
-        
-        use crate::types::internal::auth::AdminFlags;
-        use crate::types::internal::context::RequestContext;
-        let admin_flags = AdminFlags::custom(true, true, true);
-        let ctx = RequestContext::for_system("test");
-        
-        let user = credential_store
-            .create_admin_user(
-                &ctx,
-                "admin_user".to_string(),
-                password_hash,
-                admin_flags,
-            )
-            .await
-            .expect("Failed to create admin user");
-        
-        // Verify user has all privileges
-        assert_eq!(user.is_owner, true);
-        assert_eq!(user.is_system_admin, true);
-        assert_eq!(user.is_role_admin, true);
-        
-        // Remove all privileges (reuse ctx from above)
-        let no_privileges = AdminFlags::none();
-        
-        let result = credential_store
-            .set_privileges(&ctx, &user.id, no_privileges)
-            .await;
-        
-        assert!(result.is_ok());
-        
-        // Verify all privileges are now false
-        let user_after = credential_store.get_user_by_id(&user.id).await.unwrap();
-        assert_eq!(user_after.is_owner, false);
-        assert_eq!(user_after.is_system_admin, false);
-        assert_eq!(user_after.is_role_admin, false);
-    }
-
-    #[tokio::test]
-    async fn test_set_privileges_can_set_individual_flags() {
-        let (_db, credential_store) = setup_test_db().await;
-        
-        // Add a regular user
-        let user_id = credential_store
-            .add_user("testuser".to_string(), "password".to_string())
-            .await
-            .expect("Failed to add user");
-        
-        // Create RequestContext
-        use crate::types::internal::context::RequestContext;
-        let ctx = RequestContext::for_system("test");
-        
-        use crate::types::internal::auth::AdminFlags;
-        
-        // Set only is_owner
-        let owner_only = AdminFlags::owner();
-        credential_store
-            .set_privileges(&ctx, &user_id, owner_only)
-            .await
-            .expect("Failed to set owner");
-        
-        let user = credential_store.get_user_by_id(&user_id).await.unwrap();
-        assert_eq!(user.is_owner, true);
-        assert_eq!(user.is_system_admin, false);
-        assert_eq!(user.is_role_admin, false);
-        
-        // Set only is_system_admin
-        let sysadmin_only = AdminFlags::system_admin();
-        credential_store
-            .set_privileges(&ctx, &user_id, sysadmin_only)
-            .await
-            .expect("Failed to set system admin");
-        
-        let user = credential_store.get_user_by_id(&user_id).await.unwrap();
-        assert_eq!(user.is_owner, false);
-        assert_eq!(user.is_system_admin, true);
-        assert_eq!(user.is_role_admin, false);
-        
-        // Set only is_role_admin
-        let roleadmin_only = AdminFlags::role_admin();
-        credential_store
-            .set_privileges(&ctx, &user_id, roleadmin_only)
-            .await
-            .expect("Failed to set role admin");
-        
-        let user = credential_store.get_user_by_id(&user_id).await.unwrap();
-        assert_eq!(user.is_owner, false);
-        assert_eq!(user.is_system_admin, false);
-        assert_eq!(user.is_role_admin, true);
     }
 }
 

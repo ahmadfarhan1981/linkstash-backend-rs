@@ -1,61 +1,14 @@
-use std::sync::{Arc, Mutex};
+mod common;
 
-// Import from the main crate
+use std::sync::Arc;
 use linkstash_backend::config::{SecretManager, SecretError};
 use linkstash_backend::services::TokenService;
-use linkstash_backend::stores::AuditStore;
 use uuid::Uuid;
-use sea_orm::Database;
-use migration::MigratorTrait;
-
-// Global mutex to ensure tests run serially (environment variables are global)
-static TEST_MUTEX: Mutex<()> = Mutex::new(());
-
-// Helper to clean up environment variables after each test
-struct EnvGuard {
-    vars: Vec<String>,
-}
-
-impl EnvGuard {
-    fn new(vars: Vec<&str>) -> Self {
-        // Clean up before setting new values
-        for var in &vars {
-            unsafe {
-                std::env::remove_var(var);
-            }
-        }
-        Self {
-            vars: vars.iter().map(|s| s.to_string()).collect(),
-        }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        for var in &self.vars {
-            unsafe {
-                std::env::remove_var(var);
-            }
-        }
-    }
-}
-
-async fn create_test_audit_store() -> Arc<AuditStore> {
-    let audit_db = Database::connect("sqlite::memory:")
-        .await
-        .expect("Failed to create audit database");
-    
-    migration::Migrator::up(&audit_db, None)
-        .await
-        .expect("Failed to run audit migrations");
-    
-    Arc::new(AuditStore::new(audit_db))
-}
 
 #[test]
 fn test_application_startup_with_valid_secrets() {
-    let _lock = TEST_MUTEX.lock().unwrap();
-    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
+    let _lock = common::ENV_TEST_MUTEX.lock().unwrap();
+    let _guard = common::EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
     // Set valid environment variables
     unsafe {
@@ -82,8 +35,8 @@ fn test_application_startup_with_valid_secrets() {
 
 #[test]
 fn test_application_fails_gracefully_with_missing_jwt_secret() {
-    let _lock = TEST_MUTEX.lock().unwrap();
-    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
+    let _lock = common::ENV_TEST_MUTEX.lock().unwrap();
+    let _guard = common::EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
     // Set only PASSWORD_PEPPER and REFRESH_TOKEN_SECRET, missing JWT_SECRET
     unsafe {
@@ -109,8 +62,8 @@ fn test_application_fails_gracefully_with_missing_jwt_secret() {
 
 #[test]
 fn test_application_fails_gracefully_with_missing_password_pepper() {
-    let _lock = TEST_MUTEX.lock().unwrap();
-    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
+    let _lock = common::ENV_TEST_MUTEX.lock().unwrap();
+    let _guard = common::EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
     // Set only JWT_SECRET and REFRESH_TOKEN_SECRET, missing PASSWORD_PEPPER
     unsafe {
@@ -136,8 +89,8 @@ fn test_application_fails_gracefully_with_missing_password_pepper() {
 
 #[test]
 fn test_application_fails_gracefully_with_invalid_jwt_secret_length() {
-    let _lock = TEST_MUTEX.lock().unwrap();
-    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
+    let _lock = common::ENV_TEST_MUTEX.lock().unwrap();
+    let _guard = common::EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
     // Set JWT_SECRET that's too short
     unsafe {
@@ -166,8 +119,8 @@ fn test_application_fails_gracefully_with_invalid_jwt_secret_length() {
 
 #[test]
 fn test_application_fails_gracefully_with_invalid_password_pepper_length() {
-    let _lock = TEST_MUTEX.lock().unwrap();
-    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
+    let _lock = common::ENV_TEST_MUTEX.lock().unwrap();
+    let _guard = common::EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
     // Set PASSWORD_PEPPER that's too short
     unsafe {
@@ -196,8 +149,8 @@ fn test_application_fails_gracefully_with_invalid_password_pepper_length() {
 
 #[tokio::test]
 async fn test_token_service_integration_with_secret_manager() {
-    let _lock = TEST_MUTEX.lock().unwrap();
-    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
+    let _lock = common::ENV_TEST_MUTEX.lock().unwrap();
+    let _guard = common::EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
     // Set valid environment variables
     unsafe {
@@ -210,7 +163,7 @@ async fn test_token_service_integration_with_secret_manager() {
     let secret_manager = Arc::new(SecretManager::init().unwrap());
     
     // Create audit store for TokenService
-    let audit_store = create_test_audit_store().await;
+    let audit_store = common::create_test_audit_store().await;
     
     // Create TokenService with JWT secret and refresh token secret from SecretManager
     let token_service = Arc::new(TokenService::new(
@@ -228,8 +181,8 @@ async fn test_token_service_integration_with_secret_manager() {
 
 #[tokio::test]
 async fn test_jwt_generation_works_with_secrets_from_secret_manager() {
-    let _lock = TEST_MUTEX.lock().unwrap();
-    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
+    let _lock = common::ENV_TEST_MUTEX.lock().unwrap();
+    let _guard = common::EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
     // Set valid environment variables
     unsafe {
@@ -242,7 +195,7 @@ async fn test_jwt_generation_works_with_secrets_from_secret_manager() {
     let secret_manager = Arc::new(SecretManager::init().unwrap());
     
     // Create audit store for TokenService
-    let audit_store = create_test_audit_store().await;
+    let audit_store = common::create_test_audit_store().await;
     
     // Create TokenService with JWT secret and refresh token secret from SecretManager
     let token_service = Arc::new(TokenService::new(
@@ -269,8 +222,8 @@ async fn test_jwt_generation_works_with_secrets_from_secret_manager() {
 
 #[tokio::test]
 async fn test_jwt_validation_works_with_secrets_from_secret_manager() {
-    let _lock = TEST_MUTEX.lock().unwrap();
-    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
+    let _lock = common::ENV_TEST_MUTEX.lock().unwrap();
+    let _guard = common::EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
     // Set valid environment variables
     unsafe {
@@ -283,7 +236,7 @@ async fn test_jwt_validation_works_with_secrets_from_secret_manager() {
     let secret_manager = Arc::new(SecretManager::init().unwrap());
     
     // Create audit store for TokenService
-    let audit_store = create_test_audit_store().await;
+    let audit_store = common::create_test_audit_store().await;
     
     // Create TokenService with JWT secret and refresh token secret from SecretManager
     let token_service = Arc::new(TokenService::new(
@@ -305,8 +258,8 @@ async fn test_jwt_validation_works_with_secrets_from_secret_manager() {
 
 #[tokio::test]
 async fn test_multiple_token_services_can_share_secret_manager() {
-    let _lock = TEST_MUTEX.lock().unwrap();
-    let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
+    let _lock = common::ENV_TEST_MUTEX.lock().unwrap();
+    let _guard = common::EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
     
     // Set valid environment variables
     unsafe {
@@ -319,8 +272,8 @@ async fn test_multiple_token_services_can_share_secret_manager() {
     let secret_manager = Arc::new(SecretManager::init().unwrap());
     
     // Create audit stores for TokenServices
-    let audit_store1 = create_test_audit_store().await;
-    let audit_store2 = create_test_audit_store().await;
+    let audit_store1 = common::create_test_audit_store().await;
+    let audit_store2 = common::create_test_audit_store().await;
     
     // Create multiple TokenService instances with the same secret
     let token_service1 = Arc::new(TokenService::new(
