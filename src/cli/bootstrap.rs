@@ -1,14 +1,13 @@
 // Bootstrap command implementation
 // Creates owner account and initial admin accounts during system setup
 
-use sea_orm::DatabaseConnection;
 use std::io::{self, Write};
 use std::sync::Arc;
 use uuid::Uuid;
 use argon2::{Argon2, PasswordHasher, password_hash::SaltString, Algorithm, Version, Params};
 
 use crate::config::SecretManager;
-use crate::stores::{CredentialStore, AuditStore, SystemConfigStore};
+use crate::stores::{CredentialStore, SystemConfigStore, AuditStore};
 use crate::types::internal::auth::AdminFlags;
 use crate::services::crypto::generate_secure_password;
 use crate::cli::credential_export::{ExportFormat, export_credentials};
@@ -17,22 +16,21 @@ use crate::types::internal::context::RequestContext;
 /// Bootstrap the system by creating owner and initial admin accounts
 /// 
 /// # Arguments
-/// * `db` - Main database connection
-/// * `audit_db` - Audit database connection
+/// * `credential_store` - Credential store for user management
+/// * `system_config_store` - System config store for owner status
+/// * `audit_store` - Audit store for logging
 /// * `secret_manager` - Secret manager for accessing password pepper
 /// 
 /// # Returns
 /// * `Ok(())` - Bootstrap completed successfully
 /// * `Err(...)` - Bootstrap failed (e.g., system already bootstrapped)
 pub async fn bootstrap_system(
-    db: &DatabaseConnection,
-    audit_db: &DatabaseConnection,
+    credential_store: &CredentialStore,
+    system_config_store: &SystemConfigStore,
+    audit_store: &Arc<AuditStore>,
     secret_manager: &SecretManager,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== Linkstash Bootstrap ===\n");
-    
-    // Initialize stores
-    let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
     
     // Create RequestContext for CLI operation
     use crate::types::internal::context::RequestContext;
@@ -41,7 +39,7 @@ pub async fn bootstrap_system(
     // Log CLI session start
     use crate::services::audit_logger;
     if let Err(audit_err) = audit_logger::log_cli_session_start(
-        &audit_store,
+        audit_store,
         &ctx,
         "bootstrap",
         vec![], // No sensitive args to log
@@ -50,13 +48,13 @@ pub async fn bootstrap_system(
     }
     
     // Execute bootstrap logic and capture result
-    let result = bootstrap_system_impl(db, audit_db, secret_manager, &ctx, &audit_store).await;
+    let result = bootstrap_system_impl(credential_store, system_config_store, audit_store, secret_manager, &ctx).await;
     
     // Log CLI session end based on result
     match &result {
         Ok(_) => {
             if let Err(audit_err) = audit_logger::log_cli_session_end(
-                &audit_store,
+                audit_store,
                 &ctx,
                 "bootstrap",
                 true,
@@ -67,7 +65,7 @@ pub async fn bootstrap_system(
         }
         Err(e) => {
             if let Err(audit_err) = audit_logger::log_cli_session_end(
-                &audit_store,
+                audit_store,
                 &ctx,
                 "bootstrap",
                 false,
@@ -83,19 +81,16 @@ pub async fn bootstrap_system(
 
 /// Internal implementation of bootstrap system
 async fn bootstrap_system_impl(
-    db: &DatabaseConnection,
-    audit_db: &DatabaseConnection,
+    credential_store: &CredentialStore,
+    system_config_store: &SystemConfigStore,
+    audit_store: &Arc<AuditStore>,
     secret_manager: &SecretManager,
     ctx: &RequestContext,
-    audit_store: &Arc<AuditStore>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::services::audit_logger;
     
     // Get password pepper from secret manager
-    let password_pepper = secret_manager.password_pepper().to_string();
-    
-    let credential_store = CredentialStore::new(db.clone(), password_pepper.clone(), audit_store.clone());
-    let system_config_store = SystemConfigStore::new(db.clone(), audit_store.clone());
+    let password_pepper = secret_manager.password_pepper();
     
     // Check if owner already exists
     let existing_owner = credential_store.get_owner().await
@@ -127,7 +122,7 @@ async fn bootstrap_system_impl(
     handle_credential_export(&owner_username, &owner_password, "owner")?;
     
     // Display owner inactive warning
-    println!("\n⚠️  WARNING: Owner account is INACTIVE (system flag owner_active=false)");
+    println!("\n ⚠️  WARNING: Owner account is INACTIVE (system flag owner_active=false)");
     println!("⚠️  The owner account cannot be used until activated via CLI:");
     println!("⚠️  cargo run -- owner activate");
     println!("⚠️  ");

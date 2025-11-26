@@ -1,8 +1,7 @@
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::config::SecretManager;
-use crate::stores::{CredentialStore, AuditStore};
+use crate::stores::{CredentialStore, AuditStore, SystemConfigStore};
 use crate::services::TokenService;
 use crate::errors::auth::AuthError;
 use crate::types::internal::context::RequestContext;
@@ -13,45 +12,23 @@ use crate::types::internal::context::RequestContext;
 /// to provide complete authentication flows with built-in audit logging.
 pub struct AuthService {
     credential_store: Arc<CredentialStore>,
+    system_config_store: Arc<SystemConfigStore>,
     token_service: Arc<TokenService>,
     audit_store: Arc<AuditStore>,
 }
 
 impl AuthService {
-    /// Initialize AuthService with all dependencies
+    /// Create AuthService from AppData
     /// 
-    /// Creates internal stores and services, optionally seeds test user in development
-    pub async fn init(
-        db: sea_orm::DatabaseConnection,
-        audit_db: sea_orm::DatabaseConnection,
-        secret_manager: Arc<SecretManager>,
-    ) -> Result<Self, AuthError> {
-        // Create audit store first (needed by credential store)
-        let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
-        
-        // Create internal dependencies
-        let credential_store = Arc::new(CredentialStore::new(
-            db.clone(),
-            secret_manager.password_pepper().to_string(),
-            audit_store.clone(),
-        ));
-        
-        let token_service = Arc::new(TokenService::new(
-            secret_manager.jwt_secret().to_string(),
-            secret_manager.refresh_token_secret().to_string(),
-            audit_store.clone(),
-        ));
-        
-        let service = Self {
-            credential_store: credential_store.clone(),
-            token_service,
-            audit_store,
-        };
-        
-        // Seed test user for development
-        service.seed_test_user().await;
-        
-        Ok(service)
+    /// Extracts only the dependencies needed by AuthService from the centralized AppData.
+    /// This is the preferred way to create AuthService in production code.
+    pub fn new(app_data: Arc<crate::app_data::AppData>) -> Self {
+        Self {
+            credential_store: app_data.credential_store.clone(),
+            system_config_store: app_data.system_config_store.clone(),
+            token_service: app_data.token_service.clone(),
+            audit_store: app_data.audit_store.clone(),
+        }
     }
     
     /// Get a reference to the internal TokenService
@@ -59,34 +36,6 @@ impl AuthService {
     /// Useful for API layer that needs direct access to token validation
     pub fn token_service(&self) -> Arc<TokenService> {
         self.token_service.clone()
-    }
-    
-    /// Create a new AuthService (for testing or manual construction)
-    pub fn new(
-        credential_store: Arc<CredentialStore>,
-        token_service: Arc<TokenService>,
-        audit_store: Arc<AuditStore>,
-    ) -> Self {
-        Self {
-            credential_store,
-            token_service,
-            audit_store,
-        }
-    }
-    
-    /// Seed test user for development (TODO: Remove in production)
-    async fn seed_test_user(&self) {
-        match self.credential_store.add_user("testuser".to_string(), "testpass".to_string()).await {
-            Ok(user_id) => {
-                tracing::info!("Test user created successfully with ID: {}", user_id);
-            }
-            Err(AuthError::DuplicateUsername(_)) => {
-                tracing::debug!("Test user already exists, skipping creation");
-            }
-            Err(e) => {
-                tracing::error!("Failed to create test user: {:?}", e);
-            }
-        }
     }
     
     /// Perform a complete login flow with audit logging

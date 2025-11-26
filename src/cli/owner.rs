@@ -1,9 +1,8 @@
 // Owner management CLI commands
 // Provides commands for activating/deactivating owner account and retrieving owner info
 
-use sea_orm::DatabaseConnection;
-use std::sync::Arc;
 use std::io::{self, Write};
+use std::sync::Arc;
 use crate::stores::{CredentialStore, SystemConfigStore, AuditStore};
 use crate::types::internal::context::RequestContext;
 use crate::services::audit_logger;
@@ -13,31 +12,24 @@ use crate::services::audit_logger;
 /// Sets the system config owner_active flag to true after confirmation prompt.
 /// 
 /// # Arguments
-/// * `db` - Main database connection
-/// * `audit_db` - Audit database connection
+/// * `credential_store` - Credential store for user management
+/// * `system_config_store` - System config store for owner status
+/// * `audit_store` - Audit store for logging
 /// 
 /// # Returns
 /// * `Ok(())` - Owner activated successfully
 /// * `Err(...)` - Activation failed
 pub async fn activate_owner(
-    db: &DatabaseConnection,
-    audit_db: &DatabaseConnection,
+    credential_store: &CredentialStore,
+    system_config_store: &SystemConfigStore,
+    audit_store: &Arc<AuditStore>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Create RequestContext for CLI operation
     let ctx = RequestContext::for_cli("owner_activate");
-    
-    // Create stores
-    let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
-    let system_config_store = SystemConfigStore::new(db.clone(), audit_store.clone());
-    let credential_store = CredentialStore::new(
-        db.clone(),
-        "dummy-pepper".to_string(), // Not used for this operation
-        audit_store.clone(),
-    );
 
     // Log CLI session start
     if let Err(e) = audit_logger::log_cli_session_start(
-        &audit_store,
+        audit_store,
         &ctx,
         "owner_activate",
         vec![],
@@ -103,7 +95,7 @@ pub async fn activate_owner(
 
     // Log CLI session end
     if let Err(e) = audit_logger::log_cli_session_end(
-        &audit_store,
+        audit_store,
         &ctx,
         "owner_activate",
         success,
@@ -120,31 +112,24 @@ pub async fn activate_owner(
 /// Sets the system config owner_active flag to false after confirmation prompt.
 /// 
 /// # Arguments
-/// * `db` - Main database connection
-/// * `audit_db` - Audit database connection
+/// * `credential_store` - Credential store for user management
+/// * `system_config_store` - System config store for owner status
+/// * `audit_store` - Audit store for logging
 /// 
 /// # Returns
 /// * `Ok(())` - Owner deactivated successfully
 /// * `Err(...)` - Deactivation failed
 pub async fn deactivate_owner(
-    db: &DatabaseConnection,
-    audit_db: &DatabaseConnection,
+    credential_store: &CredentialStore,
+    system_config_store: &SystemConfigStore,
+    audit_store: &Arc<AuditStore>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Create RequestContext for CLI operation
     let ctx = RequestContext::for_cli("owner_deactivate");
-    
-    // Create stores
-    let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
-    let system_config_store = SystemConfigStore::new(db.clone(), audit_store.clone());
-    let credential_store = CredentialStore::new(
-        db.clone(),
-        "dummy-pepper".to_string(), // Not used for this operation
-        audit_store.clone(),
-    );
 
     // Log CLI session start
     if let Err(e) = audit_logger::log_cli_session_start(
-        &audit_store,
+        audit_store,
         &ctx,
         "owner_deactivate",
         vec![],
@@ -211,7 +196,7 @@ pub async fn deactivate_owner(
 
     // Log CLI session end
     if let Err(e) = audit_logger::log_cli_session_end(
-        &audit_store,
+        audit_store,
         &ctx,
         "owner_deactivate",
         success,
@@ -228,24 +213,16 @@ pub async fn deactivate_owner(
 /// Displays owner username, UUID, and active status.
 /// 
 /// # Arguments
-/// * `db` - Main database connection
-/// * `audit_db` - Audit database connection
+/// * `credential_store` - Credential store for user management
+/// * `system_config_store` - System config store for owner status
 /// 
 /// # Returns
 /// * `Ok(())` - Owner info displayed successfully
 /// * `Err(...)` - Failed to retrieve owner info
 pub async fn get_owner_info(
-    db: &DatabaseConnection,
-    audit_db: &DatabaseConnection,
+    credential_store: &CredentialStore,
+    system_config_store: &SystemConfigStore,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Create stores
-    let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
-    let system_config_store = SystemConfigStore::new(db.clone(), audit_store.clone());
-    let credential_store = CredentialStore::new(
-        db.clone(),
-        "dummy-pepper".to_string(), // Not used for this operation
-        audit_store.clone(),
-    );
 
     // Get owner
     let owner = credential_store.get_owner().await

@@ -1,4 +1,5 @@
 mod api;
+mod app_data;
 mod config;
 mod types;
 mod errors;
@@ -6,12 +7,34 @@ mod stores;
 mod services;
 mod cli;
 
-
+use std::sync::Arc;
 use poem::{Route, Server, handler, listener::TcpListener, web::Html};
 use poem_openapi::OpenApiService;
 use api::{HealthApi, AuthApi};
-use config::{SecretManager, init_logging, init_database, init_audit_database};
+use app_data::AppData;
+use config::init_logging;
 use clap::Parser;
+use stores::CredentialStore;
+use errors::auth::AuthError;
+
+/// Seed test user for development
+/// 
+/// Only runs in debug builds. Creates a test user with username "testuser"
+/// and password "testpass" for development and testing purposes.
+#[cfg(debug_assertions)]
+async fn seed_test_user(credential_store: &CredentialStore) {
+    match credential_store.add_user("testuser".to_string(), "testpass".to_string()).await {
+        Ok(user_id) => {
+            tracing::info!("Test user created successfully with ID: {}", user_id);
+        }
+        Err(AuthError::DuplicateUsername(_)) => {
+            tracing::debug!("Test user already exists, skipping creation");
+        }
+        Err(e) => {
+            tracing::error!("Failed to create test user: {:?}", e);
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
@@ -21,24 +44,22 @@ async fn main() -> Result<(), std::io::Error> {
     // Initialize logging
     init_logging().expect("Failed to initialize logging");
     
-    // Initialize databases
-    let db = init_database().await?;
-    let audit_db = init_audit_database().await?;
+    // Initialize AppData (databases, stores, stateless services)
+    let app_data = Arc::new(
+        AppData::init().await
+            .expect("Failed to initialize application data")
+    );
     
     // Check if CLI arguments are present
     let args: Vec<String> = std::env::args().collect();
     
     // If CLI arguments present (more than just the binary name), run CLI mode
     if args.len() > 1 {
-        // Initialize secrets for CLI mode
-        let secret_manager = SecretManager::init()
-            .expect("Failed to initialize secrets. Please ensure all required environment variables are set with valid values.");
-        
         // Parse CLI arguments
         let cli = cli::Cli::parse();
         
         // Execute CLI command
-        match cli::execute_command(cli, &db, &audit_db, &secret_manager).await {
+        match cli::execute_command(cli, &app_data).await {
             Ok(()) => {
                 std::process::exit(0);
             }
@@ -51,18 +72,12 @@ async fn main() -> Result<(), std::io::Error> {
     
     // No CLI arguments - run server mode
     
-    // Initialize secrets
-    let secret_manager = std::sync::Arc::new(
-        SecretManager::init()
-            .expect("Failed to initialize secrets. Please ensure all required environment variables are set with valid values.")
-    );
+    // Create auth service from AppData
+    let auth_service = Arc::new(services::AuthService::new(app_data.clone()));
     
-    // Initialize auth service (creates all internal dependencies)
-    let auth_service = std::sync::Arc::new(
-        services::AuthService::init(db, audit_db, secret_manager.clone())
-            .await
-            .expect("Failed to initialize auth service")
-    );
+    // Seed test user in debug mode
+    #[cfg(debug_assertions)]
+    seed_test_user(&app_data.credential_store).await;
     
     // Load server configuration from environment or use defaults
     let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());

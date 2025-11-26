@@ -33,6 +33,91 @@ Response to Client
 
 ## Components and Interfaces
 
+### 0. API Helpers Module (Shared Infrastructure)
+
+**Note:** Before implementing AdminApi, create a shared helpers module to avoid code duplication.
+
+```rust
+// src/api/helpers.rs
+use poem::Request;
+use poem_openapi::auth::Bearer;
+use crate::types::internal::context::RequestContext;
+use crate::services::TokenService;
+use std::sync::Arc;
+
+/// Extract IP address from request headers
+/// 
+/// Checks X-Forwarded-For, X-Real-IP, and falls back to remote address.
+pub fn extract_ip_address(req: &Request) -> Option<String> {
+    // Check X-Forwarded-For header (proxy/load balancer)
+    if let Some(forwarded) = req.header("X-Forwarded-For") {
+        if let Some(ip) = forwarded.split(',').next() {
+            return Some(ip.trim().to_string());
+        }
+    }
+    
+    // Check X-Real-IP header (nginx)
+    if let Some(real_ip) = req.header("X-Real-IP") {
+        return Some(real_ip.to_string());
+    }
+    
+    // Fall back to remote address
+    req.remote_addr()
+        .as_socket_addr()
+        .map(|addr| addr.ip().to_string())
+}
+
+/// Create RequestContext from request and optional authentication
+/// 
+/// This helper function should be called at the beginning of every endpoint.
+/// It creates a RequestContext with IP address and request_id, and if authentication
+/// is provided, validates the JWT and populates the claims.
+/// 
+/// # Arguments
+/// * `req` - The HTTP request
+/// * `auth` - Optional Bearer token (None for unauthenticated endpoints)
+/// * `token_service` - TokenService for JWT validation
+/// 
+/// # Returns
+/// RequestContext with authenticated=true if JWT is valid, false otherwise
+pub async fn create_request_context(
+    req: &Request,
+    auth: Option<Bearer>,
+    token_service: &Arc<TokenService>,
+) -> RequestContext {
+    // Extract IP address
+    let ip_address = extract_ip_address(req);
+    
+    // Create base context with IP and request_id (defaults to API source)
+    let mut ctx = RequestContext::new()
+        .with_ip_address(ip_address.unwrap_or_else(|| "unknown".to_string()));
+    
+    // If auth is provided, validate JWT and populate claims
+    if let Some(bearer) = auth {
+        match token_service.validate_jwt(&bearer.token).await {
+            Ok(claims) => {
+                ctx.actor_id = claims.sub.clone();
+                ctx = ctx.with_auth(claims);
+            }
+            Err(_) => {
+                // JWT validation failed, context remains unauthenticated
+            }
+        }
+    }
+    
+    tracing::trace!("Request context created: {:?}", ctx);
+    ctx
+}
+```
+
+**Benefits:**
+- Single implementation shared by all APIs (AuthApi, AdminApi, future APIs)
+- Eliminates code duplication
+- Easier to maintain and test
+- Consistent behavior across all endpoints
+
+**Migration:** AuthApi should be refactored to use these helpers before implementing AdminApi.
+
 ### 1. AdminService
 
 Service layer component that orchestrates admin role management operations:
@@ -47,6 +132,25 @@ pub struct AdminService {
 }
 
 impl AdminService {
+    /// Create a new AdminService
+    pub fn new(
+        credential_store: Arc<CredentialStore>,
+        system_config_store: Arc<SystemConfigStore>,
+        token_service: Arc<TokenService>,
+        audit_store: Arc<AuditStore>,
+    ) -> Self {
+        Self {
+            credential_store,
+            system_config_store,
+            token_service,
+            audit_store,
+        }
+    }
+    
+    /// Get a reference to the TokenService (for AdminApi to validate JWTs)
+    pub fn token_service(&self) -> Arc<TokenService> {
+        self.token_service.clone()
+    }
     /// Assign System Admin role to a user
     /// 
     /// # Authorization
@@ -111,8 +215,11 @@ impl AdminService {
 **Self-Modification Check:**
 ```rust
 // In each method before any role modification
-if ctx.claims.unwrap().sub == target_user_id {
-    return Err(AdminError::SelfModificationDenied);
+let claims = ctx.claims.as_ref()
+    .ok_or_else(|| AdminError::internal_error("Unauthenticated".to_string()))?;
+
+if claims.sub == target_user_id {
+    return Err(AdminError::self_modification_denied());
 }
 ```
 
@@ -126,79 +233,122 @@ pub struct AdminApi {
     admin_service: Arc<AdminService>,
 }
 
-#[OpenApi(tag = "ApiTags::Admin")]
+impl AdminApi {
+    /// Create a new AdminApi
+    pub fn new(admin_service: Arc<AdminService>) -> Self {
+        Self { admin_service }
+    }
+}
+
+// Note: AdminApi uses shared helpers from src/api/helpers.rs
+// - helpers::create_request_context() - Creates RequestContext with JWT validation
+// - helpers::extract_ip_address() - Extracts IP from request headers
+// This avoids code duplication between AuthApi, AdminApi, and future APIs
+
+/// API tags for admin endpoints
+#[derive(Tags)]
+enum AdminTags {
+    /// Admin role management
+    Admin,
+}
+
+#[OpenApi(prefix_path = "/api/admin")]
 impl AdminApi {
     /// Assign System Admin role to a user
     /// 
     /// Requires Owner role
-    #[oai(path = "/admin/roles/system-admin", method = "post")]
+    #[oai(path = "/roles/system-admin", method = "post", tag = "AdminTags::Admin")]
     async fn assign_system_admin(
         &self,
         req: &Request,
         auth: BearerAuth,
         body: Json<AssignRoleRequest>,
-    ) -> Result<Json<AssignRoleResponse>>;
+    ) -> poem::Result<Json<AssignRoleResponse>>;
     
     /// Remove System Admin role from a user
     /// 
     /// Requires Owner role
-    #[oai(path = "/admin/roles/system-admin", method = "delete")]
+    #[oai(path = "/roles/system-admin", method = "delete", tag = "AdminTags::Admin")]
     async fn remove_system_admin(
         &self,
         req: &Request,
         auth: BearerAuth,
         body: Json<RemoveRoleRequest>,
-    ) -> Result<Json<RemoveRoleResponse>>;
+    ) -> poem::Result<Json<RemoveRoleResponse>>;
     
     /// Assign Role Admin role to a user
     /// 
     /// Requires Owner or System Admin role
-    #[oai(path = "/admin/roles/role-admin", method = "post")]
+    #[oai(path = "/roles/role-admin", method = "post", tag = "AdminTags::Admin")]
     async fn assign_role_admin(
         &self,
         req: &Request,
         auth: BearerAuth,
         body: Json<AssignRoleRequest>,
-    ) -> Result<Json<AssignRoleResponse>>;
+    ) -> poem::Result<Json<AssignRoleResponse>>;
     
     /// Remove Role Admin role from a user
     /// 
     /// Requires Owner or System Admin role
-    #[oai(path = "/admin/roles/role-admin", method = "delete")]
+    #[oai(path = "/roles/role-admin", method = "delete", tag = "AdminTags::Admin")]
     async fn remove_role_admin(
         &self,
         req: &Request,
         auth: BearerAuth,
         body: Json<RemoveRoleRequest>,
-    ) -> Result<Json<RemoveRoleResponse>>;
+    ) -> poem::Result<Json<RemoveRoleResponse>>;
     
     /// Deactivate owner account (owner self-deactivation)
     /// 
     /// Requires Owner role
-    #[oai(path = "/admin/owner/deactivate", method = "post")]
+    #[oai(path = "/owner/deactivate", method = "post", tag = "AdminTags::Admin")]
     async fn deactivate_owner(
         &self,
         req: &Request,
         auth: BearerAuth,
-    ) -> Result<Json<DeactivateResponse>>;
+    ) -> poem::Result<Json<DeactivateResponse>>;
 }
+
+// Note: Paths are relative to prefix_path "/api/admin"
+// Full paths will be:
+// - POST   /api/admin/roles/system-admin
+// - DELETE /api/admin/roles/system-admin
+// - POST   /api/admin/roles/role-admin
+// - DELETE /api/admin/roles/role-admin
+// - POST   /api/admin/owner/deactivate
 ```
 
 **Endpoint Pattern:**
 ```rust
-async fn assign_system_admin(&self, req: &Request, auth: BearerAuth, body: Json<AssignRoleRequest>) -> Result<Json<AssignRoleResponse>> {
-    // Create RequestContext
-    let ctx = self.create_request_context(req, Some(auth)).await;
+async fn assign_system_admin(
+    &self, 
+    req: &Request, 
+    auth: BearerAuth, 
+    body: Json<AssignRoleRequest>
+) -> poem::Result<Json<AssignRoleResponse>> {
+    // Use shared helper for context creation
+    let ctx = helpers::create_request_context(
+        req,
+        Some(auth.0),
+        &self.admin_service.token_service(),
+    ).await;
     
     // Check authentication
     if !ctx.authenticated {
-        return Err(AuthError::Unauthorized.into());
+        return Err(poem::Error::from_string(
+            "Unauthorized".to_string(),
+            poem::http::StatusCode::UNAUTHORIZED,
+        ));
     }
     
-    // Call service layer
+    // Call service layer (AdminError converts to poem::Error automatically)
     self.admin_service
         .assign_system_admin(&ctx, &body.target_user_id)
-        .await?;
+        .await
+        .map_err(|e| poem::Error::from_string(
+            e.message(),
+            poem::http::StatusCode::from_u16(e.status_code()).unwrap(),
+        ))?;
     
     Ok(Json(AssignRoleResponse {
         success: true,
@@ -206,6 +356,8 @@ async fn assign_system_admin(&self, req: &Request, auth: BearerAuth, body: Json<
     }))
 }
 ```
+
+**Note:** Uses `helpers::create_request_context()` from `src/api/helpers.rs` to avoid code duplication.
 
 ### 3. Request/Response DTOs
 
@@ -242,41 +394,52 @@ pub struct DeactivateResponse {
 
 ### 4. Error Types
 
+**NOTE:** `AdminError` already exists in `src/errors/admin.rs` from the admin-role-system spec. It already includes all required error variants:
+- `OwnerRequired` - 403 Forbidden
+- `SystemAdminRequired` - 403 Forbidden  
+- `SelfModificationDenied` - 403 Forbidden
+- `UserNotFound` - 404 Not Found
+- `InternalError` - 500 Internal Server Error
+
+**Additional error needed:**
 ```rust
-// src/errors/admin.rs
-#[derive(Debug, thiserror::Error)]
+// Add to existing AdminError enum in src/errors/admin.rs
+#[derive(ApiResponse, Debug)]
 pub enum AdminError {
-    #[error("Owner role required")]
-    OwnerRequired,
+    // ... existing variants ...
     
-    #[error("System Admin role required")]
-    SystemAdminRequired,
-    
-    #[error("Owner or System Admin role required")]
-    OwnerOrSystemAdminRequired,
-    
-    #[error("Cannot modify your own admin roles")]
-    SelfModificationDenied,
-    
-    #[error("User not found: {0}")]
-    UserNotFound(String),
-    
-    #[error("Database error: {0}")]
-    DatabaseError(#[from] sea_orm::DbErr),
-    
-    #[error("Authentication error: {0}")]
-    AuthError(#[from] crate::errors::auth::AuthError),
+    /// Owner or System Admin role required
+    #[oai(status = 403)]
+    OwnerOrSystemAdminRequired(Json<AdminErrorResponse>),
 }
 
-impl ResponseError for AdminError {
-    fn status(&self) -> StatusCode {
-        match self {
-            Self::OwnerRequired | Self::SystemAdminRequired | Self::OwnerOrSystemAdminRequired => StatusCode::FORBIDDEN,
-            Self::SelfModificationDenied => StatusCode::FORBIDDEN,
-            Self::UserNotFound(_) => StatusCode::NOT_FOUND,
-            Self::DatabaseError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            Self::AuthError(_) => StatusCode::UNAUTHORIZED,
-        }
+impl AdminError {
+    // ... existing methods ...
+    
+    /// Create an OwnerOrSystemAdminRequired error
+    pub fn owner_or_system_admin_required() -> Self {
+        AdminError::OwnerOrSystemAdminRequired(Json(AdminErrorResponse {
+            error: "owner_or_system_admin_required".to_string(),
+            message: "Owner or System Admin role required".to_string(),
+            status_code: 403,
+        }))
+    }
+}
+```
+
+**Error handling in AdminService:**
+```rust
+// Convert database errors to AdminError
+impl From<sea_orm::DbErr> for AdminError {
+    fn from(err: sea_orm::DbErr) -> Self {
+        AdminError::internal_error(format!("Database error: {}", err))
+    }
+}
+
+// Convert AuthError to AdminError
+impl From<crate::errors::auth::AuthError> for AdminError {
+    fn from(err: crate::errors::auth::AuthError) -> Self {
+        AdminError::internal_error(format!("Authentication error: {}", err))
     }
 }
 ```
@@ -289,16 +452,17 @@ Service layer performs authorization before any role modification:
 
 ```rust
 // Check if user has required role
-let claims = ctx.claims.as_ref().ok_or(AdminError::AuthError(AuthError::Unauthorized))?;
+let claims = ctx.claims.as_ref()
+    .ok_or_else(|| AdminError::internal_error("Unauthenticated".to_string()))?;
 
 // For System Admin operations
 if !claims.is_owner {
-    return Err(AdminError::OwnerRequired);
+    return Err(AdminError::owner_required());
 }
 
 // For Role Admin operations
 if !claims.is_owner && !claims.is_system_admin {
-    return Err(AdminError::OwnerOrSystemAdminRequired);
+    return Err(AdminError::owner_or_system_admin_required());
 }
 ```
 

@@ -5,9 +5,8 @@ pub mod owner;
 pub mod credential_export;
 
 use clap::{Parser, Subcommand};
-use sea_orm::DatabaseConnection;
 
-use crate::config::SecretManager;
+use crate::app_data::AppData;
 
 /// Linkstash CLI for administrative operations
 #[derive(Parser)]
@@ -46,33 +45,45 @@ pub enum OwnerCommands {
 /// 
 /// # Arguments
 /// * `cli` - Parsed CLI arguments
-/// * `db` - Main database connection
-/// * `audit_db` - Audit database connection
-/// * `secret_manager` - Secret manager for accessing secrets
+/// * `app_data` - Application data containing all stores and services
 /// 
 /// # Returns
 /// * `Ok(())` - Command executed successfully
 /// * `Err(...)` - Command execution failed
 pub async fn execute_command(
     cli: Cli,
-    db: &DatabaseConnection,
-    audit_db: &DatabaseConnection,
-    secret_manager: &SecretManager,
+    app_data: &AppData,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Bootstrap => {
-            bootstrap::bootstrap_system(db, audit_db, secret_manager).await?;
+            bootstrap::bootstrap_system(
+                &app_data.credential_store,
+                &app_data.system_config_store,
+                &app_data.audit_store,
+                &app_data.secret_manager,
+            ).await?;
         }
         Commands::Owner(owner_cmd) => {
             match owner_cmd {
                 OwnerCommands::Activate => {
-                    owner::activate_owner(db, audit_db).await?;
+                    owner::activate_owner(
+                        &app_data.credential_store,
+                        &app_data.system_config_store,
+                        &app_data.audit_store,
+                    ).await?;
                 }
                 OwnerCommands::Deactivate => {
-                    owner::deactivate_owner(db, audit_db).await?;
+                    owner::deactivate_owner(
+                        &app_data.credential_store,
+                        &app_data.system_config_store,
+                        &app_data.audit_store,
+                    ).await?;
                 }
                 OwnerCommands::Info => {
-                    owner::get_owner_info(db, audit_db).await?;
+                    owner::get_owner_info(
+                        &app_data.credential_store,
+                        &app_data.system_config_store,
+                    ).await?;
                 }
             }
         }
