@@ -10,4 +10,5 @@ pub mod cli;
 
 // Test utilities (available for unit and integration tests)
 // Note: Compiled in all builds but only used during testing
+#[cfg(test)]
 pub mod test;

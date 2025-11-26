@@ -3,7 +3,7 @@
 
 use sea_orm::{Database, DatabaseConnection};
 use migration::{AuthMigrator, AuditMigrator, MigratorTrait};
-use crate::stores::AuditStore;
+use crate::{services::{AuthService, TokenService}, stores::{AuditStore, CredentialStore}};
 use std::sync::{Arc, Mutex};
 
 /// Creates test databases and stores with standard configuration
@@ -18,8 +18,8 @@ use std::sync::{Arc, Mutex};
 pub async fn setup_test_stores() -> (
     DatabaseConnection,
     DatabaseConnection,
-    Arc<crate::stores::CredentialStore>,
-    Arc<crate::stores::AuditStore>,
+    Arc<CredentialStore>,
+    Arc<AuditStore>,
 ) {
     // Create auth database
     let auth_db = Database::connect("sqlite::memory:")
@@ -40,9 +40,9 @@ pub async fn setup_test_stores() -> (
         .expect("Failed to run audit migrations");
     
     // Create stores
-    let audit_store = Arc::new(crate::stores::AuditStore::new(audit_db.clone()));
+    let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
     let password_pepper = "test-pepper-for-unit-tests".to_string();
-    let credential_store = Arc::new(crate::stores::CredentialStore::new(
+    let credential_store = Arc::new(CredentialStore::new(
         auth_db.clone(),
         password_pepper,
         audit_store.clone(),
@@ -63,22 +63,22 @@ pub async fn setup_test_stores() -> (
 pub async fn setup_test_auth_services() -> (
     DatabaseConnection,
     DatabaseConnection,
-    Arc<crate::stores::CredentialStore>,
-    Arc<crate::stores::AuditStore>,
-    Arc<crate::services::AuthService>,
-    Arc<crate::services::TokenService>,
+    Arc<CredentialStore>,
+    Arc<AuditStore>,
+    Arc<AuthService>,
+    Arc<TokenService>,
 ) {
     let (auth_db, audit_db, credential_store, audit_store) = setup_test_stores().await;
     
     // Create token service with test secrets
-    let token_service = Arc::new(crate::services::TokenService::new(
+    let token_service = Arc::new(TokenService::new(
         "test-secret-key-minimum-32-characters-long".to_string(),
         "test-refresh-secret-minimum-32-chars".to_string(),
         audit_store.clone(),
     ));
     
     // Create auth service
-    let auth_service = Arc::new(crate::services::AuthService::new(
+    let auth_service = Arc::new(AuthService::new(
         credential_store.clone(),
         token_service.clone(),
         audit_store.clone(),

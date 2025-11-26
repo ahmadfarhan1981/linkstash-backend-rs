@@ -7,10 +7,12 @@ use std::sync::Arc;
 use uuid::Uuid;
 use argon2::{Argon2, PasswordHasher, password_hash::SaltString, Algorithm, Version, Params};
 
+use crate::config::SecretManager;
 use crate::stores::{CredentialStore, AuditStore, SystemConfigStore};
 use crate::types::internal::auth::AdminFlags;
 use crate::services::crypto::generate_secure_password;
 use crate::cli::credential_export::{ExportFormat, export_credentials};
+use crate::types::internal::context::RequestContext;
 
 /// Bootstrap the system by creating owner and initial admin accounts
 /// 
@@ -25,7 +27,7 @@ use crate::cli::credential_export::{ExportFormat, export_credentials};
 pub async fn bootstrap_system(
     db: &DatabaseConnection,
     audit_db: &DatabaseConnection,
-    secret_manager: &crate::config::SecretManager,
+    secret_manager: &SecretManager,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== Linkstash Bootstrap ===\n");
     
@@ -83,8 +85,8 @@ pub async fn bootstrap_system(
 async fn bootstrap_system_impl(
     db: &DatabaseConnection,
     audit_db: &DatabaseConnection,
-    secret_manager: &crate::config::SecretManager,
-    ctx: &crate::types::internal::context::RequestContext,
+    secret_manager: &SecretManager,
+    ctx: &RequestContext,
     audit_store: &Arc<AuditStore>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::services::audit_logger;

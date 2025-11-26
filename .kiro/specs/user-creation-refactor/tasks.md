@@ -221,8 +221,15 @@
   - Log CLI session start and end
   - _Requirements: 5.1, 5.2, 5.3_
 
-- [ ] 10. Update API endpoints to use new RequestContext fields
-- [ ] 10.1 Update `create_request_context()` helper
+- [x] 10. Update API endpoints to use new RequestContext fields
+
+
+
+
+
+- [x] 10.1 Update `create_request_context()` helper
+
+
   - Set source to `RequestSource::API`
   - Set actor_id from JWT claims (sub field)
   - Ensure backward compatibility

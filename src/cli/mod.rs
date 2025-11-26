@@ -7,6 +7,8 @@ pub mod credential_export;
 use clap::{Parser, Subcommand};
 use sea_orm::DatabaseConnection;
 
+use crate::config::SecretManager;
+
 /// Linkstash CLI for administrative operations
 #[derive(Parser)]
 #[command(name = "linkstash")]
@@ -55,7 +57,7 @@ pub async fn execute_command(
     cli: Cli,
     db: &DatabaseConnection,
     audit_db: &DatabaseConnection,
-    secret_manager: &crate::config::SecretManager,
+    secret_manager: &SecretManager,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Bootstrap => {

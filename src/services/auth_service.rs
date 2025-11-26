@@ -1,9 +1,11 @@
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::config::SecretManager;
 use crate::stores::{CredentialStore, AuditStore};
 use crate::services::TokenService;
 use crate::errors::auth::AuthError;
+use crate::types::internal::context::RequestContext;
 
 /// Authentication service that orchestrates login, logout, and token refresh flows
 /// 
@@ -22,7 +24,7 @@ impl AuthService {
     pub async fn init(
         db: sea_orm::DatabaseConnection,
         audit_db: sea_orm::DatabaseConnection,
-        secret_manager: Arc<crate::config::SecretManager>,
+        secret_manager: Arc<SecretManager>,
     ) -> Result<Self, AuthError> {
         // Create audit store first (needed by credential store)
         let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
@@ -98,7 +100,7 @@ impl AuthService {
     /// * `Result<(String, String), AuthError>` - Tuple of (access_token, refresh_token) or error
     pub async fn login(
         &self,
-        ctx: &crate::types::internal::context::RequestContext,
+        ctx: &RequestContext,
         username: String,
         password: String,
     ) -> Result<(String, String), AuthError> {
@@ -160,7 +162,7 @@ impl AuthService {
     /// * `Result<String, AuthError>` - New access token or error
     pub async fn refresh(
         &self,
-        ctx: &crate::types::internal::context::RequestContext,
+        ctx: &RequestContext,
         refresh_token: String,
     ) -> Result<String, AuthError> {
         let token_hash = self.token_service.hash_refresh_token(&refresh_token);
@@ -211,7 +213,7 @@ impl AuthService {
     /// * `Err(AuthError)` - Token not found or database error
     pub async fn logout(
         &self,
-        ctx: &crate::types::internal::context::RequestContext,
+        ctx: &RequestContext,
         refresh_token: String,
     ) -> Result<(), AuthError> {
         let token_hash = self.token_service.hash_refresh_token(&refresh_token);

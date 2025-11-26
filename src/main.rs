@@ -6,6 +6,7 @@ mod stores;
 mod services;
 mod cli;
 
+
 use poem::{Route, Server, handler, listener::TcpListener, web::Html};
 use poem_openapi::OpenApiService;
 use api::{HealthApi, AuthApi};

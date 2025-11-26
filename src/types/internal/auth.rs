@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::types::db::user::Model;
+
 /// JWT Claims structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -139,9 +141,9 @@ impl Default for AdminFlags {
     }
 }
 
-impl From<&crate::types::db::user::Model> for AdminFlags {
+impl From<&Model> for AdminFlags {
     /// Convert from user database model to AdminFlags
-    fn from(user: &crate::types::db::user::Model) -> Self {
+    fn from(user: &Model) -> Self {
         Self {
             is_owner: user.is_owner,
             is_system_admin: user.is_system_admin,

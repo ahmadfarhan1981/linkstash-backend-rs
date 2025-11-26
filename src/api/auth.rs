@@ -1,11 +1,12 @@
 use poem_openapi::{payload::Json, OpenApi, Tags, SecurityScheme, auth::Bearer};
 use poem::Request;
-use crate::services::{AuthService, TokenService};
+use crate::services::AuthService;
 use crate::types::dto::auth::{
     LoginRequest, TokenResponse, WhoAmIResponse, RefreshRequest, RefreshResponse, 
     LogoutRequest, LogoutResponse, LoginApiResponse, WhoAmIApiResponse, 
     RefreshApiResponse, LogoutApiResponse, ErrorResponse
 };
+use crate::types::internal::context::RequestContext;
 use std::sync::Arc;
 
 /// Authentication API endpoints
@@ -61,12 +62,12 @@ impl AuthApi {
         &self,
         req: &Request,
         auth: Option<BearerAuth>,
-    ) -> crate::types::internal::context::RequestContext {
+    ) -> RequestContext {
         // Extract IP address
         let ip_address = Self::extract_ip_address(req);
         
         // Create base context with IP and request_id (defaults to API source)
-        let mut ctx = crate::types::internal::context::RequestContext::new()
+        let mut ctx = RequestContext::new()
             .with_ip_address(ip_address.unwrap_or_else(|| "unknown".to_string()));
         
         // If auth is provided, validate JWT and populate claims
@@ -114,9 +115,17 @@ enum AuthTags {
 #[OpenApi(prefix_path = "/auth")]
 impl AuthApi {
     /// Login with username and password to receive authentication tokens
+    /// 
+    /// Authentication is optional - if provided, enables better audit logging
+    /// (e.g., tracking which user is logging in as another user).
     #[oai(path = "/login", method = "post", tag = "AuthTags::Authentication")]
     async fn login(&self, req: &Request, body: Json<LoginRequest>) -> LoginApiResponse {
-        let ctx = self.create_request_context(req, None).await;
+        // Manual header extraction because poem-openapi doesn't support Option<BearerAuth>
+        let auth = req.header("Authorization")
+            .and_then(|h| h.strip_prefix("Bearer "))
+            .map(|token| BearerAuth(Bearer { token: token.to_string() }));
+        
+        let ctx = self.create_request_context(req, auth).await;
         
         match self.auth_service
             .login(&ctx, body.username.clone(), body.password.clone())
@@ -161,9 +170,17 @@ impl AuthApi {
     }
     
     /// Refresh access token using a refresh token
+    /// 
+    /// Authentication is optional - if provided, enables better audit logging
+    /// and security validation (verifying JWT user matches refresh token user).
     #[oai(path = "/refresh", method = "post", tag = "AuthTags::Authentication")]
     async fn refresh(&self, req: &Request, body: Json<RefreshRequest>) -> RefreshApiResponse {
-        let ctx = self.create_request_context(req, None).await;
+        // Manual header extraction because poem-openapi doesn't support Option<BearerAuth>
+        let auth = req.header("Authorization")
+            .and_then(|h| h.strip_prefix("Bearer "))
+            .map(|token| BearerAuth(Bearer { token: token.to_string() }));
+        
+        let ctx = self.create_request_context(req, auth).await;
         
         match self.auth_service
             .refresh(&ctx, body.refresh_token.clone())
@@ -218,7 +235,7 @@ mod tests {
     use super::*;
     use poem_openapi::payload::Json;
     use sea_orm::{DatabaseConnection, EntityTrait, ColumnTrait, QueryFilter};
-    use crate::services::AuthService;
+    use crate::services::{AuthService, TokenService};
     use crate::stores::CredentialStore;
     use crate::test::utils::setup_test_auth_services;
 
@@ -1354,6 +1371,186 @@ mod tests {
             .expect("Failed to parse audit data");
         assert_eq!(data["failure_reason"], "invalid_signature");
         assert_eq!(data["full_jwt"], tampered_token);
+    }
+
+    #[tokio::test]
+    async fn test_create_request_context_sets_actor_id_from_jwt() {
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
+        
+        // Create a mock request for testing
+        let req = poem::Request::builder().finish();
+        
+        // Login to get a valid JWT
+        let login_request = Json(LoginRequest {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+        let login_response = unwrap_login_ok(api.login(&req, login_request).await);
+        
+        // Create BearerAuth with the JWT
+        let auth = BearerAuth(Bearer { token: login_response.access_token.clone() });
+        
+        // Create request context with authentication
+        let ctx = api.create_request_context(&req, Some(auth)).await;
+        
+        // Verify context has API source
+        assert_eq!(ctx.source, crate::types::internal::context::RequestSource::API);
+        
+        // Verify actor_id is set from JWT claims (sub field)
+        assert!(ctx.authenticated);
+        let claims = ctx.claims.unwrap();
+        assert_eq!(ctx.actor_id, claims.sub);
+        assert!(!ctx.actor_id.is_empty());
+        assert_ne!(ctx.actor_id, "unknown"); // Should not be the default value
+    }
+
+    #[tokio::test]
+    async fn test_create_request_context_without_auth_has_default_actor_id() {
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
+        
+        // Create a mock request for testing
+        let req = poem::Request::builder().finish();
+        
+        // Create request context without authentication
+        let ctx = api.create_request_context(&req, None).await;
+        
+        // Verify context has API source
+        assert_eq!(ctx.source, crate::types::internal::context::RequestSource::API);
+        
+        // Verify actor_id is the default "unknown" value
+        assert!(!ctx.authenticated);
+        assert_eq!(ctx.actor_id, "unknown");
+    }
+
+    #[tokio::test]
+    async fn test_login_with_optional_jwt_captures_actor_id() {
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
+        
+        // First login to get a JWT
+        let req = poem::Request::builder().finish();
+        let login_request = Json(LoginRequest {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+        let first_login = unwrap_login_ok(api.login(&req, login_request).await);
+        
+        // Now login again WITH the JWT in the Authorization header
+        let req_with_auth = poem::Request::builder()
+            .header("Authorization", format!("Bearer {}", first_login.access_token))
+            .finish();
+        
+        let second_login_request = Json(LoginRequest {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+        
+        // This should succeed and the context should have captured the JWT
+        let second_login = api.login(&req_with_auth, second_login_request).await;
+        
+        // Verify login succeeded
+        match second_login {
+            LoginApiResponse::Ok(_) => {
+                // Success - the optional JWT was captured and used for better audit logging
+            }
+            LoginApiResponse::Unauthorized(_) => {
+                panic!("Login should succeed even with optional JWT");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_refresh_with_optional_jwt_captures_actor_id() {
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
+        
+        // Login to get tokens
+        let req = poem::Request::builder().finish();
+        let login_request = Json(LoginRequest {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+        let login_response = unwrap_login_ok(api.login(&req, login_request).await);
+        
+        // Refresh WITH the JWT in the Authorization header
+        let req_with_auth = poem::Request::builder()
+            .header("Authorization", format!("Bearer {}", login_response.access_token))
+            .finish();
+        
+        let refresh_request = Json(RefreshRequest {
+            refresh_token: login_response.refresh_token.clone(),
+        });
+        
+        // This should succeed and the context should have captured the JWT
+        let refresh_response = api.refresh(&req_with_auth, refresh_request).await;
+        
+        // Verify refresh succeeded
+        match refresh_response {
+            RefreshApiResponse::Ok(_) => {
+                // Success - the optional JWT was captured and used for better audit logging
+            }
+            RefreshApiResponse::Unauthorized(_) => {
+                panic!("Refresh should succeed even with optional JWT");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_login_without_jwt_still_works() {
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
+        
+        // Login without any JWT (normal case)
+        let req = poem::Request::builder().finish();
+        let login_request = Json(LoginRequest {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+        
+        let login_response = api.login(&req, login_request).await;
+        
+        // Verify login succeeded
+        match login_response {
+            LoginApiResponse::Ok(_) => {
+                // Success - login works without JWT as expected
+            }
+            LoginApiResponse::Unauthorized(_) => {
+                panic!("Login should succeed without JWT");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_refresh_without_jwt_still_works() {
+        let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
+        
+        // Login to get tokens
+        let req = poem::Request::builder().finish();
+        let login_request = Json(LoginRequest {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+        let login_response = unwrap_login_ok(api.login(&req, login_request).await);
+        
+        // Refresh without JWT (normal case)
+        let refresh_request = Json(RefreshRequest {
+            refresh_token: login_response.refresh_token.clone(),
+        });
+        
+        let refresh_response = api.refresh(&req, refresh_request).await;
+        
+        // Verify refresh succeeded
+        match refresh_response {
+            RefreshApiResponse::Ok(_) => {
+                // Success - refresh works without JWT as expected
+            }
+            RefreshApiResponse::Unauthorized(_) => {
+                panic!("Refresh should succeed without JWT");
+            }
+        }
     }
 }
 

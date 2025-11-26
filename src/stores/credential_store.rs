@@ -8,6 +8,9 @@ use crate::types::db::refresh_token::{ActiveModel as RefreshTokenActiveModel};
 use crate::errors::auth::AuthError;
 use crate::stores::AuditStore;
 use crate::services::audit_logger;
+use crate::types::internal::auth::AdminFlags;
+use crate::types::internal::context::RequestContext;
+use crate::types::internal::context::RequestSource::API;
 
 /// CredentialStore manages user credentials and refresh tokens in the database
 pub struct CredentialStore {
@@ -45,7 +48,7 @@ impl CredentialStore {
     /// * `Err(AuthError)` - Duplicate username, database error, or transaction failed
     pub async fn create_user(
         &self,
-        ctx: &crate::types::internal::context::RequestContext,
+        ctx: &RequestContext,
         username: String,
         password_hash: String,
     ) -> Result<String, AuthError> {
@@ -124,10 +127,10 @@ impl CredentialStore {
     /// * `Err(AuthError)` - User not found or database error
     pub async fn set_privileges(
         &self,
-        ctx: &crate::types::internal::context::RequestContext,
+        ctx: &RequestContext,
         user_id: &str,
-        new_privileges: crate::types::internal::auth::AdminFlags,
-    ) -> Result<crate::types::internal::auth::AdminFlags, AuthError> {
+        new_privileges: AdminFlags,
+    ) -> Result<AdminFlags, AuthError> {
         // Fetch current user to get old privileges
         let user = User::find()
             .filter(user::Column::Id.eq(user_id))
@@ -137,7 +140,7 @@ impl CredentialStore {
             .ok_or_else(|| AuthError::internal_error(format!("User not found: {}", user_id)))?;
 
         // Store old privileges for return value and audit logging
-        let old_privileges = crate::types::internal::auth::AdminFlags::from(&user);
+        let old_privileges = AdminFlags::from(&user);
 
         // Get current timestamp
         let now = Utc::now().timestamp();
@@ -545,18 +548,18 @@ impl CredentialStore {
         ip_address: Option<String>,
     ) -> Result<(), AuthError> {
         // Create RequestContext from old parameters for backward compatibility
-        let ctx = crate::types::internal::context::RequestContext {
+        let ctx = RequestContext {
             ip_address,
             request_id: uuid::Uuid::new_v4().to_string(),
             authenticated: true,
             claims: None,
-            source: crate::types::internal::context::RequestSource::API,
+            source: API,
             actor_id: actor_user_id,
         };
 
         // Get current user to build AdminFlags with only is_system_admin changed
         let user = self.get_user_by_id(user_id).await?;
-        let new_privileges = crate::types::internal::auth::AdminFlags {
+        let new_privileges = AdminFlags {
             is_owner: user.is_owner,
             is_system_admin: value,
             is_role_admin: user.is_role_admin,
@@ -599,18 +602,18 @@ impl CredentialStore {
         ip_address: Option<String>,
     ) -> Result<(), AuthError> {
         // Create RequestContext from old parameters for backward compatibility
-        let ctx = crate::types::internal::context::RequestContext {
+        let ctx = RequestContext {
             ip_address,
             request_id: uuid::Uuid::new_v4().to_string(),
             authenticated: true,
             claims: None,
-            source: crate::types::internal::context::RequestSource::API,
+            source: API,
             actor_id: actor_user_id,
         };
 
         // Get current user to build AdminFlags with only is_role_admin changed
         let user = self.get_user_by_id(user_id).await?;
-        let new_privileges = crate::types::internal::auth::AdminFlags {
+        let new_privileges = AdminFlags {
             is_owner: user.is_owner,
             is_system_admin: user.is_system_admin,
             is_role_admin: value,
@@ -658,10 +661,10 @@ impl CredentialStore {
     /// * `Err(AuthError)` - DuplicateUsername if username already exists, or InternalError
     pub async fn create_admin_user(
         &self,
-        ctx: &crate::types::internal::context::RequestContext,
+        ctx: &RequestContext,
         username: String,
         password_hash: String,
-        admin_flags: crate::types::internal::auth::AdminFlags,
+        admin_flags: AdminFlags,
     ) -> Result<user::Model, AuthError> {
         // Start transaction
         let txn = self.db.begin().await
@@ -731,7 +734,7 @@ impl CredentialStore {
             .ok_or_else(|| AuthError::internal_error(format!("User not found: {}", user_id)))?;
 
         // Store old privileges for audit logging (should all be false)
-        let old_privileges = crate::types::internal::auth::AdminFlags::from(&user);
+        let old_privileges = AdminFlags::from(&user);
 
         // Get current timestamp
         let now = Utc::now().timestamp();
