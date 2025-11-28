@@ -9,40 +9,27 @@ This guide explains how to bootstrap the Linkstash authentication system and man
 1. [Understanding the Admin Role System](#understanding-the-admin-role-system)
 2. [Bootstrap Process](#bootstrap-process)
 3. [Owner Account Management](#owner-account-management)
-4. [Credential Management](#credential-management)
-5. [Security Best Practices](#security-best-practices)
-6. [Troubleshooting](#troubleshooting)
+4. [Admin Role Management via API](#admin-role-management-via-api)
+5. [Credential Management](#credential-management)
+6. [Security Best Practices](#security-best-practices)
+7. [Troubleshooting](#troubleshooting)
 
 ---
 
 ## Understanding the Admin Role System
 
-The system uses a three-tier administrative role structure:
+The system uses a four-tier user hierarchy:
 
-### Owner
-- **Purpose:** Emergency admin management only
-- **Capabilities:** Can assign/remove System Admin and Role Admin roles
-- **Status:** INACTIVE by default (must be explicitly activated)
-- **Quantity:** Only one per system
-- **Use Case:** Initial setup and emergency situations
+- **Regular User** - Standard authenticated users with basic access
+- **Role Admin** - Reserved for future application role management (not yet implemented)
+- **System Admin** - Day-to-day administrative operations, can manage Role Admin assignments
+- **Owner** - Emergency administrative access, can manage System Admin and Role Admin assignments
 
-### System Admin
-- **Purpose:** Day-to-day system operations
-- **Capabilities:** User management, system configuration, token revocation, can assign/remove Role Admin roles
-- **Status:** ACTIVE by default
-- **Quantity:** Multiple allowed (recommended: 2-5)
-- **Use Case:** Regular administrative tasks
+**Key Security Feature:** The Owner account is **INACTIVE by default** and must be explicitly activated via CLI before it can log in. This minimizes the attack surface of the highest-privilege account.
 
-### Role Admin
-- **Purpose:** Reserved for future application role management
-- **Capabilities:** Flag exists in schema but functionality not yet implemented
-- **Status:** ACTIVE by default
-- **Quantity:** Multiple allowed
-- **Use Case:** Future app_roles management (separate spec)
+**For comprehensive details** on user levels, capabilities, authorization rules, and API endpoints, see:
 
-### Design Rationale
-
-The Owner account is kept inactive by default to minimize attack surface. It should only be activated when needed for emergency operations (like recovering from a compromised System Admin account) and deactivated immediately after use.
+**→ [Authorization and User Levels Documentation](authorization-and-user-levels.md)**
 
 ---
 
@@ -289,6 +276,55 @@ When the owner attempts to log in:
 
 ---
 
+## Admin Role Management via API
+
+After bootstrap completes, admin roles can be assigned and removed via REST API endpoints. This provides remote management capabilities without requiring CLI access.
+
+### Available Operations
+
+**System Admin Management** (Owner only):
+- Assign System Admin role to a user
+- Remove System Admin role from a user
+
+**Role Admin Management** (Owner or System Admin):
+- Assign Role Admin role to a user
+- Remove Role Admin role from a user
+
+**Owner Management** (Owner only):
+- Deactivate owner account (self-deactivation)
+
+### Authorization Requirements
+
+- **Owner role required** for System Admin management and owner deactivation
+- **Owner OR System Admin role required** for Role Admin management
+- **Self-modification is prevented** - users cannot modify their own admin roles
+- **Token invalidation** - all refresh tokens are revoked when roles change
+
+### API Documentation
+
+For detailed API endpoint documentation, including:
+- Request/response schemas
+- Authentication requirements
+- Error codes and messages
+- Interactive testing interface
+
+Visit the **Swagger UI** at: `http://localhost:3000/swagger`
+
+### Comprehensive Authorization Guide
+
+For a complete overview of user levels, capabilities, and authorization rules, see:
+
+**[Authorization and User Levels Documentation](authorization-and-user-levels.md)**
+
+This guide covers:
+- All user levels (Regular User, Role Admin, System Admin, Owner)
+- Authorization matrix showing who can perform which operations
+- Design rationale and security considerations
+- Self-modification prevention details
+- Token invalidation behavior
+
+---
+
 ## Credential Management
 
 Bootstrap accounts use UUID usernames and require secure credential handling.
@@ -420,78 +456,37 @@ For team deployments:
 
 ## Security Best Practices
 
-### Owner Account Security
+### Bootstrap Security
 
-#### Keep Owner Inactive
-- Only activate for emergency operations
-- Deactivate immediately after use
+**Credential Handling:**
+- Use auto-generated passwords (stronger than manual entry)
+- Export credentials to password manager immediately
+- Delete export files after secure distribution
+- Never commit credentials to version control
+
+**Account Distribution:**
+- Create 2-5 System Admin accounts for redundancy
+- Distribute credentials via encrypted channels only
+- Verify receipt before deleting export files
+- Document who has which admin credentials
+
+**Owner Account:**
+- Keep owner inactive except for emergencies
+- Limit knowledge of owner credentials to senior administrators
+- Activate only when needed, deactivate immediately after
 - Monitor audit logs for owner activation events
-
-#### Secure Owner Credentials
-- Store in password manager (not plaintext file)
-- Limit access to owner credentials (only senior administrators)
-- Use separate password manager entry from personal accounts
-- Consider physical security (hardware security key, secure enclave)
-
-#### Emergency Use Only
-Owner should be used for:
-- Recovering from compromised System Admin accounts
-- Initial system setup
-- Disaster recovery scenarios
-
-Owner should NOT be used for:
-- Day-to-day administration (use System Admin)
-- Regular user management (use System Admin)
-- Application role management (use Role Admin when implemented)
-
-### System Admin Security
-
-#### Multiple Admins
-- Create 2-5 System Admin accounts during bootstrap
-- Ensures availability if one account is compromised or unavailable
-- Enables separation of duties
-
-#### Active Monitoring
-- Review audit logs regularly for admin actions
-- Monitor for unusual patterns (off-hours access, bulk operations)
-- Set up alerts for sensitive operations
-
-#### Credential Rotation
-- Change passwords periodically (will be enforced in future update)
-- Rotate after personnel changes
-- Use strong, unique passwords
 
 ### Audit Logging
 
-All bootstrap and owner management operations are logged to the audit database:
-
-**Bootstrap Events:**
-- Owner account creation
-- System Admin account creation
-- Role Admin account creation
-
-**Owner Management Events:**
-- Owner activation (CLI)
-- Owner deactivation (CLI or API)
-- Owner information queries (CLI)
-
-**Audit Log Fields:**
+All bootstrap and owner management operations are logged to the audit database with:
 - Timestamp
-- Event type
+- Event type (bootstrap, owner activation, owner deactivation)
 - Actor (who performed the action)
-- Target (who was affected)
-- IP address (for API operations)
-- Operation method (CLI vs API)
+- Operation method (CLI)
 
-### Self-Modification Prevention
+**For comprehensive security best practices** including authorization patterns, self-modification prevention, and token invalidation, see:
 
-The system prevents users from modifying their own admin roles:
-
-```
-❌ Error: Cannot modify your own admin roles
-```
-
-This prevents privilege escalation through compromised sessions. Even if an attacker gains access to an admin account, they cannot grant themselves additional privileges.
+**→ [Authorization and User Levels Documentation](authorization-and-user-levels.md)**
 
 ---
 

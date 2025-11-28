@@ -161,6 +161,67 @@ pub async fn log_refresh_token_revoked(
     store.write_event(event).await
 }
 
+/// Log all refresh tokens invalidated event
+///
+/// Used when admin roles change and all tokens for a user need to be invalidated
+/// to force re-authentication with updated JWT claims.
+///
+/// # Arguments
+/// * `store` - Reference to the AuditStore
+/// * `ctx` - Request context with actor information for audit logging
+/// * `user_id` - The user whose tokens were invalidated
+/// * `reason` - Reason for invalidation (e.g., "admin_role_changed")
+pub async fn log_all_refresh_tokens_invalidated(
+    store: &AuditStore,
+    ctx: &RequestContext,
+    user_id: String,
+    reason: String,
+) -> Result<(), AuditError> {
+    let mut event = AuditEvent::new(EventType::RefreshTokenRevoked);
+    event.user_id = Some(user_id);
+    event.ip_address = ctx.ip_address.clone();
+    // Extract JWT ID from claims if authenticated
+    event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
+    event.data.insert("action".to_string(), json!("all_tokens_invalidated"));
+    event.data.insert("reason".to_string(), json!(reason));
+    event.data.insert("actor_id".to_string(), json!(ctx.actor_id));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id));
+    
+    store.write_event(event).await
+}
+
+/// Log token invalidation failure
+///
+/// Used when an attempt to invalidate all tokens for a user fails due to
+/// database errors or other issues.
+///
+/// # Arguments
+/// * `store` - Reference to the AuditStore
+/// * `ctx` - Request context with actor information for audit logging
+/// * `user_id` - The user whose tokens were being invalidated
+/// * `reason` - Original reason for invalidation attempt
+/// * `error_message` - Error message describing why invalidation failed
+pub async fn log_token_invalidation_failure(
+    store: &AuditStore,
+    ctx: &RequestContext,
+    user_id: String,
+    reason: String,
+    error_message: String,
+) -> Result<(), AuditError> {
+    let mut event = AuditEvent::new(EventType::RefreshTokenRevoked);
+    event.user_id = Some(user_id);
+    event.ip_address = ctx.ip_address.clone();
+    // Extract JWT ID from claims if authenticated
+    event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
+    event.data.insert("action".to_string(), json!("all_tokens_invalidation_failed"));
+    event.data.insert("reason".to_string(), json!(reason));
+    event.data.insert("error_message".to_string(), json!(error_message));
+    event.data.insert("actor_id".to_string(), json!(ctx.actor_id));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id));
+    
+    store.write_event(event).await
+}
+
 /// Log refresh token validation failure
 ///
 /// # Arguments

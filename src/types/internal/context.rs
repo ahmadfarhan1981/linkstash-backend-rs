@@ -103,6 +103,12 @@ impl RequestContext {
         self.claims = Some(claims);
         self
     }
+    
+    /// Set the actor_id
+    pub fn with_actor_id(mut self, actor_id: impl Into<String>) -> Self {
+        self.actor_id = actor_id.into();
+        self
+    }
 }
 
 impl Default for RequestContext {

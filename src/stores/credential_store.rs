@@ -10,7 +10,6 @@ use crate::stores::AuditStore;
 use crate::services::audit_logger;
 use crate::types::internal::auth::AdminFlags;
 use crate::types::internal::context::RequestContext;
-use crate::types::internal::context::RequestSource::API;
 
 /// CredentialStore manages user credentials and refresh tokens in the database
 pub struct CredentialStore {
@@ -500,6 +499,76 @@ impl CredentialStore {
         Ok(user_id)
     }
     
+    /// Invalidate all refresh tokens for a user
+    /// 
+    /// Deletes all refresh tokens associated with a user. This is used when
+    /// admin roles change to force re-authentication with updated JWT claims.
+    /// Creates an audit log entry for this security-critical operation.
+    /// 
+    /// # Arguments
+    /// * `ctx` - RequestContext with actor information for audit logging
+    /// * `user_id` - The user_id (UUID string) whose tokens should be invalidated
+    /// * `reason` - Reason for invalidation (e.g., "admin_role_changed")
+    /// 
+    /// # Returns
+    /// * `Ok(())` - All tokens invalidated successfully
+    /// * `Err(AuthError)` - Database error or audit logging failure
+    pub async fn invalidate_all_tokens(
+        &self, 
+        ctx: &crate::types::internal::context::RequestContext,
+        user_id: &str,
+        reason: &str,
+    ) -> Result<(), AuthError> {
+        use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
+        
+        // Delete all refresh tokens for the user
+        let delete_result = RefreshToken::delete_many()
+            .filter(Column::UserId.eq(user_id))
+            .exec(&self.db)
+            .await;
+        
+        match delete_result {
+            Ok(_) => {
+                // Log successful token invalidation for audit trail
+                if let Err(audit_err) = crate::services::audit_logger::log_all_refresh_tokens_invalidated(
+                    &self.audit_store,
+                    ctx,
+                    user_id.to_string(),
+                    reason.to_string(),
+                )
+                .await {
+                    tracing::error!("Failed to log token invalidation: {:?}", audit_err);
+                }
+                
+                tracing::info!(
+                    "Invalidated all refresh tokens for user {} (reason: {}, actor: {})", 
+                    user_id, 
+                    reason, 
+                    ctx.actor_id
+                );
+                
+                Ok(())
+            }
+            Err(e) => {
+                let error_msg = format!("Failed to invalidate tokens: {}", e);
+                
+                // Log failed token invalidation attempt for audit trail
+                if let Err(audit_err) = crate::services::audit_logger::log_token_invalidation_failure(
+                    &self.audit_store,
+                    ctx,
+                    user_id.to_string(),
+                    reason.to_string(),
+                    error_msg.clone(),
+                )
+                .await {
+                    tracing::error!("Failed to log token invalidation failure: {:?}", audit_err);
+                }
+                
+                Err(AuthError::internal_error(error_msg))
+            }
+        }
+    }
+    
     /// Get user by ID
     /// 
     /// # Arguments
@@ -515,114 +584,6 @@ impl CredentialStore {
             .await
             .map_err(|e| AuthError::internal_error(format!("Database error: {}", e)))?
             .ok_or_else(|| AuthError::internal_error(format!("User not found: {}", user_id)))
-    }
-
-    /// Set the is_system_admin flag for a user
-    /// 
-    /// **DEPRECATED**: This method is maintained for backward compatibility.
-    /// New code should use `set_privileges()` directly for better auditability
-    /// and consistency with the privilege management architecture.
-    /// 
-    /// Updates the is_system_admin flag in the user table by calling the
-    /// `set_privileges()` primitive internally. This ensures consistent
-    /// audit logging and privilege management.
-    /// 
-    /// # Arguments
-    /// * `user_id` - The user_id (UUID string) to update
-    /// * `value` - The new value for is_system_admin
-    /// * `actor_user_id` - User ID of who performed the action (for audit logging)
-    /// * `ip_address` - Optional IP address (for audit logging)
-    /// 
-    /// # Returns
-    /// * `Ok(())` - Flag updated successfully
-    /// * `Err(AuthError)` - User not found or database error
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use set_privileges() instead for better auditability and consistency"
-    )]
-    pub async fn set_system_admin(
-        &self,
-        user_id: &str,
-        value: bool,
-        actor_user_id: String,
-        ip_address: Option<String>,
-    ) -> Result<(), AuthError> {
-        // Create RequestContext from old parameters for backward compatibility
-        let ctx = RequestContext {
-            ip_address,
-            request_id: uuid::Uuid::new_v4().to_string(),
-            authenticated: true,
-            claims: None,
-            source: API,
-            actor_id: actor_user_id,
-        };
-
-        // Get current user to build AdminFlags with only is_system_admin changed
-        let user = self.get_user_by_id(user_id).await?;
-        let new_privileges = AdminFlags {
-            is_owner: user.is_owner,
-            is_system_admin: value,
-            is_role_admin: user.is_role_admin,
-        };
-
-        // Call the primitive set_privileges() method
-        self.set_privileges(&ctx, user_id, new_privileges).await?;
-
-        Ok(())
-    }
-
-    /// Set the is_role_admin flag for a user
-    /// 
-    /// **DEPRECATED**: This method is maintained for backward compatibility.
-    /// New code should use `set_privileges()` directly for better auditability
-    /// and consistency with the privilege management architecture.
-    /// 
-    /// Updates the is_role_admin flag in the user table by calling the
-    /// `set_privileges()` primitive internally. This ensures consistent
-    /// audit logging and privilege management.
-    /// 
-    /// # Arguments
-    /// * `user_id` - The user_id (UUID string) to update
-    /// * `value` - The new value for is_role_admin
-    /// * `actor_user_id` - User ID of who performed the action (for audit logging)
-    /// * `ip_address` - Optional IP address (for audit logging)
-    /// 
-    /// # Returns
-    /// * `Ok(())` - Flag updated successfully
-    /// * `Err(AuthError)` - User not found or database error
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use set_privileges() instead for better auditability and consistency"
-    )]
-    pub async fn set_role_admin(
-        &self,
-        user_id: &str,
-        value: bool,
-        actor_user_id: String,
-        ip_address: Option<String>,
-    ) -> Result<(), AuthError> {
-        // Create RequestContext from old parameters for backward compatibility
-        let ctx = RequestContext {
-            ip_address,
-            request_id: uuid::Uuid::new_v4().to_string(),
-            authenticated: true,
-            claims: None,
-            source: API,
-            actor_id: actor_user_id,
-        };
-
-        // Get current user to build AdminFlags with only is_role_admin changed
-        let user = self.get_user_by_id(user_id).await?;
-        let new_privileges = AdminFlags {
-            is_owner: user.is_owner,
-            is_system_admin: user.is_system_admin,
-            is_role_admin: value,
-        };
-
-        // Call the primitive set_privileges() method
-        self.set_privileges(&ctx, user_id, new_privileges).await?;
-
-        Ok(())
     }
 
     /// Get the owner account
@@ -1128,48 +1089,6 @@ mod tests {
         assert!(!display_output.contains("another-secret-pepper"));
     }
 
-    // Tests for deprecated admin role methods (backward compatibility)
-
-    #[tokio::test]
-    async fn test_set_system_admin_updates_flag() {
-        let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
-        
-        let user_id = credential_store
-            .add_user("testuser".to_string(), "password".to_string())
-            .await
-            .expect("Failed to add user");
-        
-        #[allow(deprecated)]
-        let result = credential_store
-            .set_system_admin(&user_id, true, "actor_user".to_string(), Some("127.0.0.1".to_string()))
-            .await;
-        
-        assert!(result.is_ok());
-        
-        let user = credential_store.get_user_by_id(&user_id).await.unwrap();
-        assert_eq!(user.is_system_admin, true);
-    }
-
-    #[tokio::test]
-    async fn test_set_role_admin_updates_flag() {
-        let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
-        
-        let user_id = credential_store
-            .add_user("testuser".to_string(), "password".to_string())
-            .await
-            .expect("Failed to add user");
-        
-        #[allow(deprecated)]
-        let result = credential_store
-            .set_role_admin(&user_id, true, "actor_user".to_string(), Some("127.0.0.1".to_string()))
-            .await;
-        
-        assert!(result.is_ok());
-        
-        let user = credential_store.get_user_by_id(&user_id).await.unwrap();
-        assert_eq!(user.is_role_admin, true);
-    }
-
     #[tokio::test]
     async fn test_get_owner_returns_none_when_no_owner_exists() {
         let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
@@ -1512,3 +1431,7 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+#[path = "credential_store_invalidate_test.rs"]
+mod credential_store_invalidate_test;

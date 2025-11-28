@@ -3,7 +3,7 @@
 
 use sea_orm::{Database, DatabaseConnection};
 use migration::{AuthMigrator, AuditMigrator, MigratorTrait};
-use crate::{services::{AuthService, TokenService}, stores::{AuditStore, CredentialStore}};
+use crate::{services::{AuthService, TokenService}, stores::{AuditStore, CredentialStore, SystemConfigStore}, app_data::AppData};
 use std::sync::{Arc, Mutex};
 
 /// Creates test databases and stores with standard configuration
@@ -77,12 +77,36 @@ pub async fn setup_test_auth_services() -> (
         audit_store.clone(),
     ));
     
-    // Create auth service
-    let auth_service = Arc::new(AuthService::new(
-        credential_store.clone(),
-        token_service.clone(),
+    // Create system_config_store for AppData
+    let system_config_store = Arc::new(SystemConfigStore::new(
+        auth_db.clone(),
         audit_store.clone(),
     ));
+    
+    // Create mock SecretManager for testing
+    // Set environment variables temporarily for SecretManager::init()
+    unsafe {
+        std::env::set_var("JWT_SECRET", "test-secret-key-minimum-32-characters-long");
+        std::env::set_var("PASSWORD_PEPPER", "test-pepper-for-unit-tests");
+        std::env::set_var("REFRESH_TOKEN_SECRET", "test-refresh-secret-minimum-32-chars");
+    }
+    
+    let secret_manager = Arc::new(crate::config::SecretManager::init()
+        .expect("Failed to initialize test SecretManager"));
+    
+    // Create mock AppData for testing
+    let app_data = Arc::new(AppData {
+        db: auth_db.clone(),
+        audit_db: audit_db.clone(),
+        secret_manager,
+        audit_store: audit_store.clone(),
+        credential_store: credential_store.clone(),
+        system_config_store,
+        token_service: token_service.clone(),
+    });
+    
+    // Create auth service using AppData
+    let auth_service = Arc::new(AuthService::new(app_data));
     
     // Add test user
     credential_store

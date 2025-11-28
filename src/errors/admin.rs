@@ -41,6 +41,10 @@ pub enum AdminError {
     #[oai(status = 403)]
     RoleAdminRequired(Json<AdminErrorResponse>),
     
+    /// Owner or System Admin role required
+    #[oai(status = 403)]
+    OwnerOrSystemAdminRequired(Json<AdminErrorResponse>),
+    
     /// Cannot modify your own admin roles
     #[oai(status = 403)]
     SelfModificationDenied(Json<AdminErrorResponse>),
@@ -113,6 +117,15 @@ impl AdminError {
         }))
     }
     
+    /// Create an OwnerOrSystemAdminRequired error
+    pub fn owner_or_system_admin_required() -> Self {
+        AdminError::OwnerOrSystemAdminRequired(Json(AdminErrorResponse {
+            error: "owner_or_system_admin_required".to_string(),
+            message: "Owner or System Admin role required".to_string(),
+            status_code: 403,
+        }))
+    }
+    
     /// Create a SelfModificationDenied error
     pub fn self_modification_denied() -> Self {
         AdminError::SelfModificationDenied(Json(AdminErrorResponse {
@@ -158,10 +171,28 @@ impl AdminError {
             AdminError::OwnerRequired(json) => json.0.message.clone(),
             AdminError::SystemAdminRequired(json) => json.0.message.clone(),
             AdminError::RoleAdminRequired(json) => json.0.message.clone(),
+            AdminError::OwnerOrSystemAdminRequired(json) => json.0.message.clone(),
             AdminError::SelfModificationDenied(json) => json.0.message.clone(),
             AdminError::PasswordValidationFailed(json) => json.0.message.clone(),
             AdminError::PasswordChangeRequired(json) => json.0.message.clone(),
             AdminError::InternalError(json) => json.0.message.clone(),
+        }
+    }
+    
+    /// Get the HTTP status code from the error variant
+    pub fn status_code(&self) -> u16 {
+        match self {
+            AdminError::AlreadyBootstrapped(json) => json.0.status_code,
+            AdminError::OwnerNotFound(json) => json.0.status_code,
+            AdminError::UserNotFound(json) => json.0.status_code,
+            AdminError::OwnerRequired(json) => json.0.status_code,
+            AdminError::SystemAdminRequired(json) => json.0.status_code,
+            AdminError::RoleAdminRequired(json) => json.0.status_code,
+            AdminError::OwnerOrSystemAdminRequired(json) => json.0.status_code,
+            AdminError::SelfModificationDenied(json) => json.0.status_code,
+            AdminError::PasswordValidationFailed(json) => json.0.status_code,
+            AdminError::PasswordChangeRequired(json) => json.0.status_code,
+            AdminError::InternalError(json) => json.0.status_code,
         }
     }
 }
@@ -169,5 +200,19 @@ impl AdminError {
 impl fmt::Display for AdminError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.message())
+    }
+}
+
+/// Convert database errors to AdminError
+impl From<sea_orm::DbErr> for AdminError {
+    fn from(err: sea_orm::DbErr) -> Self {
+        AdminError::internal_error(format!("Database error: {}", err))
+    }
+}
+
+/// Convert AuthError to AdminError
+impl From<crate::errors::auth::AuthError> for AdminError {
+    fn from(err: crate::errors::auth::AuthError) -> Self {
+        AdminError::internal_error(format!("Authentication error: {}", err))
     }
 }

@@ -6,7 +6,7 @@ use crate::types::dto::auth::{
     LogoutRequest, LogoutResponse, LoginApiResponse, WhoAmIApiResponse, 
     RefreshApiResponse, LogoutApiResponse, ErrorResponse
 };
-use crate::types::internal::context::RequestContext;
+use crate::api::helpers;
 use std::sync::Arc;
 
 /// Authentication API endpoints
@@ -15,83 +15,13 @@ pub struct AuthApi {
 }
 
 impl AuthApi {
-    /// Create a new AuthApi with the given AuthService and TokenService
+    /// Create a new AuthApi with the given AuthService
     pub fn new(
         auth_service: Arc<AuthService>,
     ) -> Self {
         Self { 
             auth_service
         }
-    }
-    
-    /// Extract IP address from request headers
-    /// 
-    /// Checks X-Forwarded-For, X-Real-IP, and falls back to remote address
-    fn extract_ip_address(req: &Request) -> Option<String> {
-        // Check X-Forwarded-For header (proxy/load balancer)
-        if let Some(forwarded) = req.header("X-Forwarded-For") {
-            if let Some(ip) = forwarded.split(',').next() {
-                return Some(ip.trim().to_string());
-            }
-        }
-        
-        // Check X-Real-IP header (nginx)
-        if let Some(real_ip) = req.header("X-Real-IP") {
-            return Some(real_ip.to_string());
-        }
-        
-        // Fall back to remote address
-        req.remote_addr()
-            .as_socket_addr()
-            .map(|addr| addr.ip().to_string())
-    }
-    
-    /// Create RequestContext from request and optional authentication
-    /// 
-    /// This helper function should be called at the beginning of every endpoint.
-    /// It creates a RequestContext with IP address and request_id, and if authentication
-    /// is provided, validates the JWT and populates the claims.
-    /// 
-    /// # Arguments
-    /// * `req` - The HTTP request
-    /// * `auth` - Optional BearerAuth token (None for unauthenticated endpoints)
-    /// 
-    /// # Returns
-    /// RequestContext with authenticated=true if JWT is valid, false otherwise
-    async fn create_request_context(
-        &self,
-        req: &Request,
-        auth: Option<BearerAuth>,
-    ) -> RequestContext {
-        // Extract IP address
-        let ip_address = Self::extract_ip_address(req);
-        
-        // Create base context with IP and request_id (defaults to API source)
-        let mut ctx = RequestContext::new()
-            .with_ip_address(ip_address.unwrap_or_else(|| "unknown".to_string()));
-        
-        // If auth is provided, validate JWT and populate claims
-        if let Some(bearer) = auth {
-            // Validate JWT (handles all audit logging at point of action in TokenService)
-            match self.auth_service.token_service().validate_jwt(&bearer.0.token).await {
-                Ok(claims) => {
-                    // Set actor_id from JWT subject (user_id)
-                    ctx.actor_id = claims.sub.clone();
-                    // JWT is valid, set authenticated and claims
-                    ctx = ctx.with_auth(claims);
-                }
-                Err(_) => {
-                    // JWT validation failed (expired, invalid, tampered)
-                    // TokenService.validate_jwt already logged the failure
-                    // Context remains with authenticated=false, claims=None
-                }
-            }
-        }
-        
-        // Temporary trace log to verify context creation (will be removed later)
-        tracing::trace!("Request context created: {:?}", ctx);
-        
-        ctx
     }
 }
 
@@ -103,7 +33,7 @@ impl AuthApi {
     key_in = "header",
     bearer_format = "JWT"
 )]
-pub struct BearerAuth(Bearer);
+pub struct BearerAuth(pub Bearer);
 
 /// API tags for authentication endpoints
 #[derive(Tags)]
@@ -114,18 +44,18 @@ enum AuthTags {
 
 #[OpenApi(prefix_path = "/auth")]
 impl AuthApi {
-    /// Login with username and password to receive authentication tokens
+    /// Authenticate with username and password
     /// 
-    /// Authentication is optional - if provided, enables better audit logging
-    /// (e.g., tracking which user is logging in as another user).
+    /// Returns an access token (JWT) and refresh token for subsequent API requests.
+    /// Access tokens expire after 15 minutes.
     #[oai(path = "/login", method = "post", tag = "AuthTags::Authentication")]
     async fn login(&self, req: &Request, body: Json<LoginRequest>) -> LoginApiResponse {
         // Manual header extraction because poem-openapi doesn't support Option<BearerAuth>
         let auth = req.header("Authorization")
             .and_then(|h| h.strip_prefix("Bearer "))
-            .map(|token| BearerAuth(Bearer { token: token.to_string() }));
+            .map(|token| Bearer { token: token.to_string() });
         
-        let ctx = self.create_request_context(req, auth).await;
+        let ctx = helpers::create_request_context(req, auth, &self.auth_service.token_service()).await;
         
         match self.auth_service
             .login(&ctx, body.username.clone(), body.password.clone())
@@ -147,11 +77,13 @@ impl AuthApi {
         }
     }
     
-    /// Verify JWT and return user information
+    /// Get current user information
+    /// 
+    /// Returns the authenticated user's ID and token expiration time.
     #[oai(path = "/whoami", method = "get", tag = "AuthTags::Authentication")]
     async fn whoami(&self, req: &Request, auth: BearerAuth) -> WhoAmIApiResponse {
         // Create request context with authentication
-        let ctx = self.create_request_context(req, Some(auth)).await;
+        let ctx = helpers::create_request_context(req, Some(auth.0), &self.auth_service.token_service()).await;
         
         // Check if authenticated
         if !ctx.authenticated {
@@ -169,18 +101,17 @@ impl AuthApi {
         }))
     }
     
-    /// Refresh access token using a refresh token
+    /// Obtain a new access token
     /// 
-    /// Authentication is optional - if provided, enables better audit logging
-    /// and security validation (verifying JWT user matches refresh token user).
+    /// Use your refresh token to get a new access token when the current one expires.
     #[oai(path = "/refresh", method = "post", tag = "AuthTags::Authentication")]
     async fn refresh(&self, req: &Request, body: Json<RefreshRequest>) -> RefreshApiResponse {
         // Manual header extraction because poem-openapi doesn't support Option<BearerAuth>
         let auth = req.header("Authorization")
             .and_then(|h| h.strip_prefix("Bearer "))
-            .map(|token| BearerAuth(Bearer { token: token.to_string() }));
+            .map(|token| Bearer { token: token.to_string() });
         
-        let ctx = self.create_request_context(req, auth).await;
+        let ctx = helpers::create_request_context(req, auth, &self.auth_service.token_service()).await;
         
         match self.auth_service
             .refresh(&ctx, body.refresh_token.clone())
@@ -201,25 +132,18 @@ impl AuthApi {
         }
     }
     
-    /// Logout and revoke refresh token
+    /// Logout user and revoke tokens
     /// 
-    /// Always returns 200 OK to avoid information leakage about token validity.
-    /// Authentication is optional - if provided, enables better audit logging.
-    /// 
-    /// # Arguments
-    /// * `req` - HTTP request (used to extract optional Authorization header and IP address)
-    /// * `body` - Logout request containing the refresh token to revoke
-    /// 
-    /// # Returns
-    /// Always returns 200 OK with success message, regardless of outcome
+    /// Revokes the refresh token, ending the user's authenticated session.
+    /// The token cannot be used for future authentication.
     #[oai(path = "/logout", method = "post", tag = "AuthTags::Authentication")]
     async fn logout(&self, req: &Request, body: Json<LogoutRequest>) -> LogoutApiResponse {
         // Manual header extraction because poem-openapi doesn't support Option<BearerAuth>
         let auth = req.header("Authorization")
             .and_then(|h| h.strip_prefix("Bearer "))
-            .map(|token| BearerAuth(Bearer { token: token.to_string() }));
+            .map(|token| Bearer { token: token.to_string() });
         
-        let ctx = self.create_request_context(req, auth).await;
+        let ctx = helpers::create_request_context(req, auth, &self.auth_service.token_service()).await;
         
         // Always return 200 to avoid leaking token validity information
         let _ = self.auth_service.logout(&ctx, body.refresh_token.clone()).await;
@@ -1376,7 +1300,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_request_context_sets_actor_id_from_jwt() {
         let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service);
+        let api = AuthApi::new(auth_service.clone());
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -1388,11 +1312,11 @@ mod tests {
         });
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
-        // Create BearerAuth with the JWT
-        let auth = BearerAuth(Bearer { token: login_response.access_token.clone() });
+        // Create Bearer token with the JWT
+        let bearer = Bearer { token: login_response.access_token.clone() };
         
-        // Create request context with authentication
-        let ctx = api.create_request_context(&req, Some(auth)).await;
+        // Create request context with authentication using helpers
+        let ctx = helpers::create_request_context(&req, Some(bearer), &auth_service.token_service()).await;
         
         // Verify context has API source
         assert_eq!(ctx.source, crate::types::internal::context::RequestSource::API);
@@ -1408,13 +1332,13 @@ mod tests {
     #[tokio::test]
     async fn test_create_request_context_without_auth_has_default_actor_id() {
         let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
-        let api = AuthApi::new(auth_service);
+        let _api = AuthApi::new(auth_service.clone());
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
         
-        // Create request context without authentication
-        let ctx = api.create_request_context(&req, None).await;
+        // Create request context without authentication using helpers
+        let ctx = helpers::create_request_context(&req, None, &auth_service.token_service()).await;
         
         // Verify context has API source
         assert_eq!(ctx.source, crate::types::internal::context::RequestSource::API);

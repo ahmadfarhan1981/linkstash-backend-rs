@@ -10,7 +10,7 @@ mod cli;
 use std::sync::Arc;
 use poem::{Route, Server, handler, listener::TcpListener, web::Html};
 use poem_openapi::OpenApiService;
-use api::{HealthApi, AuthApi};
+use api::{HealthApi, AuthApi, AdminApi};
 use app_data::AppData;
 use config::init_logging;
 use clap::Parser;
@@ -75,6 +75,9 @@ async fn main() -> Result<(), std::io::Error> {
     // Create auth service from AppData
     let auth_service = Arc::new(services::AuthService::new(app_data.clone()));
     
+    // Create admin service from AppData
+    let admin_service = Arc::new(services::AdminService::new(app_data.clone()));
+    
     // Seed test user in debug mode
     #[cfg(debug_assertions)]
     seed_test_user(&app_data.credential_store).await;
@@ -87,10 +90,13 @@ async fn main() -> Result<(), std::io::Error> {
     // Create AuthApi with AuthService (uses auth service's internal token service)
     let auth_api = AuthApi::new(auth_service.clone());
     
+    // Create AdminApi with AdminService
+    let admin_api = AdminApi::new(admin_service);
+    
     // Create OpenAPI service with API implementation
     // Use localhost for the server URL since 0.0.0.0 is not accessible from browsers
     let server_url = format!("http://localhost:{}/api", port);
-    let api_service = OpenApiService::new((HealthApi, auth_api), "Linkstash RS auth backend", "1.0.0")
+    let api_service = OpenApiService::new((HealthApi, auth_api, admin_api), "Linkstash RS auth backend", "1.0.0")
         .server(server_url);
     
     // Generate Swagger UI from OpenAPI service

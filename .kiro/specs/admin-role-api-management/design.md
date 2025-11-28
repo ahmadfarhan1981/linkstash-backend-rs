@@ -6,13 +6,35 @@ This design implements REST API endpoints for managing admin roles (System Admin
 
 ## Architecture
 
+### AppData Pattern
+
+This implementation follows the AppData pattern where all stores and stateless services are created once in `main.rs` and shared across services via `Arc<AppData>`. This eliminates store duplication and provides stable service signatures.
+
+**Initialization Flow:**
+```
+main.rs
+  ↓
+AppData::init()
+  ↓ creates once
+  ├─ credential_store
+  ├─ system_config_store
+  ├─ token_service
+  └─ audit_store
+  ↓ wrapped in Arc<AppData>
+  ↓ passed to services
+  ├─ AuthService::new(app_data)
+  └─ AdminService::new(app_data) → extracts what it needs
+```
+
+See `docs/appdata-pattern.md` for complete documentation.
+
 ### API Flow
 
 ```
 Client Request
     ↓
 AdminApi (API Layer)
-    ↓ Create RequestContext
+    ↓ Create RequestContext (using helpers)
     ↓ Check Authentication
     ↓ Extract Claims
     ↓
@@ -132,18 +154,16 @@ pub struct AdminService {
 }
 
 impl AdminService {
-    /// Create a new AdminService
-    pub fn new(
-        credential_store: Arc<CredentialStore>,
-        system_config_store: Arc<SystemConfigStore>,
-        token_service: Arc<TokenService>,
-        audit_store: Arc<AuditStore>,
-    ) -> Self {
+    /// Create AdminService from AppData
+    /// 
+    /// Extracts only the dependencies needed by AdminService from the centralized AppData.
+    /// This follows the same pattern as AuthService.
+    pub fn new(app_data: Arc<crate::app_data::AppData>) -> Self {
         Self {
-            credential_store,
-            system_config_store,
-            token_service,
-            audit_store,
+            credential_store: app_data.credential_store.clone(),
+            system_config_store: app_data.system_config_store.clone(),
+            token_service: app_data.token_service.clone(),
+            audit_store: app_data.audit_store.clone(),
         }
     }
     
