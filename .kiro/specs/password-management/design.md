@@ -2,21 +2,33 @@
 
 ## Overview
 
-This design implements comprehensive password management for the Linkstash authentication backend, including a reusable password validation library, password change functionality, and enforcement of password changes for bootstrap accounts. The system ensures strong password policies through length requirements and common password checks.
+This design implements comprehensive password management for the Linkstash authentication backend, including a reusable password validation library with multiple validation layers, password change functionality, and enforcement of password changes for bootstrap accounts. The system ensures strong password policies through length requirements, common password checks, compromised password detection via HaveIBeenPwned, and context-specific validation.
 
 ## Architecture
 
 ### Component Overview
 
 ```
-Password Validator (Library)
-├── Length validation (15-64 chars)
-├── Common password check (embedded list)
+Password Validator (Stateless Service in AppData)
+├── Length validation (15-128 chars)
+├── Username substring check (context-specific)
+├── Common password check (SQLite table)
+├── Compromised password check (HIBP with cache)
 └── Secure password generation
+
+Stores (in AppData)
+├── CommonPasswordStore (SQLite table for common passwords)
+├── HibpCacheStore (SQLite table for HIBP cache)
+├── CredentialStore (extended with password management)
+└── SystemConfigStore (HIBP staleness config)
+
+CLI Commands
+├── download-passwords (fetch from URL, load into DB)
+└── bootstrap (uses PasswordValidator)
 
 Password Change Flow
 ├── Verify old password
-├── Validate new password
+├── Validate new password (all checks)
 ├── Update password hash
 ├── Invalidate refresh tokens
 └── Issue new JWT
@@ -24,38 +36,258 @@ Password Change Flow
 Password Change Requirement
 ├── Database flag (password_change_required)
 ├── JWT claim (password_change_required)
-└── Endpoint middleware/check
+└── Endpoint enforcement
 ```
+
+**Design Decisions:**
+
+1. **SQLite table for common passwords**: Fast indexed lookups, minimal memory, easy updates
+2. **AppData pattern**: PasswordValidator is stateless service, stores are shared
+3. **Async validation**: HIBP checks require network I/O
+4. **Graceful HIBP degradation**: Log warning but allow password if API fails
+5. **UUID detection**: Skip username check for owner account
+6. **Validation order**: Length → Username → Common → Compromised (fail fast)
 
 ## Components and Interfaces
 
-### 1. Password Validator Service
+### 1. Database Schema
+
+#### Common Passwords Table
+
+```rust
+// types/db/common_password.rs
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+#[sea_orm(table_name = "common_passwords")]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub password: String,  // Lowercase password
+}
+```
+
+**Migration:** `m20250127_000001_create_common_passwords.rs`
+
+#### HIBP Cache Table
+
+```rust
+// types/db/hibp_cache.rs
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+#[sea_orm(table_name = "hibp_cache")]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub hash_prefix: String,  // 5-character SHA-1 prefix
+    pub response_data: String,  // Full API response (hash suffixes)
+    pub fetched_at: i64,  // Unix timestamp
+}
+```
+
+**Migration:** `m20250127_000002_create_hibp_cache.rs`
+
+#### Users Table Extension
+
+```rust
+// In types/db/user.rs (extend existing Model)
+pub struct Model {
+    // ... existing fields ...
+    pub password_change_required: bool,
+}
+```
+
+**Migration:** `m20250127_000003_add_password_change_required.rs`
+
+#### System Configuration
+
+Add via bootstrap or manual insert:
+- Key: `hibp_cache_staleness_seconds`
+- Value: `2592000` (30 days default)
+
+### 2. Store Layer
+
+#### CommonPasswordStore
+
+```rust
+// src/stores/common_password_store.rs
+pub struct CommonPasswordStore {
+    db: DatabaseConnection,
+}
+
+impl CommonPasswordStore {
+    pub fn new(db: DatabaseConnection) -> Self {
+        Self { db }
+    }
+    
+    /// Check if password exists in common passwords table (case-insensitive)
+    pub async fn is_common_password(&self, password: &str) -> Result<bool, DbErr> {
+        let password_lower = password.to_lowercase();
+        let result = common_password::Entity::find_by_id(password_lower)
+            .one(&self.db)
+            .await?;
+        Ok(result.is_some())
+    }
+    
+    /// Bulk load passwords from iterator (clears existing, uses transaction)
+    pub async fn load_passwords<I>(&self, passwords: I) -> Result<usize, DbErr>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let txn = self.db.begin().await?;
+        common_password::Entity::delete_many().exec(&txn).await?;
+        
+        let mut count = 0;
+        let mut batch = Vec::new();
+        
+        for password in passwords {
+            let password_lower = password.trim().to_lowercase();
+            if password_lower.is_empty() { continue; }
+            
+            batch.push(common_password::ActiveModel {
+                password: Set(password_lower),
+            });
+            count += 1;
+            
+            if batch.len() >= 1000 {
+                common_password::Entity::insert_many(batch.drain(..)).exec(&txn).await?;
+            }
+        }
+        
+        if !batch.is_empty() {
+            common_password::Entity::insert_many(batch).exec(&txn).await?;
+        }
+        
+        txn.commit().await?;
+        Ok(count)
+    }
+    
+    pub async fn count(&self) -> Result<u64, DbErr> {
+        common_password::Entity::find().count(&self.db).await
+    }
+}
+```
+
+#### HibpCacheStore
+
+```rust
+// src/stores/hibp_cache_store.rs
+pub struct HibpCacheStore {
+    db: DatabaseConnection,
+    system_config_store: Arc<SystemConfigStore>,
+}
+
+impl HibpCacheStore {
+    pub fn new(db: DatabaseConnection, system_config_store: Arc<SystemConfigStore>) -> Self {
+        Self { db, system_config_store }
+    }
+    
+    /// Get cached HIBP response if not stale
+    pub async fn get_cached_response(&self, prefix: &str) -> Result<Option<String>, DbErr> {
+        let cache_entry = hibp_cache::Entity::find_by_id(prefix).one(&self.db).await?;
+        
+        if let Some(entry) = cache_entry {
+            let staleness_seconds = self.system_config_store
+                .get_config("hibp_cache_staleness_seconds")
+                .await
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(2592000); // Default 30 days
+            
+            let now = chrono::Utc::now().timestamp();
+            let age = now - entry.fetched_at;
+            
+            if age < staleness_seconds {
+                return Ok(Some(entry.response_data));
+            }
+        }
+        
+        Ok(None)
+    }
+    
+    /// Store or update HIBP response in cache
+    pub async fn store_response(&self, prefix: &str, data: &str) -> Result<(), DbErr> {
+        let now = chrono::Utc::now().timestamp();
+        
+        let model = hibp_cache::ActiveModel {
+            hash_prefix: Set(prefix.to_string()),
+            response_data: Set(data.to_string()),
+            fetched_at: Set(now),
+        };
+        
+        hibp_cache::Entity::insert(model)
+            .on_conflict(
+                OnConflict::column(hibp_cache::Column::HashPrefix)
+                    .update_columns([
+                        hibp_cache::Column::ResponseData,
+                        hibp_cache::Column::FetchedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+        
+        Ok(())
+    }
+}
+```
+
+#### CredentialStore Extensions
+
+```rust
+// src/stores/credential_store.rs (extend existing)
+impl CredentialStore {
+    /// Update user password hash
+    pub async fn update_password(
+        &self,
+        ctx: &RequestContext,
+        user_id: &str,
+        new_password_hash: &str,
+    ) -> Result<(), AuthError> {
+        // Update password hash in database
+        // Log to audit database at point of action
+    }
+    
+    /// Clear password change requirement flag
+    pub async fn clear_password_change_required(
+        &self,
+        ctx: &RequestContext,
+        user_id: &str,
+    ) -> Result<(), AuthError> {
+        // Set password_change_required = false
+        // Log to audit database at point of action
+    }
+}
+```
+
+### 3. Service Layer
+
+#### PasswordValidator (Stateless Service)
 
 ```rust
 // src/services/password_validator.rs
 pub struct PasswordValidator {
     min_length: usize,  // 15
-    max_length: usize,  // 64
-    common_passwords: HashSet<String>,  // Loaded from embedded list
+    max_length: usize,  // 128
+    common_password_store: Arc<CommonPasswordStore>,
+    hibp_cache_store: Arc<HibpCacheStore>,
 }
 
 impl PasswordValidator {
-    /// Create new validator with default settings
-    pub fn new() -> Self {
+    pub fn new(
+        common_password_store: Arc<CommonPasswordStore>,
+        hibp_cache_store: Arc<HibpCacheStore>,
+    ) -> Self {
         Self {
             min_length: 15,
-            max_length: 64,
-            common_passwords: Self::load_common_passwords(),
+            max_length: 128,
+            common_password_store,
+            hibp_cache_store,
         }
     }
     
     /// Validate password against all rules
-    /// 
-    /// # Returns
-    /// * `Ok(())` - Password is valid
-    /// * `Err(PasswordValidationError)` - Password failed validation with specific reason
-    pub fn validate(&self, password: &str) -> Result<(), PasswordValidationError> {
-        // Check length
+    pub async fn validate(
+        &self,
+        password: &str,
+        username: Option<&str>,
+    ) -> Result<(), PasswordValidationError> {
+        // 1. Length check
         if password.len() < self.min_length {
             return Err(PasswordValidationError::TooShort(self.min_length));
         }
@@ -63,17 +295,67 @@ impl PasswordValidator {
             return Err(PasswordValidationError::TooLong(self.max_length));
         }
         
-        // Check against common passwords (case-insensitive)
-        if self.common_passwords.contains(&password.to_lowercase()) {
+        // 2. Username substring check (skip for UUIDs)
+        if let Some(username) = username {
+            if !Self::is_uuid(username) {
+                if password.to_lowercase().contains(&username.to_lowercase()) {
+                    return Err(PasswordValidationError::ContainsUsername);
+                }
+            }
+        }
+        
+        // 3. Common password check
+        if self.common_password_store.is_common_password(password).await? {
             return Err(PasswordValidationError::CommonPassword);
+        }
+        
+        // 4. HIBP check (graceful degradation)
+        match self.check_hibp(password).await {
+            Ok(true) => return Err(PasswordValidationError::CompromisedPassword),
+            Ok(false) => {},
+            Err(e) => tracing::warn!("HIBP check failed: {}", e),
         }
         
         Ok(())
     }
     
-    /// Generate a secure random password that passes all validation rules
-    /// 
-    /// Generates a 20-character password with mix of uppercase, lowercase, digits, and symbols
+    async fn check_hibp(&self, password: &str) -> Result<bool, PasswordValidatorError> {
+        use sha1::{Sha1, Digest};
+        
+        let mut hasher = Sha1::new();
+        hasher.update(password.as_bytes());
+        let hash = format!("{:X}", hasher.finalize());
+        
+        let prefix = &hash[..5];
+        let suffix = &hash[5..];
+        
+        // Check cache first
+        if let Some(cached_data) = self.hibp_cache_store.get_cached_response(prefix).await? {
+            return Ok(cached_data.contains(suffix));
+        }
+        
+        // Fetch from API
+        let response = self.fetch_hibp_api(prefix).await?;
+        self.hibp_cache_store.store_response(prefix, &response).await?;
+        
+        Ok(response.contains(suffix))
+    }
+    
+    async fn fetch_hibp_api(&self, prefix: &str) -> Result<String, PasswordValidatorError> {
+        let url = format!("https://api.pwnedpasswords.com/range/{}", prefix);
+        let client = reqwest::Client::new();
+        
+        let response = client
+            .get(&url)
+            .header("User-Agent", "Linkstash-Auth")
+            .send()
+            .await?
+            .text()
+            .await?;
+        
+        Ok(response)
+    }
+    
     pub fn generate_secure_password(&self) -> String {
         use rand::Rng;
         const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
@@ -87,15 +369,8 @@ impl PasswordValidator {
             .collect()
     }
     
-    /// Load common passwords from embedded file
-    fn load_common_passwords() -> HashSet<String> {
-        // Embed common password list at compile time
-        const COMMON_PASSWORDS: &str = include_str!("../../resources/common_passwords.txt");
-        COMMON_PASSWORDS
-            .lines()
-            .map(|s| s.trim().to_lowercase())
-            .filter(|s| !s.is_empty())
-            .collect()
+    fn is_uuid(s: &str) -> bool {
+        uuid::Uuid::parse_str(s).is_ok()
     }
 }
 
@@ -107,127 +382,34 @@ pub enum PasswordValidationError {
     #[error("Password must not exceed {0} characters")]
     TooLong(usize),
     
-    #[error("Password is too common or has been compromised")]
+    #[error("Password must not contain your username")]
+    ContainsUsername,
+    
+    #[error("Password is too common")]
     CommonPassword,
-}
-```
-
-**Design Decision:** Embed common password list at compile time using `include_str!` macro. This avoids external file dependencies and ensures the list is always available. Use top 10k passwords from HaveIBeenPwned or similar source.
-
-### 2. Database Schema Changes
-
-Add password change requirement flag to users table:
-
-```rust
-// In types/db/user.rs (extend existing Model)
-pub struct Model {
-    // ... existing fields ...
-    pub password_change_required: bool,
-}
-```
-
-**Migration:**
-```rust
-// migration/src/m20250119_000001_add_password_change_required.rs
-pub struct Migration;
-
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(User::Table)
-                    .add_column(
-                        ColumnDef::new(User::PasswordChangeRequired)
-                            .boolean()
-                            .not_null()
-                            .default(false)
-                    )
-                    .to_owned(),
-            )
-            .await
-    }
     
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(User::Table)
-                    .drop_column(User::PasswordChangeRequired)
-                    .to_owned(),
-            )
-            .await
-    }
+    #[error("Password has been compromised in a data breach")]
+    CompromisedPassword,
 }
 ```
 
-### 3. JWT Claims Extension
-
-```rust
-// In types/internal/auth.rs (extend existing Claims)
-pub struct Claims {
-    // ... existing fields ...
-    pub password_change_required: bool,
-}
-```
-
-**Design Decision:** Include flag in JWT to enable stateless checks without database queries. When password is changed, new JWT is issued with updated flag.
-
-### 4. Store Layer
-
-```rust
-// src/stores/credential_store.rs (extend existing)
-impl CredentialStore {
-    /// Update user password hash
-    /// 
-    /// # Arguments
-    /// * `ctx` - Request context for audit logging
-    /// * `user_id` - User ID to update
-    /// * `new_password_hash` - New argon2 password hash
-    pub async fn update_password(
-        &self,
-        ctx: &RequestContext,
-        user_id: &str,
-        new_password_hash: &str,
-    ) -> Result<(), AuthError> {
-        // Update password hash
-        // Log to audit database at point of action
-    }
-    
-    /// Clear password change requirement flag
-    /// 
-    /// # Arguments
-    /// * `ctx` - Request context for audit logging
-    /// * `user_id` - User ID to update
-    pub async fn clear_password_change_required(
-        &self,
-        ctx: &RequestContext,
-        user_id: &str,
-    ) -> Result<(), AuthError> {
-        // Set password_change_required = false
-        // Log to audit database at point of action
-    }
-}
-```
-
-### 5. Service Layer
+#### AuthService Extensions
 
 ```rust
 // src/services/auth_service.rs (extend existing)
+pub struct AuthService {
+    // ... existing fields ...
+    password_validator: Arc<PasswordValidator>,
+}
+
 impl AuthService {
-    /// Change user password
-    /// 
-    /// Verifies old password, validates new password, updates hash, clears password_change_required flag,
-    /// invalidates all refresh tokens, and issues new JWT.
-    /// 
-    /// # Arguments
-    /// * `ctx` - Request context with authenticated user
-    /// * `old_password` - Current password for verification
-    /// * `new_password` - New password to set
-    /// 
-    /// # Returns
-    /// * `Ok((access_token, refresh_token))` - New tokens with updated claims
-    /// * `Err(AuthError)` - Old password incorrect or new password invalid
+    pub fn new(app_data: Arc<AppData>) -> Self {
+        Self {
+            // ... existing fields ...
+            password_validator: app_data.password_validator.clone(),
+        }
+    }
+    
     pub async fn change_password(
         &self,
         ctx: &RequestContext,
@@ -242,9 +424,10 @@ impl AuthService {
             return Err(AuthError::InvalidCredentials);
         }
         
-        // 2. Validate new password
-        let validator = PasswordValidator::new();
-        validator.validate(new_password)
+        // 2. Validate new password (with username context)
+        self.password_validator
+            .validate(new_password, Some(&user.username))
+            .await
             .map_err(|e| AuthError::PasswordValidationFailed(e.to_string()))?;
         
         // 3. Hash new password
@@ -281,103 +464,117 @@ impl AuthService {
 }
 ```
 
-### 6. API Endpoints
+### 4. AppData Integration
 
 ```rust
-// src/api/auth.rs (extend existing AuthApi)
-#[OpenApi(prefix_path = "/auth")]
-impl AuthApi {
-    /// Change user password
-    /// 
-    /// Accessible even when password_change_required=true (unlike other endpoints).
-    /// Returns new access and refresh tokens after successful change.
-    #[oai(path = "/change-password", method = "post", tag = "AuthTags::Authentication")]
-    async fn change_password(
-        &self,
-        req: &Request,
-        auth: BearerAuth,
-        body: Json<ChangePasswordRequest>,
-    ) -> ChangePasswordApiResponse {
-        // Create request context (validates JWT)
-        let ctx = self.create_request_context(req, Some(auth)).await;
+// src/app_data.rs (extend existing)
+pub struct AppData {
+    // ... existing fields ...
+    
+    // New stores
+    pub common_password_store: Arc<CommonPasswordStore>,
+    pub hibp_cache_store: Arc<HibpCacheStore>,
+    
+    // New stateless service
+    pub password_validator: Arc<PasswordValidator>,
+}
+
+impl AppData {
+    pub async fn init() -> Result<Self, AuthError> {
+        // ... existing initialization ...
         
-        if !ctx.authenticated {
-            return ChangePasswordApiResponse::Unauthorized(Json(ErrorResponse {
-                error: "Unauthenticated".to_string(),
-            }));
-        }
+        // Create new stores
+        let common_password_store = Arc::new(CommonPasswordStore::new(db.clone()));
         
-        // NOTE: Do NOT check password_change_required here - this endpoint must be accessible
-        // even when the flag is true
+        let hibp_cache_store = Arc::new(HibpCacheStore::new(
+            db.clone(),
+            system_config_store.clone(),
+        ));
         
-        match self.auth_service
-            .change_password(&ctx, &body.old_password, &body.new_password)
-            .await
-        {
-            Ok((access_token, refresh_token)) => {
-                ChangePasswordApiResponse::Ok(Json(ChangePasswordResponse {
-                    message: "Password changed successfully".to_string(),
-                    access_token,
-                    refresh_token,
-                    token_type: "Bearer".to_string(),
-                    expires_in: 900,
-                }))
-            }
-            Err(e) => {
-                ChangePasswordApiResponse::BadRequest(Json(ErrorResponse {
-                    error: e.to_string(),
-                }))
-            }
-        }
+        // Create password validator (stateless service)
+        let password_validator = Arc::new(PasswordValidator::new(
+            common_password_store.clone(),
+            hibp_cache_store.clone(),
+        ));
+        
+        Ok(Self {
+            // ... existing fields ...
+            common_password_store,
+            hibp_cache_store,
+            password_validator,
+        })
     }
 }
 ```
 
-### 7. Password Change Requirement Enforcement
-
-**Option 1: Check in create_request_context (Recommended)**
+### 5. CLI Commands
 
 ```rust
-// In src/api/auth.rs or shared helper
-async fn create_request_context(
-    &self,
-    req: &Request,
-    auth: Option<BearerAuth>,
-) -> crate::types::internal::context::RequestContext {
-    // ... existing JWT validation ...
+// src/cli/password_management.rs
+pub async fn download_and_load_passwords(
+    url: &str,
+    app_data: &AppData,
+) -> Result<(), CliError> {
+    println!("Downloading common password list from: {}", url);
     
-    // After successful JWT validation, check password_change_required
-    if let Some(claims) = &ctx.claims {
-        if claims.password_change_required {
-            // Check if this is an allowed endpoint
-            let path = req.uri().path();
-            let allowed_paths = ["/api/auth/change-password", "/api/auth/whoami"];
-            
-            if !allowed_paths.iter().any(|p| path.starts_with(p)) {
-                // Set a flag in context to indicate password change is required
-                ctx.password_change_blocked = true;
-            }
-        }
+    // 1. Fetch from URL
+    let client = reqwest::Client::new();
+    let response = client.get(url).send().await?;
+    
+    if !response.status().is_success() {
+        return Err(CliError::DownloadFailed(format!("HTTP {}", response.status())));
     }
     
-    ctx
+    let content = response.text().await?;
+    
+    // 2. Parse passwords (one per line)
+    let passwords: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+    
+    // 3. Load into database
+    let count = app_data.common_password_store.load_passwords(passwords).await?;
+    
+    println!("✓ Successfully loaded {} passwords into database", count);
+    
+    Ok(())
 }
 
-// Then in each endpoint:
-if ctx.password_change_blocked {
-    return ErrorResponse::PasswordChangeRequired;
+// In main CLI handler
+#[derive(Parser)]
+enum Commands {
+    // ... existing commands ...
+    
+    /// Download and load common password list from URL
+    DownloadPasswords {
+        /// URL to download password list from
+        #[arg(long)]
+        url: String,
+    },
+}
+
+// In execute_command
+Commands::DownloadPasswords { url } => {
+    download_and_load_passwords(&url, app_data).await?;
 }
 ```
 
-**Option 2: Middleware (More complex, cleaner separation)**
+**Usage:**
+```bash
+cargo run -- download-passwords --url https://example.com/passwords.txt
+```
 
-Create a middleware that checks the flag and rejects requests before they reach handlers.
+### 6. JWT Claims Extension
 
-**Design Decision:** Use Option 1 (check in endpoints) for simplicity. Middleware would require more infrastructure changes.
+```rust
+// In types/internal/auth.rs (extend existing Claims)
+pub struct Claims {
+    // ... existing fields ...
+    pub password_change_required: bool,
+}
+```
 
-## Data Models
+### 7. API Layer
 
-### Request/Response DTOs
+#### DTOs
 
 ```rust
 // src/types/dto/auth.rs (extend existing)
@@ -409,7 +606,85 @@ pub enum ChangePasswordApiResponse {
 }
 ```
 
-## Error Handling
+#### Endpoints
+
+```rust
+// src/api/auth.rs (extend existing AuthApi)
+#[OpenApi(prefix_path = "/auth")]
+impl AuthApi {
+    #[oai(path = "/change-password", method = "post", tag = "AuthTags::Authentication")]
+    async fn change_password(
+        &self,
+        req: &Request,
+        auth: BearerAuth,
+        body: Json<ChangePasswordRequest>,
+    ) -> ChangePasswordApiResponse {
+        let ctx = self.create_request_context(req, Some(auth)).await;
+        
+        if !ctx.authenticated {
+            return ChangePasswordApiResponse::Unauthorized(Json(ErrorResponse {
+                error: "Unauthenticated".to_string(),
+            }));
+        }
+        
+        // NOTE: Do NOT check password_change_required here - this endpoint must be accessible
+        
+        match self.auth_service
+            .change_password(&ctx, &body.old_password, &body.new_password)
+            .await
+        {
+            Ok((access_token, refresh_token)) => {
+                ChangePasswordApiResponse::Ok(Json(ChangePasswordResponse {
+                    message: "Password changed successfully".to_string(),
+                    access_token,
+                    refresh_token,
+                    token_type: "Bearer".to_string(),
+                    expires_in: 900,
+                }))
+            }
+            Err(e) => {
+                ChangePasswordApiResponse::BadRequest(Json(ErrorResponse {
+                    error: e.to_string(),
+                }))
+            }
+        }
+    }
+}
+```
+
+#### Password Change Requirement Enforcement
+
+```rust
+// In src/api/helpers.rs or create_request_context
+async fn create_request_context(
+    &self,
+    req: &Request,
+    auth: Option<BearerAuth>,
+) -> RequestContext {
+    // ... existing JWT validation ...
+    
+    // After successful JWT validation, check password_change_required
+    if let Some(claims) = &ctx.claims {
+        if claims.password_change_required {
+            let path = req.uri().path();
+            let allowed_paths = ["/api/auth/change-password", "/api/auth/whoami"];
+            
+            if !allowed_paths.iter().any(|p| path.starts_with(p)) {
+                ctx.password_change_blocked = true;
+            }
+        }
+    }
+    
+    ctx
+}
+
+// In each protected endpoint:
+if ctx.password_change_blocked {
+    return ErrorResponse::PasswordChangeRequired;
+}
+```
+
+### 8. Error Handling
 
 ```rust
 // src/errors/auth.rs (extend existing AuthError)
@@ -427,95 +702,116 @@ pub enum AuthError {
 }
 ```
 
+## Environment Configuration
+
+Add to `.env` and `.env.example`:
+
+```bash
+# Password Management
+# (HIBP cache staleness stored in system_config table, default 30 days)
+```
+
 ## Security Considerations
 
 ### 1. Password Validation
 
-- **15-64 character range** balances security and usability
-- **Common password check** prevents use of easily guessed passwords
-- **Embedded list** ensures offline validation without external dependencies
+- **15-128 character range** supports passphrases
+- **Username substring check** prevents obvious weak passwords
+- **Common password check** via SQLite table (fast, updateable)
+- **Compromised password check** via HIBP with k-anonymity
+- **Validation order** optimized (cheap checks first, network last)
 
-### 2. Token Invalidation
+### 2. HIBP k-Anonymity
+
+- Only 5-character hash prefix sent to API
+- Prevents HIBP from knowing which password was checked
+- Local cache minimizes API calls
+- Graceful degradation if API unavailable
+
+### 3. Token Invalidation
 
 When password changes:
-1. All refresh tokens are deleted from database
-2. New JWT issued with updated `password_change_required=false`
-3. Old JWTs become invalid at next validation (claims mismatch)
+1. All refresh tokens deleted from database
+2. New JWT issued with `password_change_required=false`
+3. Old JWTs become invalid at next validation
 
-**Rationale:** Ensures all sessions are terminated when password changes, preventing unauthorized access if password was compromised.
-
-### 3. Password Change Requirement
+### 4. Password Change Requirement
 
 - Bootstrap accounts created with `password_change_required=true`
 - Users must change password before accessing protected endpoints
 - Only `/auth/change-password` and `/auth/whoami` remain accessible
-- Prevents use of auto-generated passwords in production
 
-### 4. Audit Logging
+### 5. Audit Logging
 
 All password changes logged with:
-- Timestamp
-- User ID
-- IP address
+- Timestamp, User ID, IP address
 - Success/failure status
-- Validation failure reason (if applicable)
+- Validation failure reason
+- Never log actual passwords or hashes
 
 ## Testing Strategy
 
-### Unit Tests
+### Manual Verification Points
 
 1. **Password Validator**
-   - Test length validation (< 15, 15-64, > 64)
-   - Test common password detection
-   - Test secure password generation
-   - Test case-insensitive common password matching
+   - Verify length validation (< 15, 15-128, > 128)
+   - Verify username substring detection (case-insensitive)
+   - Verify common password detection from database
+   - Verify HIBP compromised password detection
+   - Verify secure password generation
+   - Verify UUID username check is skipped
 
-2. **Password Change Logic**
-   - Test old password verification
-   - Test new password validation
-   - Test password hash update
-   - Test flag clearing
+2. **Common Password Management**
+   - Verify CLI download command works
+   - Verify passwords loaded into database
+   - Verify validator queries database correctly
+   - Verify case-insensitive matching
 
-### Integration Tests
+3. **HIBP Cache**
+   - Verify cache table created
+   - Verify cache hit/miss logic
+   - Verify staleness checking
+   - Verify API calls only when needed
+   - Verify graceful degradation on API failure
 
-1. **Password Change Flow**
-   - Test successful password change with valid credentials
-   - Test rejection with incorrect old password
-   - Test rejection with invalid new password (too short, too long, common)
-   - Test new tokens issued after change
-   - Test old refresh tokens invalidated
+4. **Password Change Flow**
+   - Verify successful password change with valid credentials
+   - Verify rejection with incorrect old password
+   - Verify rejection with invalid new password (all validation types)
+   - Verify new tokens issued after change
+   - Verify old refresh tokens invalidated
 
-2. **Password Change Requirement**
-   - Test bootstrap accounts have `password_change_required=true`
-   - Test login returns JWT with flag set
-   - Test protected endpoints reject requests with 403
-   - Test `/auth/change-password` remains accessible
-   - Test `/auth/whoami` remains accessible
-   - Test flag cleared after successful password change
-   - Test old tokens invalidated after password change
+5. **Password Change Requirement**
+   - Verify bootstrap accounts have `password_change_required=true`
+   - Verify login returns JWT with flag set
+   - Verify protected endpoints reject requests with 403
+   - Verify `/auth/change-password` remains accessible
+   - Verify `/auth/whoami` remains accessible
+   - Verify flag cleared after successful password change
 
-3. **Audit Logging**
-   - Test password changes logged with correct metadata
-   - Test failed password changes logged
-   - Test validation failures logged
+6. **Audit Logging**
+   - Verify password changes logged with correct metadata
+   - Verify failed password changes logged
+   - Verify validation failures logged
 
 ## Migration Path
 
-### Database Migration
+### Database Migrations
 
-```rust
-// migration/src/m20250119_000001_add_password_change_required.rs
-// (See schema section above)
-```
+1. `m20250127_000001_create_common_passwords.rs` - Create common passwords table
+2. `m20250127_000002_create_hibp_cache.rs` - Create HIBP cache table
+3. `m20250127_000003_add_password_change_required.rs` - Add flag to users table
+4. System config entry for HIBP staleness (via bootstrap or manual insert)
 
 ### Deployment Steps
 
-1. Run database migration: `sea-orm-cli migrate up`
-2. Deploy new binary with password management support
-3. Existing users have `password_change_required=false` (no impact)
-4. New bootstrap accounts will have `password_change_required=true`
+1. Run database migrations: `sea-orm-cli migrate up`
+2. Download common passwords: `cargo run -- download-passwords --url <URL>`
+3. Deploy new binary with password management support
+4. Existing users have `password_change_required=false` (no impact)
+5. New bootstrap accounts will have `password_change_required=true`
 
-**Zero Downtime:** Migration adds column with default `false`, existing functionality continues working.
+**Zero Downtime:** Migrations add new tables/columns with defaults, existing functionality continues working.
 
 ## Future Enhancements
 
@@ -524,4 +820,3 @@ All password changes logged with:
 3. **Password Strength Meter**: Provide real-time feedback in UI
 4. **Admin-Initiated Password Reset**: Allow admins to force password changes
 5. **Configurable Password Policy**: Make min/max length configurable via environment variables
-
