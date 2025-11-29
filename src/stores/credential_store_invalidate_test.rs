@@ -22,6 +22,7 @@ mod tests {
             .expect("Failed to add user");
         
         // Create multiple refresh tokens for the user
+        let ctx = crate::types::internal::context::RequestContext::new();
         for i in 0..3 {
             let token = token_service.generate_refresh_token();
             let token_hash = token_service.hash_refresh_token(&token);
@@ -29,7 +30,7 @@ mod tests {
             let jwt_id = format!("jwt-id-{}", i);
             
             credential_store
-                .store_refresh_token(token_hash, user_id.clone(), expires_at, jwt_id, None)
+                .store_refresh_token(&ctx, token_hash, user_id.clone(), expires_at, jwt_id)
                 .await
                 .expect("Failed to store token");
         }
@@ -88,13 +89,14 @@ mod tests {
             .expect("Failed to add user2");
         
         // Create tokens for both users
+        let ctx = crate::types::internal::context::RequestContext::new();
         for user_id in [&user1_id, &user2_id] {
             let token = token_service.generate_refresh_token();
             let token_hash = token_service.hash_refresh_token(&token);
             let expires_at = chrono::Utc::now().timestamp() + 3600;
             
             credential_store
-                .store_refresh_token(token_hash, user_id.clone(), expires_at, "jwt-id".to_string(), None)
+                .store_refresh_token(&ctx, token_hash, user_id.clone(), expires_at, "jwt-id".to_string())
                 .await
                 .expect("Failed to store token");
         }

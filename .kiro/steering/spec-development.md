@@ -80,6 +80,34 @@ Phase N+5: Documentation
 END
 ```
 
+## Task List Format (MANDATORY)
+
+**Use this exact format for all task lists:**
+
+```markdown
+# Implementation Plan
+
+- [ ] 1. Phase Name (e.g., "Login Flow - Update login success/failure logging")
+  - [ ] 1.1 Specific task description
+    - Implementation details as bullets
+    - _Requirements: X.Y, Z.W_
+  - [ ] 1.2 Another specific task
+    - Implementation details
+    - _Requirements: A.B_
+
+- [ ] 2. Next Phase Name
+  - [ ] 2.1 Task description
+    - Details
+    - _Requirements: C.D_
+```
+
+**Critical Rules:**
+1. **Phases are top-level checkboxes** (e.g., `- [ ] 1. Phase Name`)
+2. **Tasks are second-level checkboxes** (e.g., `- [ ] 1.1 Task description`)
+3. **Details are bullets without checkboxes** (indented under tasks)
+4. Use the `taskStatus` tool with the EXACT task text (e.g., "1.1 Task description")
+5. Mark phases complete only after ALL sub-tasks are complete
+
 ## Key Principles
 
 1. Each phase should deliver a **working, verified feature**. After completing a phase, you must verify that the feature works (compile, run, manual testing) before moving to the next phase.

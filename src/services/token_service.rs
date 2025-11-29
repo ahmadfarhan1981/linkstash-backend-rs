@@ -37,23 +37,23 @@ impl TokenService {
     /// Logs JWT issuance to audit database at point of action.
     /// 
     /// # Arguments
-    /// * `user_id` - The UUID of the user
+    /// * `ctx` - Request context containing actor information
+    /// * `user_id` - The UUID of the user (target of the JWT)
     /// * `is_owner` - Owner role flag
     /// * `is_system_admin` - System Admin role flag
     /// * `is_role_admin` - Role Admin role flag
     /// * `app_roles` - Application roles (list of role names)
-    /// * `ip_address` - Client IP address for audit logging
     /// 
     /// # Returns
     /// * `Result<(String, String), InternalError>` - Tuple of (encoded JWT, JWT ID) or an error
     pub async fn generate_jwt(
         &self,
+        ctx: &crate::types::internal::context::RequestContext,
         user_id: &Uuid,
         is_owner: bool,
         is_system_admin: bool,
         is_role_admin: bool,
         app_roles: Vec<String>,
-        ip_address: Option<String>,
     ) -> Result<(String, String), InternalError> {
         let now = Utc::now().timestamp();
         let expiration = now + (self.jwt_expiration_minutes * 60);
@@ -86,10 +86,10 @@ impl TokenService {
         // Log JWT issuance at point of action (expiration_dt already validated above)
         if let Err(audit_err) = audit_logger::log_jwt_issued(
             &self.audit_store,
+            ctx,
             user_id.to_string(),
             jti.clone(),
             expiration_dt,
-            ip_address,
         ).await {
             tracing::error!("Failed to log JWT issuance: {:?}", audit_err);
         }
@@ -133,12 +133,21 @@ impl TokenService {
                     _ => "validation_error",
                 };
                 
+                // Create temporary RequestContext from unverified JWT claims for audit logging
+                let ctx = crate::types::internal::context::RequestContext {
+                    ip_address: None, // Not available in token validation context
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    authenticated: false, // JWT validation failed
+                    claims: Some(unverified_claims.clone()),
+                    source: crate::types::internal::context::RequestSource::API,
+                    actor_id: unverified_claims.sub.clone(),
+                };
+                
                 // Check if this is a tampering attempt (invalid signature)
                 if matches!(err, InternalError::Credential(CredentialError::InvalidToken { .. })) {
                     if let Err(audit_err) = audit_logger::log_jwt_tampered(
                         &self.audit_store,
-                        unverified_claims.sub.clone(),
-                        unverified_claims.jti.clone(),
+                        &ctx,
                         token.to_string(),
                         failure_reason.to_string(),
                     ).await {
@@ -148,8 +157,7 @@ impl TokenService {
                     // Normal validation failure (expired, etc.)
                     if let Err(audit_err) = audit_logger::log_jwt_validation_failure(
                         &self.audit_store,
-                        unverified_claims.sub.clone(),
-                        unverified_claims.jti.clone(),
+                        &ctx,
                         failure_reason.to_string(),
                     ).await {
                         tracing::error!("Failed to log JWT validation failure: {:?}", audit_err);
@@ -252,8 +260,9 @@ mod tests {
     async fn test_jwt_expiration_is_15_minutes() {
         let token_manager = create_test_token_service().await;
         let user_id = Uuid::new_v4();
+        let ctx = crate::types::internal::context::RequestContext::new();
         
-        let (token, _jwt_id) = token_manager.generate_jwt(&user_id, false, false, false, vec![], None).await.unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&ctx, &user_id, false, false, false, vec![]).await.unwrap();
         
         let mut validation = Validation::new(Algorithm::HS256);
         validation.validate_exp = false;
@@ -362,14 +371,15 @@ mod tests {
     async fn test_jwt_includes_admin_roles() {
         let token_manager = create_test_token_service().await;
         let user_id = Uuid::new_v4();
+        let ctx = crate::types::internal::context::RequestContext::new();
         
         let (token, _jwt_id) = token_manager.generate_jwt(
+            &ctx,
             &user_id,
             true,  // is_owner
             true,  // is_system_admin
             false, // is_role_admin
             vec!["editor".to_string(), "viewer".to_string()],
-            None
         ).await.unwrap();
         
         let mut validation = Validation::new(Algorithm::HS256);
@@ -391,14 +401,15 @@ mod tests {
     async fn test_jwt_with_no_admin_roles() {
         let token_manager = create_test_token_service().await;
         let user_id = Uuid::new_v4();
+        let ctx = crate::types::internal::context::RequestContext::new();
         
         let (token, _jwt_id) = token_manager.generate_jwt(
+            &ctx,
             &user_id,
             false, // is_owner
             false, // is_system_admin
             false, // is_role_admin
             vec![],
-            None
         ).await.unwrap();
         
         let mut validation = Validation::new(Algorithm::HS256);

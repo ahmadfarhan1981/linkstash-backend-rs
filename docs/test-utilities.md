@@ -118,7 +118,9 @@ pub async fn create_test_user(
     username: &str,
     password: &str,
 ) -> String {
-    store.add_user(username, password, &RequestContext::for_cli("test"))
+    let ctx = RequestContext::for_cli("test");
+    // ctx.actor_id = "cli:test"
+    store.add_user(username, password, &ctx)
         .await
         .expect("Failed to create test user")
 }
@@ -145,10 +147,43 @@ pub async fn create_test_user_with_token(
 For tests that need various request contexts:
 
 ```rust
-pub fn test_context_with_user(user_id: &str) -> RequestContext {
+use crate::types::internal::auth::Claims;
+
+/// Create a test context for an authenticated user
+pub fn test_context_authenticated(user_id: &str) -> RequestContext {
+    let claims = Claims {
+        sub: user_id.to_string(),
+        exp: (Utc::now() + Duration::minutes(15)).timestamp(),
+        iat: Utc::now().timestamp(),
+        jti: Some(Uuid::new_v4().to_string()),
+        is_owner: false,
+        is_system_admin: false,
+        is_role_admin: false,
+        app_roles: vec![],
+    };
+    
     RequestContext::new()
-        .with_authenticated_user(user_id)
+        .with_auth(claims)  // Sets authenticated=true, actor_id from claims.sub
         .with_ip_address("127.0.0.1")
+}
+
+/// Create a test context for an unauthenticated request
+pub fn test_context_unauthenticated() -> RequestContext {
+    RequestContext::new()
+        .with_ip_address("127.0.0.1")
+    // actor_id = "unknown", authenticated = false
+}
+
+/// Create a test context for a CLI operation
+pub fn test_context_cli(command: &str) -> RequestContext {
+    RequestContext::for_cli(command)
+    // actor_id = "cli:{command}"
+}
+
+/// Create a test context for a system operation
+pub fn test_context_system(operation: &str) -> RequestContext {
+    RequestContext::for_system(operation)
+    // actor_id = "system:{operation}"
 }
 ```
 

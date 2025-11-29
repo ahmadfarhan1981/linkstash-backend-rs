@@ -74,12 +74,12 @@ impl AuthService {
         
         // Generate JWT with admin roles and audit logging at point of action
         let (access_token, jwt_id) = self.token_service.generate_jwt(
+            ctx,
             &user_id,
             user.is_owner,
             user.is_system_admin,
             user.is_role_admin,
             app_roles,
-            ctx.ip_address.clone(),
         ).await?;
         
         let refresh_token = self.token_service.generate_refresh_token();
@@ -90,11 +90,11 @@ impl AuthService {
         // Store refresh token with audit logging in the store
         self.credential_store
             .store_refresh_token(
+                ctx,
                 token_hash.clone(),
                 user_id_str.clone(),
                 expires_at,
                 jwt_id.clone(),
-                ctx.ip_address.clone(),
             )
             .await?;
         
@@ -118,7 +118,7 @@ impl AuthService {
         
         // Validation with audit logging happens in the store
         let user_id_str = self.credential_store
-            .validate_refresh_token(&token_hash, ctx.ip_address.clone())
+            .validate_refresh_token(ctx, &token_hash)
             .await?;
         
         let user_id = Uuid::parse_str(&user_id_str)
@@ -137,12 +137,12 @@ impl AuthService {
         
         // Generate JWT with admin roles and audit logging at point of action
         let (access_token, _jwt_id) = self.token_service.generate_jwt(
+            ctx,
             &user_id,
             user.is_owner,
             user.is_system_admin,
             user.is_role_admin,
             app_roles,
-            ctx.ip_address.clone(),
         ).await?;
         
         Ok(access_token)
@@ -167,16 +167,13 @@ impl AuthService {
     ) -> Result<(), InternalError> {
         let token_hash = self.token_service.hash_refresh_token(&refresh_token);
         
-        // Extract jwt_id if authenticated
-        let jwt_id = if ctx.authenticated {
-            ctx.claims.as_ref().and_then(|c| c.jti.clone())
-        } else {
+        // Log warning for unauthenticated logout attempts
+        if !ctx.authenticated {
             tracing::warn!("Unauthenticated logout from IP: {:?}", ctx.ip_address);
-            None
-        };
+        }
         
         // Revocation with audit logging happens in the store
-        self.credential_store.revoke_refresh_token(&token_hash, jwt_id).await?;
+        self.credential_store.revoke_refresh_token(ctx, &token_hash).await?;
         
         Ok(())
     }

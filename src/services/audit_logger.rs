@@ -23,6 +23,7 @@ pub async fn log_login_success(
     let mut event = AuditEvent::new(EventType::LoginSuccess);
     event.user_id = Some(ctx.actor_id.clone());
     event.ip_address = ctx.ip_address.clone();
+    event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
     event.data.insert("target_user_id".to_string(), json!(target_user_id));
     event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
     
@@ -45,6 +46,7 @@ pub async fn log_login_failure(
     let mut event = AuditEvent::new(EventType::LoginFailure);
     event.user_id = Some(ctx.actor_id.clone());
     event.ip_address = ctx.ip_address.clone();
+    event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
     event.data.insert("failure_reason".to_string(), json!(failure_reason));
     event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
     
@@ -59,22 +61,29 @@ pub async fn log_login_failure(
 ///
 /// # Arguments
 /// * `store` - Reference to the AuditStore
-/// * `user_id` - ID of the user for whom the JWT was issued
-/// * `jwt_id` - JWT identifier (jti claim)
+/// * `ctx` - Request context containing actor information
+/// * `target_user_id` - ID of the user for whom the JWT was issued (JWT subject)
+/// * `issued_jwt_id` - JWT identifier (jti claim) of the JWT being issued
 /// * `expiration` - Expiration timestamp of the JWT
-/// * `ip_address` - Optional IP address of the client (if available)
 pub async fn log_jwt_issued(
     store: &AuditStore,
-    user_id: String,
-    jwt_id: String,
+    ctx: &RequestContext,
+    target_user_id: String,
+    issued_jwt_id: String,
     expiration: DateTime<Utc>,
-    ip_address: Option<String>,
 ) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::JwtIssued);
-    event.user_id = Some(user_id);
-    event.jwt_id = Some(jwt_id);
-    event.ip_address = ip_address;
+    event.user_id = Some(ctx.actor_id.clone());
+    // For JWT issuance, jwt_id field contains the JWT being issued (for easier querying)
+    event.jwt_id = Some(issued_jwt_id.clone());
+    event.ip_address = ctx.ip_address.clone();
+    event.data.insert("target_user_id".to_string(), json!(target_user_id));
     event.data.insert("expiration".to_string(), json!(expiration.to_rfc3339()));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
+    // Also store actor's JWT ID if authenticated (for tracing who requested the issuance)
+    if let Some(actor_jwt_id) = ctx.claims.as_ref().and_then(|c| c.jti.clone()) {
+        event.data.insert("actor_jwt_id".to_string(), json!(actor_jwt_id));
+    }
     
     store.write_event(event).await
 }
@@ -83,19 +92,19 @@ pub async fn log_jwt_issued(
 ///
 /// # Arguments
 /// * `store` - Reference to the AuditStore
-/// * `user_id` - ID of the user from the JWT claims
-/// * `jwt_id` - Optional JWT identifier (jti claim)
+/// * `ctx` - Request context containing actor information (from JWT claims)
 /// * `failure_reason` - Reason for the validation failure
 pub async fn log_jwt_validation_failure(
     store: &AuditStore,
-    user_id: String,
-    jwt_id: Option<String>,
+    ctx: &RequestContext,
     failure_reason: String,
 ) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::JwtValidationFailure);
-    event.user_id = Some(user_id);
-    event.jwt_id = jwt_id;
+    event.user_id = Some(ctx.actor_id.clone());
+    event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
+    event.ip_address = ctx.ip_address.clone();
     event.data.insert("failure_reason".to_string(), json!(failure_reason));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
     
     store.write_event(event).await
 }
@@ -104,22 +113,22 @@ pub async fn log_jwt_validation_failure(
 ///
 /// # Arguments
 /// * `store` - Reference to the AuditStore
-/// * `user_id` - ID of the user from the JWT claims (if extractable)
-/// * `jwt_id` - Optional JWT identifier (jti claim)
+/// * `ctx` - Request context containing actor information (from unverified JWT claims)
 /// * `full_jwt` - Full JWT string for forensic analysis
 /// * `failure_reason` - Reason for the tampering detection
 pub async fn log_jwt_tampered(
     store: &AuditStore,
-    user_id: String,
-    jwt_id: Option<String>,
+    ctx: &RequestContext,
     full_jwt: String,
     failure_reason: String,
 ) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::JwtTampered);
-    event.user_id = Some(user_id);
-    event.jwt_id = jwt_id;
+    event.user_id = Some(ctx.actor_id.clone());
+    event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
+    event.ip_address = ctx.ip_address.clone();
     event.data.insert("full_jwt".to_string(), json!(full_jwt));
     event.data.insert("failure_reason".to_string(), json!(failure_reason));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
     
     store.write_event(event).await
 }
@@ -128,22 +137,28 @@ pub async fn log_jwt_tampered(
 ///
 /// # Arguments
 /// * `store` - Reference to the AuditStore
-/// * `user_id` - ID of the user for whom the refresh token was issued
+/// * `ctx` - Request context containing actor information
+/// * `target_user_id` - ID of the user for whom the refresh token was issued (token owner)
 /// * `jwt_id` - JWT identifier associated with this refresh token
 /// * `token_id` - Unique identifier for the refresh token
-/// * `ip_address` - Optional IP address of the client (if available)
 pub async fn log_refresh_token_issued(
     store: &AuditStore,
-    user_id: String,
+    ctx: &RequestContext,
+    target_user_id: String,
     jwt_id: String,
     token_id: String,
-    ip_address: Option<String>,
 ) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::RefreshTokenIssued);
-    event.user_id = Some(user_id);
+    event.user_id = Some(ctx.actor_id.clone());
     event.jwt_id = Some(jwt_id);
-    event.ip_address = ip_address;
+    event.ip_address = ctx.ip_address.clone();
+    event.data.insert("target_user_id".to_string(), json!(target_user_id));
     event.data.insert("token_id".to_string(), json!(token_id));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
+    // Store actor's JWT ID if authenticated (for tracing who requested the issuance)
+    if let Some(actor_jwt_id) = ctx.claims.as_ref().and_then(|c| c.jti.clone()) {
+        event.data.insert("actor_jwt_id".to_string(), json!(actor_jwt_id));
+    }
     
     store.write_event(event).await
 }
@@ -152,19 +167,22 @@ pub async fn log_refresh_token_issued(
 ///
 /// # Arguments
 /// * `store` - Reference to the AuditStore
-/// * `user_id` - ID of the user whose refresh token was revoked
-/// * `jwt_id` - Optional JWT identifier associated with this refresh token
+/// * `ctx` - Request context containing actor information
+/// * `target_user_id` - ID of the user whose refresh token was revoked (token owner)
 /// * `token_id` - Unique identifier for the refresh token
 pub async fn log_refresh_token_revoked(
     store: &AuditStore,
-    user_id: String,
-    jwt_id: Option<String>,
+    ctx: &RequestContext,
+    target_user_id: String,
     token_id: String,
 ) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::RefreshTokenRevoked);
-    event.user_id = Some(user_id);
-    event.jwt_id = jwt_id;
+    event.user_id = Some(ctx.actor_id.clone());
+    event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
+    event.ip_address = ctx.ip_address.clone();
+    event.data.insert("target_user_id".to_string(), json!(target_user_id));
     event.data.insert("token_id".to_string(), json!(token_id));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
     
     store.write_event(event).await
 }
@@ -234,20 +252,22 @@ pub async fn log_token_invalidation_failure(
 ///
 /// # Arguments
 /// * `store` - Reference to the AuditStore
+/// * `ctx` - Request context containing actor information
 /// * `token_hash` - Hash of the refresh token that failed validation
 /// * `failure_reason` - Reason for the validation failure (not_found, expired)
-/// * `ip_address` - Optional IP address of the client
 pub async fn log_refresh_token_validation_failure(
     store: &AuditStore,
+    ctx: &RequestContext,
     token_hash: String,
     failure_reason: String,
-    ip_address: Option<String>,
 ) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::RefreshTokenValidationFailure);
-    event.user_id = Some("unknown".to_string());
-    event.ip_address = ip_address;
+    event.user_id = Some(ctx.actor_id.clone());
+    event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
+    event.ip_address = ctx.ip_address.clone();
     event.data.insert("token_hash".to_string(), json!(token_hash));
     event.data.insert("failure_reason".to_string(), json!(failure_reason));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
     
     store.write_event(event).await
 }

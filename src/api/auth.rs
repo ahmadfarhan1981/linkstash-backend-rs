@@ -570,9 +570,10 @@ mod tests {
         let token_hash = token_service.hash_refresh_token(&expired_token);
         let expires_at = chrono::Utc::now().timestamp() - 3600; // Expired 1 hour ago
         let jwt_id = "test-jwt-id-1".to_string();
+        let ctx = crate::types::internal::context::RequestContext::new();
         
         credential_store
-            .store_refresh_token(token_hash, user_id, expires_at, jwt_id, None)
+            .store_refresh_token(&ctx, token_hash, user_id, expires_at, jwt_id)
             .await
             .expect("Failed to store expired token");
         
@@ -1086,9 +1087,10 @@ mod tests {
         let token_hash = token_service.hash_refresh_token(&expired_token);
         let expires_at = chrono::Utc::now().timestamp() - 3600; // Expired 1 hour ago
         let jwt_id = "test-jwt-id-2".to_string();
+        let ctx = crate::types::internal::context::RequestContext::new();
         
         credential_store
-            .store_refresh_token(token_hash, user_id, expires_at, jwt_id, None)
+            .store_refresh_token(&ctx, token_hash, user_id, expires_at, jwt_id)
             .await
             .expect("Failed to store expired token");
         
@@ -1448,6 +1450,198 @@ mod tests {
         }
     }
 
+    // ========== Task 9.1: Login endpoint with optional auth audit tests ==========
+
+    #[tokio::test]
+    async fn test_login_with_auth_header_logs_actor_from_jwt() {
+        let (_db, audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
+        
+        // First login to get a JWT
+        let req = poem::Request::builder().finish();
+        let login_request = Json(LoginRequest {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+        let first_login = unwrap_login_ok(api.login(&req, login_request).await);
+        
+        // Count audit events from first login
+        use crate::types::db::audit_event::Entity as AuditEvent;
+        use sea_orm::EntityTrait;
+        
+        let events_before = AuditEvent::find()
+            .all(&audit_db)
+            .await
+            .expect("Failed to query audit events")
+            .len();
+        
+        // Now login again WITH the JWT in the Authorization header
+        let req_with_auth = poem::Request::builder()
+            .header("Authorization", format!("Bearer {}", first_login.access_token))
+            .finish();
+        
+        let second_login_request = Json(LoginRequest {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+        
+        let second_login = unwrap_login_ok(api.login(&req_with_auth, second_login_request).await);
+        
+        // Decode the JWT to get the actor_id (sub claim)
+        use jsonwebtoken::{decode, Validation, DecodingKey, Algorithm};
+        use crate::types::internal::auth::Claims;
+        
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.validate_exp = false;
+        
+        let first_jwt_claims = decode::<Claims>(
+            &first_login.access_token,
+            &DecodingKey::from_secret("test-secret-key-minimum-32-characters-long".as_bytes()),
+            &validation,
+        ).unwrap().claims;
+        
+        let second_jwt_claims = decode::<Claims>(
+            &second_login.access_token,
+            &DecodingKey::from_secret("test-secret-key-minimum-32-characters-long".as_bytes()),
+            &validation,
+        ).unwrap().claims;
+        
+        // Query audit database to get only the new events from second login
+        let all_events = AuditEvent::find()
+            .all(&audit_db)
+            .await
+            .expect("Failed to query audit events");
+        
+        // Get only the events from the second login (skip the first 3)
+        let audit_events: Vec<_> = all_events.iter().skip(events_before).collect();
+        
+        // Should have 3 new events: login_success, jwt_issued, refresh_token_issued
+        assert_eq!(audit_events.len(), 3, "Expected 3 new audit events from second login");
+        
+        // Verify login_success event has actor_id from JWT
+        let login_event = audit_events.iter()
+            .find(|e| e.event_type == "login_success")
+            .expect("login_success event not found");
+        assert_eq!(login_event.user_id, first_jwt_claims.sub, "Actor should be from JWT");
+        assert_eq!(login_event.jwt_id, first_jwt_claims.jti.clone(), "JWT ID should be from actor's JWT");
+        
+        // Verify target_user_id is in event details
+        let data: serde_json::Value = serde_json::from_str(&login_event.data)
+            .expect("Failed to parse audit data");
+        assert_eq!(data["target_user_id"], second_jwt_claims.sub, "Target user should be the logged-in user");
+        
+        // Verify jwt_issued event has actor_id from JWT
+        let jwt_event = audit_events.iter()
+            .find(|e| e.event_type == "jwt_issued")
+            .expect("jwt_issued event not found");
+        assert_eq!(jwt_event.user_id, first_jwt_claims.sub, "Actor should be from JWT");
+        // jwt_id field contains the NEW JWT being issued (for easier querying)
+        assert_eq!(jwt_event.jwt_id.as_ref().unwrap(), &second_jwt_claims.jti.clone().unwrap(), "JWT ID should be the new JWT");
+        
+        // Verify target_user_id and actor_jwt_id are in jwt_issued event details
+        let jwt_data: serde_json::Value = serde_json::from_str(&jwt_event.data)
+            .expect("Failed to parse audit data");
+        assert_eq!(jwt_data["target_user_id"], second_jwt_claims.sub, "Target user should be the JWT subject");
+        assert_eq!(jwt_data["actor_jwt_id"], first_jwt_claims.jti.clone().unwrap(), "Actor JWT ID should be in data");
+        
+        // Verify refresh_token_issued event has actor_id from JWT
+        let refresh_event = audit_events.iter()
+            .find(|e| e.event_type == "refresh_token_issued")
+            .expect("refresh_token_issued event not found");
+        assert_eq!(refresh_event.user_id, first_jwt_claims.sub, "Actor should be from JWT");
+        // jwt_id field contains the NEW JWT being issued (for easier querying)
+        assert_eq!(refresh_event.jwt_id.as_ref().unwrap(), &second_jwt_claims.jti.unwrap(), "JWT ID should be the new JWT");
+        
+        // Verify target_user_id and actor_jwt_id are in refresh_token_issued event details
+        let refresh_data: serde_json::Value = serde_json::from_str(&refresh_event.data)
+            .expect("Failed to parse audit data");
+        assert_eq!(refresh_data["target_user_id"], second_jwt_claims.sub, "Target user should be the token owner");
+        assert_eq!(refresh_data["actor_jwt_id"], first_jwt_claims.jti.unwrap(), "Actor JWT ID should be in data");
+    }
+
+    #[tokio::test]
+    async fn test_login_without_auth_header_logs_unknown_actor() {
+        let (_db, audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
+        
+        // Login without any JWT (normal case)
+        let req = poem::Request::builder().finish();
+        let login_request = Json(LoginRequest {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+        
+        let login_response = unwrap_login_ok(api.login(&req, login_request).await);
+        
+        // Decode the JWT to get the target_user_id (sub claim)
+        use jsonwebtoken::{decode, Validation, DecodingKey, Algorithm};
+        use crate::types::internal::auth::Claims;
+        
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.validate_exp = false;
+        
+        let jwt_claims = decode::<Claims>(
+            &login_response.access_token,
+            &DecodingKey::from_secret("test-secret-key-minimum-32-characters-long".as_bytes()),
+            &validation,
+        ).unwrap().claims;
+        
+        // Query audit database to verify events have actor_id = "unknown"
+        use crate::types::db::audit_event::Entity as AuditEvent;
+        use sea_orm::EntityTrait;
+        
+        let audit_events = AuditEvent::find()
+            .all(&audit_db)
+            .await
+            .expect("Failed to query audit events");
+        
+        // Should have 3 events: login_success, jwt_issued, refresh_token_issued
+        assert_eq!(audit_events.len(), 3, "Expected 3 audit events");
+        
+        // Verify login_success event has actor_id = "unknown"
+        let login_event = audit_events.iter()
+            .find(|e| e.event_type == "login_success")
+            .expect("login_success event not found");
+        assert_eq!(login_event.user_id, "unknown", "Actor should be unknown for unauthenticated login");
+        
+        // Verify target_user_id is in event details
+        let data: serde_json::Value = serde_json::from_str(&login_event.data)
+            .expect("Failed to parse audit data");
+        assert_eq!(data["target_user_id"], jwt_claims.sub, "Target user should be the logged-in user");
+        // actor_jwt_id should not be present for unauthenticated requests
+        assert!(data.get("actor_jwt_id").is_none(), "Actor JWT ID should not be present for unauthenticated login");
+        
+        // Verify jwt_issued event has actor_id = "unknown"
+        let jwt_event = audit_events.iter()
+            .find(|e| e.event_type == "jwt_issued")
+            .expect("jwt_issued event not found");
+        assert_eq!(jwt_event.user_id, "unknown", "Actor should be unknown for unauthenticated login");
+        // jwt_id field contains the NEW JWT being issued (for easier querying)
+        assert_eq!(jwt_event.jwt_id.as_ref().unwrap(), &jwt_claims.jti.clone().unwrap(), "JWT ID should be the new JWT");
+        
+        // Verify target_user_id is in jwt_issued event details
+        let jwt_data: serde_json::Value = serde_json::from_str(&jwt_event.data)
+            .expect("Failed to parse audit data");
+        assert_eq!(jwt_data["target_user_id"], jwt_claims.sub, "Target user should be the JWT subject");
+        // actor_jwt_id should not be present for unauthenticated requests
+        assert!(jwt_data.get("actor_jwt_id").is_none(), "Actor JWT ID should not be present for unauthenticated login");
+        
+        // Verify refresh_token_issued event has actor_id = "unknown"
+        let refresh_event = audit_events.iter()
+            .find(|e| e.event_type == "refresh_token_issued")
+            .expect("refresh_token_issued event not found");
+        assert_eq!(refresh_event.user_id, "unknown", "Actor should be unknown for unauthenticated login");
+        // jwt_id field contains the NEW JWT being issued (for easier querying)
+        assert_eq!(refresh_event.jwt_id.as_ref().unwrap(), &jwt_claims.jti.unwrap(), "JWT ID should be the new JWT");
+        
+        // Verify target_user_id is in refresh_token_issued event details
+        let refresh_data: serde_json::Value = serde_json::from_str(&refresh_event.data)
+            .expect("Failed to parse audit data");
+        assert_eq!(refresh_data["target_user_id"], jwt_claims.sub, "Target user should be the token owner");
+        // actor_jwt_id should not be present for unauthenticated requests
+        assert!(refresh_data.get("actor_jwt_id").is_none(), "Actor JWT ID should not be present for unauthenticated login");
+    }
+
     #[tokio::test]
     async fn test_refresh_without_jwt_still_works() {
         let (_db, _audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
@@ -1477,6 +1671,301 @@ mod tests {
                 panic!("Refresh should succeed without JWT");
             }
         }
+    }
+
+    // ========== Task 9.2: Refresh endpoint with optional auth audit tests ==========
+
+    #[tokio::test]
+    async fn test_refresh_with_auth_header_logs_actor_from_jwt() {
+        let (_db, audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
+        
+        // Login to get tokens
+        let req = poem::Request::builder().finish();
+        let login_request = Json(LoginRequest {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+        let login_response = unwrap_login_ok(api.login(&req, login_request).await);
+        
+        // Count audit events from login
+        use crate::types::db::audit_event::Entity as AuditEvent;
+        use sea_orm::EntityTrait;
+        
+        let events_before = AuditEvent::find()
+            .all(&audit_db)
+            .await
+            .expect("Failed to query audit events")
+            .len();
+        
+        // Refresh WITH the JWT in the Authorization header
+        let req_with_auth = poem::Request::builder()
+            .header("Authorization", format!("Bearer {}", login_response.access_token))
+            .finish();
+        
+        let refresh_request = Json(RefreshRequest {
+            refresh_token: login_response.refresh_token.clone(),
+        });
+        
+        let refresh_response = unwrap_refresh_ok(api.refresh(&req_with_auth, refresh_request).await);
+        
+        // Decode the JWTs to get actor and target user IDs
+        use jsonwebtoken::{decode, Validation, DecodingKey, Algorithm};
+        use crate::types::internal::auth::Claims;
+        
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.validate_exp = false;
+        
+        let actor_claims = decode::<Claims>(
+            &login_response.access_token,
+            &DecodingKey::from_secret("test-secret-key-minimum-32-characters-long".as_bytes()),
+            &validation,
+        ).unwrap().claims;
+        
+        let new_jwt_claims = decode::<Claims>(
+            &refresh_response.access_token,
+            &DecodingKey::from_secret("test-secret-key-minimum-32-characters-long".as_bytes()),
+            &validation,
+        ).unwrap().claims;
+        
+        // Query audit database to get only the new events from refresh
+        let all_events = AuditEvent::find()
+            .all(&audit_db)
+            .await
+            .expect("Failed to query audit events");
+        
+        // Get only the events from the refresh (skip the login events)
+        let audit_events: Vec<_> = all_events.iter().skip(events_before).collect();
+        
+        // Should have 1 new event: jwt_issued
+        assert_eq!(audit_events.len(), 1, "Expected 1 new audit event from refresh");
+        
+        // Verify jwt_issued event has actor_id from JWT
+        let jwt_event = audit_events[0];
+        assert_eq!(jwt_event.event_type, "jwt_issued");
+        assert_eq!(jwt_event.user_id, actor_claims.sub, "Actor should be from JWT");
+        // jwt_id field contains the NEW JWT being issued (for easier querying)
+        assert_eq!(jwt_event.jwt_id.as_ref().unwrap(), &new_jwt_claims.jti.unwrap(), "JWT ID should be the new JWT");
+        
+        // Verify target_user_id and actor_jwt_id are in event details
+        let data: serde_json::Value = serde_json::from_str(&jwt_event.data)
+            .expect("Failed to parse audit data");
+        assert_eq!(data["target_user_id"], new_jwt_claims.sub, "Target user should be the JWT subject");
+        assert_eq!(data["actor_jwt_id"], actor_claims.jti.clone().unwrap(), "Actor JWT ID should be in data");
+    }
+
+    #[tokio::test]
+    async fn test_refresh_without_auth_header_logs_unknown_actor() {
+        let (_db, audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
+        
+        // Login to get tokens
+        let req = poem::Request::builder().finish();
+        let login_request = Json(LoginRequest {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+        let login_response = unwrap_login_ok(api.login(&req, login_request).await);
+        
+        // Count audit events from login
+        use crate::types::db::audit_event::Entity as AuditEvent;
+        use sea_orm::EntityTrait;
+        
+        let events_before = AuditEvent::find()
+            .all(&audit_db)
+            .await
+            .expect("Failed to query audit events")
+            .len();
+        
+        // Refresh WITHOUT the JWT in the Authorization header
+        let req_without_auth = poem::Request::builder().finish();
+        
+        let refresh_request = Json(RefreshRequest {
+            refresh_token: login_response.refresh_token.clone(),
+        });
+        
+        let refresh_response = unwrap_refresh_ok(api.refresh(&req_without_auth, refresh_request).await);
+        
+        // Decode the new JWT to get the target user ID
+        use jsonwebtoken::{decode, Validation, DecodingKey, Algorithm};
+        use crate::types::internal::auth::Claims;
+        
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.validate_exp = false;
+        
+        let new_jwt_claims = decode::<Claims>(
+            &refresh_response.access_token,
+            &DecodingKey::from_secret("test-secret-key-minimum-32-characters-long".as_bytes()),
+            &validation,
+        ).unwrap().claims;
+        
+        // Query audit database to get only the new events from refresh
+        let all_events = AuditEvent::find()
+            .all(&audit_db)
+            .await
+            .expect("Failed to query audit events");
+        
+        // Get only the events from the refresh (skip the login events)
+        let audit_events: Vec<_> = all_events.iter().skip(events_before).collect();
+        
+        // Should have 1 new event: jwt_issued
+        assert_eq!(audit_events.len(), 1, "Expected 1 new audit event from refresh");
+        
+        // Verify jwt_issued event has actor_id = "unknown"
+        let jwt_event = audit_events[0];
+        assert_eq!(jwt_event.event_type, "jwt_issued");
+        assert_eq!(jwt_event.user_id, "unknown", "Actor should be unknown for unauthenticated refresh");
+        // jwt_id field contains the NEW JWT being issued (for easier querying)
+        assert_eq!(jwt_event.jwt_id.as_ref().unwrap(), &new_jwt_claims.jti.unwrap(), "JWT ID should be the new JWT");
+        
+        // Verify target_user_id is in event details
+        let data: serde_json::Value = serde_json::from_str(&jwt_event.data)
+            .expect("Failed to parse audit data");
+        assert_eq!(data["target_user_id"], new_jwt_claims.sub, "Target user should be the JWT subject");
+        // actor_jwt_id should not be present for unauthenticated requests
+        assert!(data.get("actor_jwt_id").is_none(), "Actor JWT ID should not be present for unauthenticated refresh");
+    }
+
+    // ========== Task 9.3: Logout endpoint with optional auth audit tests ==========
+
+    #[tokio::test]
+    async fn test_logout_with_auth_header_logs_actor_from_jwt() {
+        let (_db, audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
+        
+        // Login to get tokens
+        let req = poem::Request::builder().finish();
+        let login_request = Json(LoginRequest {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+        let login_response = unwrap_login_ok(api.login(&req, login_request).await);
+        
+        // Decode the JWT to get actor_id and target_user_id
+        use jsonwebtoken::{decode, Validation, DecodingKey, Algorithm};
+        use crate::types::internal::auth::Claims;
+        
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.validate_exp = false;
+        
+        let jwt_claims = decode::<Claims>(
+            &login_response.access_token,
+            &DecodingKey::from_secret("test-secret-key-minimum-32-characters-long".as_bytes()),
+            &validation,
+        ).unwrap().claims;
+        
+        // Count audit events from login
+        use crate::types::db::audit_event::Entity as AuditEvent;
+        use sea_orm::EntityTrait;
+        
+        let events_before = AuditEvent::find()
+            .all(&audit_db)
+            .await
+            .expect("Failed to query audit events")
+            .len();
+        
+        // Logout WITH the JWT in the Authorization header
+        let req_with_auth = poem::Request::builder()
+            .header("Authorization", format!("Bearer {}", login_response.access_token))
+            .finish();
+        
+        let logout_request = Json(LogoutRequest {
+            refresh_token: login_response.refresh_token.clone(),
+        });
+        
+        unwrap_logout_ok(api.logout(&req_with_auth, logout_request).await);
+        
+        // Query audit database to get only the new events from logout
+        let all_events = AuditEvent::find()
+            .all(&audit_db)
+            .await
+            .expect("Failed to query audit events");
+        
+        // Get only the events from the logout (skip the login events)
+        let audit_events: Vec<_> = all_events.iter().skip(events_before).collect();
+        
+        // Should have 1 new event: refresh_token_revoked
+        assert_eq!(audit_events.len(), 1, "Expected 1 new audit event from logout");
+        
+        // Verify refresh_token_revoked event has actor_id from JWT
+        let revoke_event = audit_events[0];
+        assert_eq!(revoke_event.event_type, "refresh_token_revoked");
+        assert_eq!(revoke_event.user_id, jwt_claims.sub, "Actor should be from JWT");
+        assert_eq!(revoke_event.jwt_id, jwt_claims.jti, "JWT ID should be from actor's JWT");
+        
+        // Verify target_user_id is in event details
+        let data: serde_json::Value = serde_json::from_str(&revoke_event.data)
+            .expect("Failed to parse audit data");
+        assert_eq!(data["target_user_id"], jwt_claims.sub, "Target user should be the token owner");
+    }
+
+    #[tokio::test]
+    async fn test_logout_without_auth_header_logs_unknown_actor() {
+        let (_db, audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
+        let api = AuthApi::new(auth_service);
+        
+        // Login to get tokens
+        let req = poem::Request::builder().finish();
+        let login_request = Json(LoginRequest {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        });
+        let login_response = unwrap_login_ok(api.login(&req, login_request).await);
+        
+        // Decode the JWT to get target_user_id
+        use jsonwebtoken::{decode, Validation, DecodingKey, Algorithm};
+        use crate::types::internal::auth::Claims;
+        
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.validate_exp = false;
+        
+        let jwt_claims = decode::<Claims>(
+            &login_response.access_token,
+            &DecodingKey::from_secret("test-secret-key-minimum-32-characters-long".as_bytes()),
+            &validation,
+        ).unwrap().claims;
+        
+        // Count audit events from login
+        use crate::types::db::audit_event::Entity as AuditEvent;
+        use sea_orm::EntityTrait;
+        
+        let events_before = AuditEvent::find()
+            .all(&audit_db)
+            .await
+            .expect("Failed to query audit events")
+            .len();
+        
+        // Logout WITHOUT the JWT in the Authorization header
+        let req_without_auth = poem::Request::builder().finish();
+        
+        let logout_request = Json(LogoutRequest {
+            refresh_token: login_response.refresh_token.clone(),
+        });
+        
+        unwrap_logout_ok(api.logout(&req_without_auth, logout_request).await);
+        
+        // Query audit database to get only the new events from logout
+        let all_events = AuditEvent::find()
+            .all(&audit_db)
+            .await
+            .expect("Failed to query audit events");
+        
+        // Get only the events from the logout (skip the login events)
+        let audit_events: Vec<_> = all_events.iter().skip(events_before).collect();
+        
+        // Should have 1 new event: refresh_token_revoked
+        assert_eq!(audit_events.len(), 1, "Expected 1 new audit event from logout");
+        
+        // Verify refresh_token_revoked event has actor_id = "unknown"
+        let revoke_event = audit_events[0];
+        assert_eq!(revoke_event.event_type, "refresh_token_revoked");
+        assert_eq!(revoke_event.user_id, "unknown", "Actor should be unknown for unauthenticated logout");
+        assert_eq!(revoke_event.jwt_id, None, "JWT ID should be None for unauthenticated logout");
+        
+        // Verify target_user_id is in event details
+        let data: serde_json::Value = serde_json::from_str(&revoke_event.data)
+            .expect("Failed to parse audit data");
+        assert_eq!(data["target_user_id"], jwt_claims.sub, "Target user should be the token owner");
     }
 }
 

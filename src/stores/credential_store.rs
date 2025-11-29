@@ -353,22 +353,22 @@ impl CredentialStore {
     /// Logs token issuance to audit database at point of action.
     /// 
     /// # Arguments
+    /// * `ctx` - Request context containing actor information
     /// * `token_hash` - The SHA-256 hash of the refresh token
-    /// * `user_id` - The user_id (UUID string) this token belongs to
+    /// * `user_id` - The user_id (UUID string) this token belongs to (token owner)
     /// * `expires_at` - Unix timestamp when the token expires
     /// * `jwt_id` - The JWT ID associated with this refresh token
-    /// * `ip_address` - Client IP address for audit logging
     /// 
     /// # Returns
     /// * `Ok(())` - Token stored successfully
     /// * `Err(AuthError)` - Database error
     pub async fn store_refresh_token(
         &self,
+        ctx: &crate::types::internal::context::RequestContext,
         token_hash: String,
         user_id: String,
         expires_at: i64,
         jwt_id: String,
-        ip_address: Option<String>,
     ) -> Result<(), InternalError> {
         // Use a transaction to ensure atomicity
         let txn = self.db.begin().await
@@ -393,10 +393,10 @@ impl CredentialStore {
         // Log refresh token issuance at point of action
         if let Err(audit_err) = audit_logger::log_refresh_token_issued(
             &self.audit_store,
+            ctx,
             user_id,
             jwt_id,
             token_hash,
-            ip_address,
         ).await {
             tracing::error!("Failed to log refresh token issuance: {:?}", audit_err);
         }
@@ -409,13 +409,17 @@ impl CredentialStore {
     /// Logs validation attempts (success/failure) to audit database at point of action.
     /// 
     /// # Arguments
+    /// * `ctx` - Request context containing actor information
     /// * `token_hash` - The SHA-256 hash of the refresh token to validate
-    /// * `ip_address` - Client IP address for audit logging
     /// 
     /// # Returns
     /// * `Ok(String)` - The user_id (UUID) if token is valid and not expired
     /// * `Err(AuthError)` - InvalidRefreshToken if not found, ExpiredRefreshToken if expired
-    pub async fn validate_refresh_token(&self, token_hash: &str, ip_address: Option<String>) -> Result<String, InternalError> {
+    pub async fn validate_refresh_token(
+        &self,
+        ctx: &crate::types::internal::context::RequestContext,
+        token_hash: &str,
+    ) -> Result<String, InternalError> {
         use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
         
         // Query token by hash
@@ -431,9 +435,9 @@ impl CredentialStore {
             None => {
                 if let Err(audit_err) = audit_logger::log_refresh_token_validation_failure(
                     &self.audit_store,
+                    ctx,
                     token_hash.to_string(),
                     "not_found".to_string(),
-                    ip_address,
                 ).await {
                     tracing::error!("Failed to log refresh token validation failure: {:?}", audit_err);
                 }
@@ -446,9 +450,9 @@ impl CredentialStore {
         if token.expires_at < now {
             if let Err(audit_err) = audit_logger::log_refresh_token_validation_failure(
                 &self.audit_store,
+                ctx,
                 token_hash.to_string(),
                 "expired".to_string(),
-                ip_address,
             ).await {
                 tracing::error!("Failed to log refresh token validation failure: {:?}", audit_err);
             }
@@ -465,14 +469,18 @@ impl CredentialStore {
     /// Logs revocation to audit database at point of action.
     /// 
     /// # Arguments
+    /// * `ctx` - Request context containing actor information
     /// * `token_hash` - SHA-256 hash of the refresh token to revoke
-    /// * `jwt_id` - Optional JWT ID for audit logging (if authenticated)
     /// 
     /// # Returns
     /// * `Ok(user_id)` - Token revoked successfully, returns the user_id
     /// * `Err(AuthError::InvalidRefreshToken)` - Token not found in database
     /// * `Err(AuthError::InternalError)` - Database error
-    pub async fn revoke_refresh_token(&self, token_hash: &str, jwt_id: Option<String>) -> Result<String, InternalError> {
+    pub async fn revoke_refresh_token(
+        &self,
+        ctx: &crate::types::internal::context::RequestContext,
+        token_hash: &str,
+    ) -> Result<String, InternalError> {
         use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
         
         let token = RefreshToken::find()
@@ -493,8 +501,8 @@ impl CredentialStore {
         // Log revocation at point of action
         if let Err(audit_err) = audit_logger::log_refresh_token_revoked(
             &self.audit_store,
+            ctx,
             user_id.clone(),
-            jwt_id,
             token_hash.to_string(),
         ).await {
             tracing::error!("Failed to log refresh token revocation: {:?}", audit_err);
@@ -826,9 +834,10 @@ mod tests {
         let token_hash = "test_hash_123";
         let expires_at = Utc::now().timestamp() + 604800; // 7 days
         let jwt_id = "test-jwt-id".to_string();
+        let ctx = crate::types::internal::context::RequestContext::new();
         
         let result = credential_store
-            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at, jwt_id, None)
+            .store_refresh_token(&ctx, token_hash.to_string(), user_id.clone(), expires_at, jwt_id)
             .await;
         
         assert!(result.is_ok());
@@ -862,9 +871,10 @@ mod tests {
         let now = Utc::now().timestamp();
         let expires_at = now + (7 * 24 * 60 * 60); // 7 days in seconds
         let jwt_id = "test-jwt-id".to_string();
+        let ctx = crate::types::internal::context::RequestContext::new();
         
         let result = credential_store
-            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at, jwt_id, None)
+            .store_refresh_token(&ctx, token_hash.to_string(), user_id.clone(), expires_at, jwt_id)
             .await;
         
         assert!(result.is_ok());
@@ -899,14 +909,16 @@ mod tests {
         let token_hash = "userid_token_hash";
         let expires_at = Utc::now().timestamp() + 604800;
         let jwt_id = "test-jwt-id".to_string();
+        let ctx = crate::types::internal::context::RequestContext::new();
         
         credential_store
-            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at, jwt_id, None)
+            .store_refresh_token(&ctx, token_hash.to_string(), user_id.clone(), expires_at, jwt_id)
             .await
             .expect("Failed to store token");
         
         // Validate and verify user_id
-        let result = credential_store.validate_refresh_token(token_hash, None).await;
+        let ctx = crate::types::internal::context::RequestContext::new();
+        let result = credential_store.validate_refresh_token(&ctx, token_hash).await;
         
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), user_id);
@@ -917,7 +929,8 @@ mod tests {
         let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
         
         // Try to validate a token that doesn't exist
-        let result = credential_store.validate_refresh_token("nonexistent_token", None).await;
+        let ctx = crate::types::internal::context::RequestContext::new();
+        let result = credential_store.validate_refresh_token(&ctx, "nonexistent_token").await;
         
         assert!(result.is_err());
         match result {
@@ -942,14 +955,16 @@ mod tests {
         let token_hash = "expired_token_hash";
         let expires_at = Utc::now().timestamp() - 3600; // Expired 1 hour ago
         let jwt_id = "test-jwt-id".to_string();
+        let ctx = crate::types::internal::context::RequestContext::new();
         
         credential_store
-            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at, jwt_id, None)
+            .store_refresh_token(&ctx, token_hash.to_string(), user_id.clone(), expires_at, jwt_id)
             .await
             .expect("Failed to store token");
         
         // Try to validate the expired token
-        let result = credential_store.validate_refresh_token(token_hash, None).await;
+        let ctx = crate::types::internal::context::RequestContext::new();
+        let result = credential_store.validate_refresh_token(&ctx, token_hash).await;
         
         assert!(result.is_err());
         match result {
@@ -974,9 +989,10 @@ mod tests {
         let token_hash = "revoke_test_hash";
         let expires_at = Utc::now().timestamp() + 604800;
         let jwt_id = "test-jwt-id".to_string();
+        let ctx = crate::types::internal::context::RequestContext::new();
         
         credential_store
-            .store_refresh_token(token_hash.to_string(), user_id.clone(), expires_at, jwt_id, None)
+            .store_refresh_token(&ctx, token_hash.to_string(), user_id.clone(), expires_at, jwt_id)
             .await
             .expect("Failed to store token");
         
@@ -990,7 +1006,8 @@ mod tests {
         assert!(token_before.is_some());
         
         // Revoke the token
-        let result = credential_store.revoke_refresh_token(token_hash, None).await;
+        let ctx = crate::types::internal::context::RequestContext::new();
+        let result = credential_store.revoke_refresh_token(&ctx, token_hash).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), user_id);
         

@@ -42,13 +42,15 @@ mod tests {
         
         // Generate a valid JWT
         let user_id = uuid::Uuid::new_v4();
+        let ctx = crate::types::internal::context::RequestContext::new()
+            .with_ip_address("127.0.0.1");
         let (jwt, _jwt_id) = token_service.generate_jwt(
+            &ctx,
             &user_id,
             false,
             false,
             false,
             vec![],
-            Some("127.0.0.1".to_string()),
         ).await.unwrap();
         
         let req = Request::builder().finish();

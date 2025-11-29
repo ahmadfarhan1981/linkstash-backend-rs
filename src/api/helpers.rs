@@ -70,10 +70,9 @@ pub async fn create_request_context(
     if let Some(bearer) = auth {
         match token_service.validate_jwt(&bearer.token).await {
             Ok(claims) => {
-                // Set actor_id from JWT subject (user_id)
-                ctx.actor_id = claims.sub.clone();
                 // JWT is valid, set authenticated and claims
-                ctx = ctx.with_auth(claims);
+                // Set actor_id from JWT subject (user_id)
+                ctx = ctx.with_auth(claims.clone()).with_actor_id(claims.sub.clone());
             }
             Err(_) => {
                 // JWT validation failed (expired, invalid, tampered)

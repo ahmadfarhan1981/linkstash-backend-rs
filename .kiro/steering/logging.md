@@ -16,6 +16,52 @@ The application uses two separate logging systems with distinct purposes:
    - Retention: Configurable (default 90 days)
    - See: `.kiro/specs/structured-audit-logging/` for full specification
 
+## Actor/Target Separation in Audit Logs
+
+**CRITICAL RULE: Audit logs MUST separate WHO performed an action (actor) from WHO was affected (target).**
+
+### The Pattern
+
+- **Actor** (`ctx.actor_id`): Stored in `user_id` field (indexed) - WHO performed the action
+- **Target** (`target_user_id` parameter): Stored in JSON data - WHO was affected by the action
+
+### Why This Matters
+
+Without separation, you cannot distinguish:
+- User logging in themselves (actor = target)
+- Admin generating token for another user (actor ≠ target)
+- System operation affecting a user (actor = "system:...", target = user)
+
+### Implementation
+
+```rust
+// CORRECT: Separate actor from target
+audit::log_login_success(
+    &audit_store,
+    &ctx,                    // Contains actor_id ("unknown" or user_id from JWT)
+    user.id.to_string(),     // Target user who logged in
+).await?;
+
+// CORRECT: Admin action on another user (future)
+audit::log_jwt_issued(
+    &audit_store,
+    &ctx,                    // Contains actor_id (admin's user_id)
+    target_user.id,          // Target user receiving JWT
+    jwt_id,
+    expiration,
+).await?;
+
+// WRONG: Don't pass target as actor
+audit::log_login_success(&audit_store, user.id, ip).await?;  // OLD PATTERN - DON'T USE
+```
+
+### Query Implications
+
+With actor/target separation, you can query:
+- All actions performed BY a user (filter by `user_id`)
+- All actions performed ON a user (filter by `json_extract(data, '$.target_user_id')`)
+- Distinguish self-actions from admin actions
+
 ## Core Logging Principle: Log at the Point of Action
 
 **Rule: The layer where an action occurs is responsible for logging it.**
@@ -46,47 +92,76 @@ API Layer
 
 **Key Point:** The store MUST log because we cannot assume the API will. The API MAY also log for additional context, but the store's log is the source of truth.
 
-## Request Context Pattern
+## RequestContext Pattern
 
-To avoid parameter drilling (passing user_id, ip_address, jwt_id through every function), use a **RequestContext struct**.
+**CRITICAL: All audit logging MUST use RequestContext to capture actor information.**
 
-### RequestContext Definition
+### RequestContext Structure
 
 ```rust
 pub struct RequestContext {
-    pub user_id: Option<i64>,
+    pub actor_id: String,              // WHO performed the action
     pub ip_address: Option<String>,
-    pub jwt_id: Option<String>,
-    pub request_id: String,  // UUID for tracing across layers
+    pub request_id: String,            // UUID for tracing across layers
+    pub authenticated: bool,
+    pub claims: Option<Claims>,        // Full JWT claims if authenticated
+    pub source: RequestSource,         // API, CLI, or System
 }
+```
+
+### Actor ID Values
+
+The `actor_id` field identifies WHO performed the action:
+
+- **Unauthenticated API requests**: `"unknown"`
+- **Authenticated API requests**: User ID from JWT claims (e.g., `"123"`)
+- **CLI operations**: `"cli:command_name"` (e.g., `"cli:bootstrap"`)
+- **System operations**: `"system:operation_name"` (e.g., `"system:cleanup"`)
+
+### Creating RequestContext
+
+**API endpoints (use helper):**
+```rust
+// Authenticated endpoint
+let ctx = self.create_request_context(req, Some(auth)).await;
+
+// Unauthenticated endpoint
+let ctx = self.create_request_context(req, None).await;
+```
+
+**CLI operations:**
+```rust
+let ctx = RequestContext::for_cli("bootstrap");
+// ctx.actor_id = "cli:bootstrap"
+```
+
+**System operations:**
+```rust
+let ctx = RequestContext::for_system("token_cleanup");
+// ctx.actor_id = "system:token_cleanup"
 ```
 
 ### Usage Pattern
 
 ```rust
 // API layer creates context from request
-let ctx = RequestContext {
-    user_id: Some(claims.user_id),
-    ip_address: Some(extract_ip(&req)),
-    jwt_id: claims.jti.clone(),
-    request_id: Uuid::new_v4().to_string(),
-};
+let ctx = self.create_request_context(req, Some(auth)).await;
 
 // Pass context through all layers
 let result = auth_service.login(&ctx, credentials).await?;
   ↓
 let user = credential_store.verify_credentials(&ctx, username, password).await?;
   ↓
-// Store logs with full context
-audit::log_login_success(&audit_store, &ctx).await?;
+// Store logs with full context - actor_id extracted automatically
+audit::log_login_success(&audit_store, &ctx, user.id).await?;
 ```
 
 ### Benefits
 
-- Single parameter instead of 3-4 individual fields
-- Easy to extend (add correlation IDs, trace IDs, tenant IDs, etc.)
+- Single parameter captures actor, IP, request ID, authentication state
+- Actor/target separation (actor in ctx, target as separate parameter)
+- Easy to extend (add correlation IDs, trace IDs, tenant IDs)
 - Cheap to clone (all fields are small)
-- Clear ownership of contextual data
 - Enables request tracing across layers
 
 ## When to Use Application Logs vs Audit Logs
@@ -113,10 +188,18 @@ tracing::error!("Failed to connect to database: {}", err);
 Use for security-relevant events:
 
 ```rust
-audit::log_login_success(&audit_store, &ctx).await?;
-audit::log_login_failure(&audit_store, &ctx, "invalid_password").await?;
-audit::log_jwt_issued(&audit_store, &ctx, expiration).await?;
+// Login events - separate actor from target
+audit::log_login_success(&audit_store, &ctx, target_user_id).await?;
+audit::log_login_failure(&audit_store, &ctx, "invalid_password", Some(username)).await?;
+
+// JWT events - actor issues JWT for target
+audit::log_jwt_issued(&audit_store, &ctx, target_user_id, jwt_id, expiration).await?;
+audit::log_jwt_validation_failure(&audit_store, &ctx, "expired").await?;
 audit::log_jwt_tampered(&audit_store, &ctx, full_jwt, reason).await?;
+
+// Refresh token events - actor operates on target's token
+audit::log_refresh_token_issued(&audit_store, &ctx, target_user_id, jwt_id, token_id).await?;
+audit::log_refresh_token_revoked(&audit_store, &ctx, target_user_id, token_id).await?;
 ```
 
 **Characteristics:**
@@ -126,6 +209,8 @@ audit::log_jwt_tampered(&audit_store, &ctx, full_jwt, reason).await?;
 - Immutable, append-only
 
 **Rule of Thumb:** If it involves authentication, authorization, or data access, it's an audit event.
+
+**Actor/Target Separation:** All audit functions accept `RequestContext` (contains actor) and separate `target_user_id` parameter (who was affected). This enables distinguishing between self-actions and admin actions.
 
 ## Security Rules
 
@@ -159,27 +244,53 @@ audit::log_jwt_tampered(&audit_store, &ctx, full_jwt, "invalid_signature").await
 
 ### API Layer (api/*)
 
-- Create RequestContext from incoming request
-- Extract user_id, ip_address, jwt_id from JWT claims
-- Generate request_id for tracing
+**Responsibilities:**
+- Create RequestContext using `create_request_context(req, auth)` helper
 - Pass context to service layer
 - MAY log high-level request/response info (application logs)
 - MAY log API-specific audit events (rate limiting, etc.)
 
+**DO NOT:**
+- Manually extract actor_id, ip_address, jwt_id (helper does this)
+- Call audit logging directly (let store layer handle it)
+
 ### Service Layer (services/*)
 
+**Responsibilities:**
 - Receive RequestContext from API
-- Pass context to stores
+- Pass context to stores unchanged
 - Orchestrate business logic
 - MAY log business logic events (application logs)
 - MAY log service-specific audit events
 
+**DO NOT:**
+- Modify RequestContext
+- Skip passing context to stores
+
 ### Store Layer (stores/*)
 
+**Responsibilities:**
 - Receive RequestContext from service
-- MUST log data access events (audit logs)
+- MUST log data access events (audit logs) at point of action
 - MUST log database errors (application logs)
-- Log at the point where DB operations occur
+- Pass RequestContext to audit logging functions
+
+**Pattern:**
+```rust
+pub async fn verify_credentials(&self, ctx: &RequestContext, username: &str, password: &str) -> Result<User> {
+    let user = self.find_user(username).await?;
+    
+    if verify_password(password, &user.password_hash) {
+        // Log success at point of action
+        audit::log_login_success(&self.audit_store, ctx, user.id.to_string()).await?;
+        Ok(user)
+    } else {
+        // Log failure at point of action
+        audit::log_login_failure(&self.audit_store, ctx, "invalid_password", Some(username)).await?;
+        Err(AuthError::InvalidCredentials)
+    }
+}
+```
 
 ## Configuration
 
@@ -198,9 +309,77 @@ AUDIT_LOG_RETENTION_DAYS=90
 
 See `.env.example` for all available configuration options.
 
+## Quick Reference for AI Agents
+
+### When Writing Audit Logging Code
+
+**✅ DO:**
+```rust
+// 1. Accept RequestContext parameter
+pub async fn my_store_function(&self, ctx: &RequestContext, ...) -> Result<...> {
+    
+    // 2. Perform database operation
+    let result = self.db_operation().await?;
+    
+    // 3. Log at point of action with actor/target separation
+    audit::log_event(
+        &self.audit_store,
+        ctx,                    // Actor information
+        target_user_id,         // Who was affected
+        // ... other params
+    ).await?;
+    
+    Ok(result)
+}
+```
+
+**❌ DON'T:**
+```rust
+// Don't pass target as actor
+audit::log_event(&audit_store, user_id, ip).await?;
+
+// Don't skip RequestContext
+audit::log_event(&audit_store, "unknown").await?;
+
+// Don't log in API layer (let store handle it)
+// API should create context and pass it down
+```
+
+### Available Audit Functions
+
+See `src/services/audit_logger.rs` for complete list:
+- `log_login_success(store, ctx, target_user_id)`
+- `log_login_failure(store, ctx, reason, username)`
+- `log_jwt_issued(store, ctx, target_user_id, jwt_id, expiration)`
+- `log_jwt_validation_failure(store, ctx, reason)`
+- `log_refresh_token_issued(store, ctx, target_user_id, jwt_id, token_id)`
+- `log_refresh_token_revoked(store, ctx, target_user_id, token_id)`
+- And more...
+
+All follow the pattern: `(store, ctx, target_params...)`
+
+### Creating RequestContext
+
+**API endpoints:**
+```rust
+let ctx = self.create_request_context(req, Some(auth)).await;  // Authenticated
+let ctx = self.create_request_context(req, None).await;        // Unauthenticated
+```
+
+**CLI operations:**
+```rust
+let ctx = RequestContext::for_cli("command_name");
+```
+
+**System operations:**
+```rust
+let ctx = RequestContext::for_system("operation_name");
+```
+
 ## Implementation Reference
 
 For complete implementation details, see:
 - Requirements: `.kiro/specs/structured-audit-logging/requirements.md`
 - Design: `.kiro/specs/structured-audit-logging/design.md`
-- Tasks: `.kiro/specs/structured-audit-logging/tasks.md`
+- Actor/Target Separation: `.kiro/specs/audit-actor-separation/`
+- Extension Guide: `docs/extending-audit-logs.md`
