@@ -15,7 +15,8 @@ use app_data::AppData;
 use config::init_logging;
 use clap::Parser;
 use stores::CredentialStore;
-use errors::auth::AuthError;
+use errors::InternalError;
+use errors::internal::CredentialError;
 
 /// Seed test user for development
 /// 
@@ -27,7 +28,7 @@ async fn seed_test_user(credential_store: &CredentialStore) {
         Ok(user_id) => {
             tracing::info!("Test user created successfully with ID: {}", user_id);
         }
-        Err(AuthError::DuplicateUsername(_)) => {
+        Err(InternalError::Credential(CredentialError::DuplicateUsername(_))) => {
             tracing::debug!("Test user already exists, skipping creation");
         }
         Err(e) => {
@@ -47,6 +48,7 @@ async fn main() -> Result<(), std::io::Error> {
     // Initialize AppData (databases, stores, stateless services)
     let app_data = Arc::new(
         AppData::init().await
+            .map_err(|e| format!("Failed to initialize application data: {}", e))
             .expect("Failed to initialize application data")
     );
     

@@ -69,9 +69,10 @@ impl AuthApi {
                     expires_in: 900, // 15 minutes in seconds
                 }))
             }
-            Err(e) => {
+            Err(internal_error) => {
+                let auth_error = crate::errors::AuthError::from_internal_error(internal_error);
                 LoginApiResponse::Unauthorized(Json(ErrorResponse {
-                    error: e.to_string(),
+                    error: auth_error.to_string(),
                 }))
             }
         }
@@ -124,9 +125,10 @@ impl AuthApi {
                     expires_in: 900, // 15 minutes in seconds
                 }))
             }
-            Err(e) => {
+            Err(internal_error) => {
+                let auth_error = crate::errors::AuthError::from_internal_error(internal_error);
                 RefreshApiResponse::Unauthorized(Json(ErrorResponse {
-                    error: e.to_string(),
+                    error: auth_error.to_string(),
                 }))
             }
         }
@@ -932,16 +934,15 @@ mod tests {
         let (db, audit_db, auth_service, _token_service, _credential_store) = setup_test_db().await;
         let api = AuthApi::new(auth_service);
         
-        // Get the testuser's user_id for verification
+        // Verify testuser exists (no longer need user_id since actor is "unknown")
         use crate::types::db::user::{Entity as User, Column as UserColumn};
         use sea_orm::{EntityTrait, QueryFilter, ColumnTrait};
-        let testuser = User::find()
+        let _testuser = User::find()
             .filter(UserColumn::Username.eq("testuser"))
             .one(&db)
             .await
             .expect("Failed to query user")
             .expect("testuser not found");
-        let expected_user_id = testuser.id;
         
         // Create a mock request for testing
         let req = poem::Request::builder().finish();
@@ -967,15 +968,16 @@ mod tests {
         
         let login_failure = &audit_events[0];
         assert_eq!(login_failure.event_type, "login_failure");
-        // Now logs actual user_id when user exists but password is wrong (better for auditing)
-        assert_eq!(login_failure.user_id, expected_user_id);
+        // Actor is "unknown" for unauthenticated login attempts
+        assert_eq!(login_failure.user_id, "unknown");
         // IP address is set to "unknown" when not available in request
         assert_eq!(login_failure.ip_address, Some("unknown".to_string()));
         
-        // Verify failure reason is in data (specific for audit forensics)
+        // Verify failure reason and attempted username are in data (for audit forensics)
         let data: serde_json::Value = serde_json::from_str(&login_failure.data)
             .expect("Failed to parse audit data");
         assert_eq!(data["failure_reason"], "invalid_password");
+        assert_eq!(data["attempted_username"], "testuser");
     }
 
     #[tokio::test]

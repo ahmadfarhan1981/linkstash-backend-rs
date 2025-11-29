@@ -5,23 +5,26 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 use crate::stores::audit_store::AuditStore;
-use crate::types::internal::audit::{AuditError, AuditEvent, EventType};
+use crate::types::internal::audit::{AuditEvent, EventType};
 use crate::types::internal::context::RequestContext;
+use crate::errors::InternalError;
 
 /// Log a successful login event
 ///
 /// # Arguments
 /// * `store` - Reference to the AuditStore
-/// * `user_id` - ID of the user who logged in
-/// * `ip_address` - Optional IP address of the client
+/// * `ctx` - Request context containing actor information
+/// * `target_user_id` - ID of the user who logged in (target of the action)
 pub async fn log_login_success(
     store: &AuditStore,
-    user_id: String,
-    ip_address: Option<String>,
-) -> Result<(), AuditError> {
+    ctx: &RequestContext,
+    target_user_id: String,
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::LoginSuccess);
-    event.user_id = Some(user_id);
-    event.ip_address = ip_address;
+    event.user_id = Some(ctx.actor_id.clone());
+    event.ip_address = ctx.ip_address.clone();
+    event.data.insert("target_user_id".to_string(), json!(target_user_id));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
     
     store.write_event(event).await
 }
@@ -30,19 +33,24 @@ pub async fn log_login_success(
 ///
 /// # Arguments
 /// * `store` - Reference to the AuditStore
-/// * `user_id` - Optional ID of the user (if username was valid)
+/// * `ctx` - Request context containing actor information
 /// * `failure_reason` - Reason for the login failure
-/// * `ip_address` - Optional IP address of the client
+/// * `attempted_username` - Optional username that was attempted (for forensic analysis)
 pub async fn log_login_failure(
     store: &AuditStore,
-    user_id: Option<String>,
+    ctx: &RequestContext,
     failure_reason: String,
-    ip_address: Option<String>,
-) -> Result<(), AuditError> {
+    attempted_username: Option<String>,
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::LoginFailure);
-    event.user_id = user_id;
-    event.ip_address = ip_address;
+    event.user_id = Some(ctx.actor_id.clone());
+    event.ip_address = ctx.ip_address.clone();
     event.data.insert("failure_reason".to_string(), json!(failure_reason));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
+    
+    if let Some(username) = attempted_username {
+        event.data.insert("attempted_username".to_string(), json!(username));
+    }
     
     store.write_event(event).await
 }
@@ -61,7 +69,7 @@ pub async fn log_jwt_issued(
     jwt_id: String,
     expiration: DateTime<Utc>,
     ip_address: Option<String>,
-) -> Result<(), AuditError> {
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::JwtIssued);
     event.user_id = Some(user_id);
     event.jwt_id = Some(jwt_id);
@@ -83,7 +91,7 @@ pub async fn log_jwt_validation_failure(
     user_id: String,
     jwt_id: Option<String>,
     failure_reason: String,
-) -> Result<(), AuditError> {
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::JwtValidationFailure);
     event.user_id = Some(user_id);
     event.jwt_id = jwt_id;
@@ -106,7 +114,7 @@ pub async fn log_jwt_tampered(
     jwt_id: Option<String>,
     full_jwt: String,
     failure_reason: String,
-) -> Result<(), AuditError> {
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::JwtTampered);
     event.user_id = Some(user_id);
     event.jwt_id = jwt_id;
@@ -130,7 +138,7 @@ pub async fn log_refresh_token_issued(
     jwt_id: String,
     token_id: String,
     ip_address: Option<String>,
-) -> Result<(), AuditError> {
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::RefreshTokenIssued);
     event.user_id = Some(user_id);
     event.jwt_id = Some(jwt_id);
@@ -152,7 +160,7 @@ pub async fn log_refresh_token_revoked(
     user_id: String,
     jwt_id: Option<String>,
     token_id: String,
-) -> Result<(), AuditError> {
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::RefreshTokenRevoked);
     event.user_id = Some(user_id);
     event.jwt_id = jwt_id;
@@ -176,7 +184,7 @@ pub async fn log_all_refresh_tokens_invalidated(
     ctx: &RequestContext,
     user_id: String,
     reason: String,
-) -> Result<(), AuditError> {
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::RefreshTokenRevoked);
     event.user_id = Some(user_id);
     event.ip_address = ctx.ip_address.clone();
@@ -207,7 +215,7 @@ pub async fn log_token_invalidation_failure(
     user_id: String,
     reason: String,
     error_message: String,
-) -> Result<(), AuditError> {
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::RefreshTokenRevoked);
     event.user_id = Some(user_id);
     event.ip_address = ctx.ip_address.clone();
@@ -234,7 +242,7 @@ pub async fn log_refresh_token_validation_failure(
     token_hash: String,
     failure_reason: String,
     ip_address: Option<String>,
-) -> Result<(), AuditError> {
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::RefreshTokenValidationFailure);
     event.user_id = Some("unknown".to_string());
     event.ip_address = ip_address;
@@ -260,7 +268,7 @@ pub async fn log_bootstrap_completed(
     owner_username: String,
     system_admin_count: u32,
     role_admin_count: u32,
-) -> Result<(), AuditError> {
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::BootstrapCompleted);
     event.user_id = Some(actor_user_id);
     event.ip_address = ip_address;
@@ -284,7 +292,7 @@ pub async fn log_owner_activated(
     actor_user_id: String,
     ip_address: Option<String>,
     activation_method: String,
-) -> Result<(), AuditError> {
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::OwnerActivated);
     event.user_id = Some(actor_user_id);
     event.ip_address = ip_address;
@@ -305,7 +313,7 @@ pub async fn log_owner_deactivated(
     actor_user_id: String,
     ip_address: Option<String>,
     activation_method: String,
-) -> Result<(), AuditError> {
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::OwnerDeactivated);
     event.user_id = Some(actor_user_id);
     event.ip_address = ip_address;
@@ -328,7 +336,7 @@ pub async fn log_admin_role_assigned(
     target_user_id: String,
     role_type: String,
     ip_address: Option<String>,
-) -> Result<(), AuditError> {
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::AdminRoleAssigned);
     event.user_id = Some(actor_user_id);
     event.ip_address = ip_address;
@@ -352,7 +360,7 @@ pub async fn log_admin_role_removed(
     target_user_id: String,
     role_type: String,
     ip_address: Option<String>,
-) -> Result<(), AuditError> {
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::AdminRoleRemoved);
     event.user_id = Some(actor_user_id);
     event.ip_address = ip_address;
@@ -374,7 +382,7 @@ pub async fn log_cli_session_start(
     ctx: &RequestContext,
     command_name: &str,
     args: Vec<String>,
-) -> Result<(), AuditError> {
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::CliSessionStart);
     event.user_id = Some(ctx.actor_id.clone());
     event.ip_address = ctx.ip_address.clone();
@@ -400,7 +408,7 @@ pub async fn log_cli_session_end(
     command_name: &str,
     success: bool,
     error_message: Option<String>,
-) -> Result<(), AuditError> {
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::CliSessionEnd);
     event.user_id = Some(ctx.actor_id.clone());
     event.ip_address = ctx.ip_address.clone();
@@ -428,7 +436,7 @@ pub async fn log_user_created(
     ctx: &RequestContext,
     user_id: &str,
     username: &str,
-) -> Result<(), AuditError> {
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::UserCreated);
     event.user_id = Some(ctx.actor_id.clone());
     event.ip_address = ctx.ip_address.clone();
@@ -465,7 +473,7 @@ pub async fn log_privileges_changed(
     new_is_system_admin: bool,
     old_is_role_admin: bool,
     new_is_role_admin: bool,
-) -> Result<(), AuditError> {
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::PrivilegesChanged);
     event.user_id = Some(ctx.actor_id.clone());
     event.ip_address = ctx.ip_address.clone();
@@ -496,7 +504,7 @@ pub async fn log_operation_rolled_back(
     operation_type: &str,
     reason: &str,
     affected_user_id: Option<&str>,
-) -> Result<(), AuditError> {
+) -> Result<(), InternalError> {
     let mut event = AuditEvent::new(EventType::OperationRolledBack);
     event.user_id = Some(ctx.actor_id.clone());
     event.ip_address = ctx.ip_address.clone();
@@ -632,13 +640,14 @@ impl AuditBuilder {
     /// # Errors
     /// Returns `AuditError::MissingUserId` if user_id was not set
     /// Returns `AuditError::DatabaseError` if the database operation fails
-    pub async fn write(self) -> Result<(), AuditError> {
+    pub async fn write(self) -> Result<(), InternalError> {
         // Validate that user_id is present
         if self.event.user_id.is_none() {
-            return Err(AuditError::MissingUserId);
+            return Err(InternalError::Audit(crate::errors::internal::AuditError::LogWriteFailed("Missing user_id".to_string())));
         }
         
         // Write the event to the database
         self.store.write_event(self.event).await
     }
 }
+

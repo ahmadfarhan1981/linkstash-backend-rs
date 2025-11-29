@@ -4,7 +4,6 @@ mod tests {
     use crate::app_data::AppData;
     use crate::types::internal::context::RequestContext;
     use crate::types::internal::auth::{AdminFlags, Claims};
-    use crate::errors::admin::AdminError;
     use crate::test::utils::setup_test_stores;
     use std::sync::Arc;
     use uuid::Uuid;
@@ -141,7 +140,7 @@ mod tests {
             let ctx = create_context_with_claims(&admin_id, false, true, false);
             
             let result = service.assign_system_admin(&ctx, &target_id).await;
-            assert!(matches!(result, Err(AdminError::OwnerRequired(_))));
+            assert!(matches!(result, Err(crate::errors::InternalError::Credential(crate::errors::internal::CredentialError::InvalidCredentials))));
         }
 
         #[tokio::test]
@@ -164,7 +163,7 @@ mod tests {
             let ctx = create_context_with_claims(&user_id, false, false, false);
             
             let result = service.assign_system_admin(&ctx, &target_id).await;
-            assert!(matches!(result, Err(AdminError::OwnerRequired(_))));
+            assert!(matches!(result, Err(crate::errors::InternalError::Credential(crate::errors::internal::CredentialError::InvalidCredentials))));
         }
 
         #[tokio::test]
@@ -181,7 +180,7 @@ mod tests {
             let ctx = RequestContext::new(); // No claims
             
             let result = service.assign_system_admin(&ctx, &target_id).await;
-            assert!(matches!(result, Err(AdminError::InternalError(_))));
+            assert!(matches!(result, Err(crate::errors::InternalError::Parse { .. })));
         }
 
         #[tokio::test]
@@ -198,7 +197,7 @@ mod tests {
             let ctx = create_context_with_claims(&owner_id, true, false, false);
             
             let result = service.assign_system_admin(&ctx, &owner_id).await;
-            assert!(matches!(result, Err(AdminError::SelfModificationDenied(_))));
+            assert!(matches!(result, Err(crate::errors::InternalError::Credential(crate::errors::internal::CredentialError::InvalidCredentials))));
         }
 
         #[tokio::test]
@@ -268,7 +267,7 @@ mod tests {
             let fake_user_id = Uuid::new_v4().to_string();
             
             let result = service.assign_system_admin(&ctx, &fake_user_id).await;
-            assert!(matches!(result, Err(AdminError::UserNotFound(_))));
+            assert!(matches!(result, Err(crate::errors::InternalError::Credential(crate::errors::internal::CredentialError::UserNotFound(_)))));
         }
     }
 
@@ -323,7 +322,7 @@ mod tests {
             let ctx = create_context_with_claims(&admin_id, false, true, false);
             
             let result = service.remove_system_admin(&ctx, &target_id).await;
-            assert!(matches!(result, Err(AdminError::OwnerRequired(_))));
+            assert!(matches!(result, Err(crate::errors::InternalError::Credential(crate::errors::internal::CredentialError::InvalidCredentials))));
         }
 
         #[tokio::test]
@@ -346,7 +345,7 @@ mod tests {
             let ctx = create_context_with_claims(&user_id, false, false, false);
             
             let result = service.remove_system_admin(&ctx, &target_id).await;
-            assert!(matches!(result, Err(AdminError::OwnerRequired(_))));
+            assert!(matches!(result, Err(crate::errors::InternalError::Credential(crate::errors::internal::CredentialError::InvalidCredentials))));
         }
 
         #[tokio::test]
@@ -363,7 +362,7 @@ mod tests {
             let ctx = create_context_with_claims(&owner_id, true, true, false);
             
             let result = service.remove_system_admin(&ctx, &owner_id).await;
-            assert!(matches!(result, Err(AdminError::SelfModificationDenied(_))));
+            assert!(matches!(result, Err(crate::errors::InternalError::Credential(crate::errors::internal::CredentialError::InvalidCredentials))));
         }
 
         #[tokio::test]
@@ -495,7 +494,7 @@ mod tests {
             let ctx = create_context_with_claims(&user_id, false, false, false);
             
             let result = service.assign_role_admin(&ctx, &target_id).await;
-            assert!(matches!(result, Err(AdminError::OwnerOrSystemAdminRequired(_))));
+            assert!(matches!(result, Err(crate::errors::InternalError::Credential(crate::errors::internal::CredentialError::InvalidCredentials))));
         }
 
         #[tokio::test]
@@ -512,7 +511,7 @@ mod tests {
             let ctx = create_context_with_claims(&owner_id, true, false, false);
             
             let result = service.assign_role_admin(&ctx, &owner_id).await;
-            assert!(matches!(result, Err(AdminError::SelfModificationDenied(_))));
+            assert!(matches!(result, Err(crate::errors::InternalError::Credential(crate::errors::internal::CredentialError::InvalidCredentials))));
         }
 
         #[tokio::test]
@@ -529,7 +528,7 @@ mod tests {
             let ctx = create_context_with_claims(&admin_id, false, true, false);
             
             let result = service.assign_role_admin(&ctx, &admin_id).await;
-            assert!(matches!(result, Err(AdminError::SelfModificationDenied(_))));
+            assert!(matches!(result, Err(crate::errors::InternalError::Credential(crate::errors::internal::CredentialError::InvalidCredentials))));
         }
 
         #[tokio::test]
@@ -661,7 +660,7 @@ mod tests {
             let ctx = create_context_with_claims(&user_id, false, false, false);
             
             let result = service.remove_role_admin(&ctx, &target_id).await;
-            assert!(matches!(result, Err(AdminError::OwnerOrSystemAdminRequired(_))));
+            assert!(matches!(result, Err(crate::errors::InternalError::Credential(crate::errors::internal::CredentialError::InvalidCredentials))));
         }
 
         #[tokio::test]
@@ -678,7 +677,7 @@ mod tests {
             let ctx = create_context_with_claims(&admin_id, false, true, true);
             
             let result = service.remove_role_admin(&ctx, &admin_id).await;
-            assert!(matches!(result, Err(AdminError::SelfModificationDenied(_))));
+            assert!(matches!(result, Err(crate::errors::InternalError::Credential(crate::errors::internal::CredentialError::InvalidCredentials))));
         }
 
         #[tokio::test]
@@ -779,7 +778,7 @@ mod tests {
             let ctx = create_context_with_claims(&admin_id, false, true, false);
             
             let result = service.deactivate_owner(&ctx).await;
-            assert!(matches!(result, Err(AdminError::OwnerRequired(_))));
+            assert!(matches!(result, Err(crate::errors::InternalError::Credential(crate::errors::internal::CredentialError::InvalidCredentials))));
         }
 
         #[tokio::test]
@@ -796,7 +795,7 @@ mod tests {
             let ctx = create_context_with_claims(&user_id, false, false, false);
             
             let result = service.deactivate_owner(&ctx).await;
-            assert!(matches!(result, Err(AdminError::OwnerRequired(_))));
+            assert!(matches!(result, Err(crate::errors::InternalError::Credential(crate::errors::internal::CredentialError::InvalidCredentials))));
         }
 
         #[tokio::test]

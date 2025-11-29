@@ -2,7 +2,8 @@ use sea_orm::{DatabaseConnection, EntityTrait, ActiveModelTrait, Set};
 use chrono::Utc;
 use std::sync::Arc;
 use crate::types::db::system_config::{self, Entity as SystemConfig, ActiveModel};
-use crate::errors::auth::AuthError;
+use crate::errors::InternalError;
+use crate::errors::internal::SystemConfigError;
 use crate::stores::AuditStore;
 use crate::services::audit_logger;
 
@@ -29,13 +30,13 @@ impl SystemConfigStore {
     /// 
     /// # Returns
     /// * `Ok(())` - Config row exists or was created successfully
-    /// * `Err(AuthError)` - Database error
-    async fn ensure_config_exists(&self) -> Result<(), AuthError> {
+    /// * `Err(InternalError)` - Database error
+    async fn ensure_config_exists(&self) -> Result<(), InternalError> {
         // Check if config row exists
         let config = SystemConfig::find_by_id(1)
             .one(&self.db)
             .await
-            .map_err(|e| AuthError::internal_error(format!("Database error: {}", e)))?;
+            .map_err(|e| InternalError::database("check_system_config_exists", e))?;
 
         if config.is_none() {
             // Create the singleton row with default values
@@ -49,7 +50,7 @@ impl SystemConfigStore {
             new_config
                 .insert(&self.db)
                 .await
-                .map_err(|e| AuthError::internal_error(format!("Failed to create system_config: {}", e)))?;
+                .map_err(|e| InternalError::database("create_system_config", e))?;
         }
 
         Ok(())
@@ -61,15 +62,15 @@ impl SystemConfigStore {
     /// 
     /// # Returns
     /// * `Ok(Model)` - The system configuration
-    /// * `Err(AuthError)` - Database error or config not found
-    pub async fn get_config(&self) -> Result<system_config::Model, AuthError> {
+    /// * `Err(InternalError)` - Database error or config not found
+    pub async fn get_config(&self) -> Result<system_config::Model, InternalError> {
         self.ensure_config_exists().await?;
 
         SystemConfig::find_by_id(1)
             .one(&self.db)
             .await
-            .map_err(|e| AuthError::internal_error(format!("Database error: {}", e)))?
-            .ok_or_else(|| AuthError::internal_error("System config not found".to_string()))
+            .map_err(|e| InternalError::database("get_system_config", e))?
+            .ok_or_else(|| SystemConfigError::ConfigNotFound.into())
     }
 
     /// Set the owner_active flag
@@ -84,21 +85,21 @@ impl SystemConfigStore {
     /// 
     /// # Returns
     /// * `Ok(())` - Flag updated successfully
-    /// * `Err(AuthError)` - Database error
+    /// * `Err(InternalError)` - Database error
     pub async fn set_owner_active(
         &self,
         active: bool,
         actor_user_id: Option<String>,
         ip_address: Option<String>,
-    ) -> Result<(), AuthError> {
+    ) -> Result<(), InternalError> {
         self.ensure_config_exists().await?;
 
         // Get current config
         let config = SystemConfig::find_by_id(1)
             .one(&self.db)
             .await
-            .map_err(|e| AuthError::internal_error(format!("Database error: {}", e)))?
-            .ok_or_else(|| AuthError::internal_error("System config not found".to_string()))?;
+            .map_err(|e| InternalError::database("get_system_config_for_update", e))?
+            .ok_or_else(|| SystemConfigError::ConfigNotFound)?;
 
         // Update the config
         let now = Utc::now().timestamp();
@@ -109,7 +110,7 @@ impl SystemConfigStore {
         active_model
             .update(&self.db)
             .await
-            .map_err(|e| AuthError::internal_error(format!("Failed to update owner_active: {}", e)))?;
+            .map_err(|e| InternalError::database("update_owner_active", e))?;
 
         // Log at point of action
         let actor = actor_user_id.unwrap_or_else(|| "system".to_string());
@@ -151,8 +152,8 @@ impl SystemConfigStore {
     /// 
     /// # Returns
     /// * `Ok(bool)` - True if owner is active, false otherwise
-    /// * `Err(AuthError)` - Database error
-    pub async fn is_owner_active(&self) -> Result<bool, AuthError> {
+    /// * `Err(InternalError)` - Database error
+    pub async fn is_owner_active(&self) -> Result<bool, InternalError> {
         let config = self.get_config().await?;
         Ok(config.owner_active)
     }

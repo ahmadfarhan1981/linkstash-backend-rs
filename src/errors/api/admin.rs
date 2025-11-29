@@ -1,5 +1,6 @@
 use poem_openapi::{payload::Json, ApiResponse, Object};
 use std::fmt;
+use crate::errors::internal::{InternalError, CredentialError, SystemConfigError};
 
 /// Standardized error response for admin endpoints
 #[derive(Object, Debug)]
@@ -153,11 +154,63 @@ impl AdminError {
         }))
     }
     
-    /// Create an InternalError
-    pub fn internal_error(message: String) -> Self {
+    /// Convert InternalError to AdminError
+    /// 
+    /// This is the explicit conversion point from internal errors to API errors.
+    /// Internal error details are logged but not exposed to clients.
+    pub fn from_internal_error(err: InternalError) -> Self {
+        match &err {
+            // Infrastructure errors - always log and return generic error
+            InternalError::Database { operation, .. } => {
+                tracing::error!("Database error in {}: {}", operation, err);
+                Self::internal_server_error()
+            }
+            InternalError::Transaction { operation, .. } => {
+                tracing::error!("Transaction error in {}: {}", operation, err);
+                Self::internal_server_error()
+            }
+            InternalError::Parse { value_type, .. } => {
+                tracing::error!("Parse error for {}: {}", value_type, err);
+                Self::internal_server_error()
+            }
+            InternalError::Crypto { operation, .. } => {
+                tracing::error!("Crypto error in {}: {}", operation, err);
+                Self::internal_server_error()
+            }
+            
+            // Credential domain errors
+            InternalError::Credential(CredentialError::UserNotFound(user_id)) => {
+                Self::user_not_found(user_id.clone())
+            }
+            InternalError::Credential(CredentialError::DuplicateUsername(username)) => {
+                tracing::warn!("Duplicate username in admin operation: {}", username);
+                Self::internal_server_error()  // Shouldn't happen in admin context
+            }
+            
+            // SystemConfig domain errors
+            InternalError::SystemConfig(SystemConfigError::OwnerAlreadyExists) => {
+                Self::already_bootstrapped()
+            }
+            InternalError::SystemConfig(SystemConfigError::OwnerNotFound) => {
+                Self::owner_not_found()
+            }
+            
+            // Other domain errors
+            _ => {
+                tracing::error!("Unexpected error in admin operation: {}", err);
+                Self::internal_server_error()
+            }
+        }
+    }
+    
+    /// Create a generic internal server error
+    /// 
+    /// This replaces the old internal_error() method. It always returns
+    /// a generic message without exposing internal details.
+    fn internal_server_error() -> Self {
         AdminError::InternalError(Json(AdminErrorResponse {
             error: "internal_error".to_string(),
-            message,
+            message: "An internal error occurred".to_string(),
             status_code: 500,
         }))
     }
@@ -200,19 +253,5 @@ impl AdminError {
 impl fmt::Display for AdminError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.message())
-    }
-}
-
-/// Convert database errors to AdminError
-impl From<sea_orm::DbErr> for AdminError {
-    fn from(err: sea_orm::DbErr) -> Self {
-        AdminError::internal_error(format!("Database error: {}", err))
-    }
-}
-
-/// Convert AuthError to AdminError
-impl From<crate::errors::auth::AuthError> for AdminError {
-    fn from(err: crate::errors::auth::AuthError) -> Self {
-        AdminError::internal_error(format!("Authentication error: {}", err))
     }
 }

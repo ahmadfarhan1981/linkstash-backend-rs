@@ -6,7 +6,8 @@ use base64::{Engine as _, engine::general_purpose};
 use std::fmt;
 use std::sync::Arc;
 use crate::types::internal::auth::Claims;
-use crate::errors::auth::AuthError;
+use crate::errors::InternalError;
+use crate::errors::internal::CredentialError;
 use crate::services::{crypto, audit_logger};
 use crate::stores::AuditStore;
 
@@ -44,7 +45,7 @@ impl TokenService {
     /// * `ip_address` - Client IP address for audit logging
     /// 
     /// # Returns
-    /// * `Result<(String, String), AuthError>` - Tuple of (encoded JWT, JWT ID) or an error
+    /// * `Result<(String, String), InternalError>` - Tuple of (encoded JWT, JWT ID) or an error
     pub async fn generate_jwt(
         &self,
         user_id: &Uuid,
@@ -53,13 +54,13 @@ impl TokenService {
         is_role_admin: bool,
         app_roles: Vec<String>,
         ip_address: Option<String>,
-    ) -> Result<(String, String), AuthError> {
+    ) -> Result<(String, String), InternalError> {
         let now = Utc::now().timestamp();
         let expiration = now + (self.jwt_expiration_minutes * 60);
         
         // Validate expiration timestamp before creating JWT
         let expiration_dt = DateTime::from_timestamp(expiration, 0)
-            .ok_or_else(|| AuthError::internal_error(format!("Invalid expiration timestamp: {}", expiration)))?;
+            .ok_or_else(|| InternalError::parse("timestamp", format!("Invalid expiration timestamp: {}", expiration)))?;
         
         // Generate unique JWT ID
         let jti = Uuid::new_v4().to_string();
@@ -80,7 +81,7 @@ impl TokenService {
             &claims,
             &EncodingKey::from_secret(self.jwt_secret.as_bytes()),
         )
-        .map_err(|e| AuthError::internal_error(format!("Failed to generate JWT: {}", e)))?;
+        .map_err(|e| InternalError::crypto("jwt_generation", format!("Failed to generate JWT: {}", e)))?;
         
         // Log JWT issuance at point of action (expiration_dt already validated above)
         if let Err(audit_err) = audit_logger::log_jwt_issued(
@@ -104,8 +105,8 @@ impl TokenService {
     /// * `token` - The JWT to validate
     /// 
     /// # Returns
-    /// * `Result<Claims, AuthError>` - The decoded claims or an error
-    pub async fn validate_jwt(&self, token: &str) -> Result<Claims, AuthError> {
+    /// * `Result<Claims, InternalError>` - The decoded claims or an error
+    pub async fn validate_jwt(&self, token: &str) -> Result<Claims, InternalError> {
         let validation = Validation::new(Algorithm::HS256);
         
         let token_data = decode::<Claims>(
@@ -116,9 +117,9 @@ impl TokenService {
         .map_err(|e| {
             // Check if the error is due to expiration
             if e.to_string().contains("ExpiredSignature") {
-                AuthError::expired_token()
+                InternalError::from(CredentialError::ExpiredToken("jwt".to_string()))
             } else {
-                AuthError::invalid_token()
+                InternalError::from(CredentialError::invalid_token("jwt", "invalid signature or malformed"))
             }
         });
         
@@ -127,13 +128,13 @@ impl TokenService {
             // Try to extract claims without validation for audit logging
             if let Ok(unverified_claims) = self.extract_unverified_claims(token) {
                 let failure_reason = match err {
-                    AuthError::ExpiredToken(_) => "expired",
-                    AuthError::InvalidToken(_) => "invalid_signature",
+                    InternalError::Credential(CredentialError::ExpiredToken(_)) => "expired",
+                    InternalError::Credential(CredentialError::InvalidToken { .. }) => "invalid_signature",
                     _ => "validation_error",
                 };
                 
                 // Check if this is a tampering attempt (invalid signature)
-                if matches!(err, AuthError::InvalidToken(_)) {
+                if matches!(err, InternalError::Credential(CredentialError::InvalidToken { .. })) {
                     if let Err(audit_err) = audit_logger::log_jwt_tampered(
                         &self.audit_store,
                         unverified_claims.sub.clone(),
@@ -161,7 +162,7 @@ impl TokenService {
     }
     
     /// Extract claims from JWT without validation (for audit logging only)
-    fn extract_unverified_claims(&self, token: &str) -> Result<Claims, AuthError> {
+    fn extract_unverified_claims(&self, token: &str) -> Result<Claims, InternalError> {
         use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
         
         let mut validation = Validation::new(Algorithm::HS256);
@@ -173,7 +174,7 @@ impl TokenService {
             &DecodingKey::from_secret(b"dummy"),
             &validation,
         )
-        .map_err(|_| AuthError::invalid_token())?;
+        .map_err(|_| InternalError::from(CredentialError::invalid_token("jwt", "malformed")))?;
         
         Ok(token_data.claims)
     }

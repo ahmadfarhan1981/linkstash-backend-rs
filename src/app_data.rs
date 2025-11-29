@@ -3,7 +3,7 @@ use sea_orm::DatabaseConnection;
 use crate::config::SecretManager;
 use crate::stores::{AuditStore, CredentialStore, SystemConfigStore};
 use crate::services::TokenService;
-use crate::errors::auth::AuthError;
+use crate::errors::InternalError;
 
 /// Centralized application data containing all databases, stores, and stateless services
 /// 
@@ -76,28 +76,26 @@ impl AppData {
     /// # Returns
     /// 
     /// * `Ok(AppData)` - Fully initialized application data
-    /// * `Err(AuthError)` - Database or secret manager initialization failed
+    /// * `Err(InternalError)` - Database or secret manager initialization failed
     /// 
     /// # Errors
     /// 
-    /// Returns `AuthError::InternalError` when:
+    /// Returns `InternalError` when:
     /// - Database initialization fails
     /// - Secret manager initialization fails (missing or invalid environment variables)
-    pub async fn init() -> Result<Self, AuthError> {
+    pub async fn init() -> Result<Self, InternalError> {
         tracing::info!("Initializing AppData...");
         
         // 1. Initialize databases
         tracing::debug!("Initializing databases...");
-        let db = crate::config::init_database().await
-            .map_err(|e| AuthError::internal_error(format!("Database init failed: {}", e)))?;
-        let audit_db = crate::config::init_audit_database().await
-            .map_err(|e| AuthError::internal_error(format!("Audit DB init failed: {}", e)))?;
+        let db = crate::config::init_database().await?;
+        let audit_db = crate::config::init_audit_database().await?;
         tracing::debug!("Databases initialized");
         
         // 2. Initialize secrets
         tracing::debug!("Initializing secret manager...");
         let secret_manager = Arc::new(SecretManager::init()
-            .map_err(|e| AuthError::internal_error(format!("Secret manager init failed: {}", e)))?);
+            .map_err(|e| InternalError::parse("secret_manager", format!("Secret manager init failed: {}", e)))?);
         tracing::debug!("Secret manager initialized");
         
         // 3. Create stores (order matters: audit_store first, then others that depend on it)

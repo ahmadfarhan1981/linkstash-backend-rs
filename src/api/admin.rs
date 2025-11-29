@@ -57,14 +57,17 @@ impl AdminApi {
             ));
         }
         
-        // Call service layer (AdminError converts to poem::Error automatically)
+        // Call service layer and convert InternalError to AdminError
         self.admin_service
             .assign_system_admin(&ctx, &body.target_user_id)
             .await
-            .map_err(|e| poem::Error::from_string(
-                e.message(),
-                poem::http::StatusCode::from_u16(e.status_code()).unwrap(),
-            ))?;
+            .map_err(|internal_error| {
+                let admin_error = crate::errors::AdminError::from_internal_error(internal_error);
+                poem::Error::from_string(
+                    admin_error.to_string(),
+                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+                )
+            })?;
         
         Ok(Json(AssignRoleResponse {
             success: true,
@@ -98,14 +101,17 @@ impl AdminApi {
             ));
         }
         
-        // Call service layer
+        // Call service layer and convert InternalError to AdminError
         self.admin_service
             .remove_system_admin(&ctx, &body.target_user_id)
             .await
-            .map_err(|e| poem::Error::from_string(
-                e.message(),
-                poem::http::StatusCode::from_u16(e.status_code()).unwrap(),
-            ))?;
+            .map_err(|internal_error| {
+                let admin_error = crate::errors::AdminError::from_internal_error(internal_error);
+                poem::Error::from_string(
+                    admin_error.to_string(),
+                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+                )
+            })?;
         
         Ok(Json(RemoveRoleResponse {
             success: true,
@@ -139,14 +145,17 @@ impl AdminApi {
             ));
         }
         
-        // Call service layer
+        // Call service layer and convert InternalError to AdminError
         self.admin_service
             .assign_role_admin(&ctx, &body.target_user_id)
             .await
-            .map_err(|e| poem::Error::from_string(
-                e.message(),
-                poem::http::StatusCode::from_u16(e.status_code()).unwrap(),
-            ))?;
+            .map_err(|internal_error| {
+                let admin_error = crate::errors::AdminError::from_internal_error(internal_error);
+                poem::Error::from_string(
+                    admin_error.to_string(),
+                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+                )
+            })?;
         
         Ok(Json(AssignRoleResponse {
             success: true,
@@ -180,14 +189,17 @@ impl AdminApi {
             ));
         }
         
-        // Call service layer
+        // Call service layer and convert InternalError to AdminError
         self.admin_service
             .remove_role_admin(&ctx, &body.target_user_id)
             .await
-            .map_err(|e| poem::Error::from_string(
-                e.message(),
-                poem::http::StatusCode::from_u16(e.status_code()).unwrap(),
-            ))?;
+            .map_err(|internal_error| {
+                let admin_error = crate::errors::AdminError::from_internal_error(internal_error);
+                poem::Error::from_string(
+                    admin_error.to_string(),
+                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+                )
+            })?;
         
         Ok(Json(RemoveRoleResponse {
             success: true,
@@ -219,14 +231,17 @@ impl AdminApi {
             ));
         }
         
-        // Call service layer
+        // Call service layer and convert InternalError to AdminError
         self.admin_service
             .deactivate_owner(&ctx)
             .await
-            .map_err(|e| poem::Error::from_string(
-                e.message(),
-                poem::http::StatusCode::from_u16(e.status_code()).unwrap(),
-            ))?;
+            .map_err(|internal_error| {
+                let admin_error = crate::errors::AdminError::from_internal_error(internal_error);
+                poem::Error::from_string(
+                    admin_error.to_string(),
+                    poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+                )
+            })?;
         
         Ok(Json(DeactivateResponse {
             success: true,

@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use crate::stores::{CredentialStore, AuditStore, SystemConfigStore};
 use crate::services::TokenService;
-use crate::errors::auth::AuthError;
+use crate::errors::InternalError;
 use crate::types::internal::context::RequestContext;
 
 /// Authentication service that orchestrates login, logout, and token refresh flows
@@ -46,20 +46,20 @@ impl AuthService {
     /// * `password` - Password to verify
     /// 
     /// # Returns
-    /// * `Result<(String, String), AuthError>` - Tuple of (access_token, refresh_token) or error
+    /// * `Result<(String, String), InternalError>` - Tuple of (access_token, refresh_token) or error
     pub async fn login(
         &self,
         ctx: &RequestContext,
         username: String,
         password: String,
-    ) -> Result<(String, String), AuthError> {
+    ) -> Result<(String, String), InternalError> {
         // Credential verification with audit logging happens in the store
         let user_id_str = self.credential_store
-            .verify_credentials(&username, &password, ctx.ip_address.clone())
+            .verify_credentials(ctx, &username, &password)
             .await?;
         
         let user_id = Uuid::parse_str(&user_id_str)
-            .map_err(|e| AuthError::internal_error(format!("Invalid user_id format: {}", e)))?;
+            .map_err(|e| InternalError::parse("UUID", e.to_string()))?;
         
         // Fetch user data to get admin roles
         let user = self.credential_store.get_user_by_id(&user_id_str).await?;
@@ -108,12 +108,12 @@ impl AuthService {
     /// * `refresh_token` - The refresh token to validate
     /// 
     /// # Returns
-    /// * `Result<String, AuthError>` - New access token or error
+    /// * `Result<String, InternalError>` - New access token or error
     pub async fn refresh(
         &self,
         ctx: &RequestContext,
         refresh_token: String,
-    ) -> Result<String, AuthError> {
+    ) -> Result<String, InternalError> {
         let token_hash = self.token_service.hash_refresh_token(&refresh_token);
         
         // Validation with audit logging happens in the store
@@ -122,7 +122,7 @@ impl AuthService {
             .await?;
         
         let user_id = Uuid::parse_str(&user_id_str)
-            .map_err(|e| AuthError::internal_error(format!("Invalid user_id format: {}", e)))?;
+            .map_err(|e| InternalError::parse("UUID", e.to_string()))?;
         
         // Fetch user data to get admin roles
         let user = self.credential_store.get_user_by_id(&user_id_str).await?;
@@ -159,12 +159,12 @@ impl AuthService {
     /// 
     /// # Returns
     /// * `Ok(())` - Token revoked successfully
-    /// * `Err(AuthError)` - Token not found or database error
+    /// * `Err(InternalError)` - Token not found or database error
     pub async fn logout(
         &self,
         ctx: &RequestContext,
         refresh_token: String,
-    ) -> Result<(), AuthError> {
+    ) -> Result<(), InternalError> {
         let token_hash = self.token_service.hash_refresh_token(&refresh_token);
         
         // Extract jwt_id if authenticated

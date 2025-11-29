@@ -1,8 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use super::super::admin::AdminError;
-    use crate::errors::auth::AuthError;
-    use sea_orm::DbErr;
+    use crate::errors::AdminError;
 
     #[test]
     fn test_all_error_variants_have_correct_status_codes() {
@@ -36,9 +34,6 @@ mod tests {
         
         let password_change_required = AdminError::password_change_required();
         assert!(password_change_required.message().contains("Password change required"));
-        
-        let internal_error = AdminError::internal_error("test error".to_string());
-        assert_eq!(internal_error.message(), "test error");
     }
 
     #[test]
@@ -52,23 +47,6 @@ mod tests {
         
         let error = AdminError::password_validation_failed("must contain uppercase".to_string());
         assert_eq!(error.message(), "Password validation failed: must contain uppercase");
-    }
-
-    #[test]
-    fn test_error_conversion_from_db_err() {
-        let db_err = DbErr::RecordNotFound("test record".to_string());
-        let admin_err: AdminError = db_err.into();
-        
-        assert!(admin_err.message().contains("Database error"));
-        assert!(admin_err.message().contains("test record"));
-    }
-
-    #[test]
-    fn test_error_conversion_from_auth_error() {
-        let auth_err = AuthError::invalid_credentials();
-        let admin_err: AdminError = auth_err.into();
-        
-        assert!(admin_err.message().contains("Authentication error"));
     }
 
     #[test]

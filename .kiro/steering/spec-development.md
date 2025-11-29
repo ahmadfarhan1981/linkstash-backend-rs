@@ -1,6 +1,8 @@
 ---
-inclusion: manual
+inclusion: fileMatch
+fileMatchPattern: '.kiro/specs/*/tasks.md'
 ---
+
 
 # Spec Development - Task Organization Rules
 

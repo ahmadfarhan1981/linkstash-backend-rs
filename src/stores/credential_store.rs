@@ -5,7 +5,8 @@ use chrono::Utc;
 use std::sync::Arc;
 use crate::types::db::user::{self, Entity as User, ActiveModel};
 use crate::types::db::refresh_token::{ActiveModel as RefreshTokenActiveModel};
-use crate::errors::auth::AuthError;
+use crate::errors::InternalError;
+use crate::errors::internal::CredentialError;
 use crate::stores::AuditStore;
 use crate::services::audit_logger;
 use crate::types::internal::auth::AdminFlags;
@@ -50,16 +51,16 @@ impl CredentialStore {
         ctx: &RequestContext,
         username: String,
         password_hash: String,
-    ) -> Result<String, AuthError> {
+    ) -> Result<String, InternalError> {
         // Check if username already exists
         let existing_user = User::find()
             .filter(user::Column::Username.eq(&username))
             .one(&self.db)
             .await
-            .map_err(|e| AuthError::internal_error(format!("Database error: {}", e)))?;
+            .map_err(|e| InternalError::database("OPERATION", e))?;
 
         if existing_user.is_some() {
-            return Err(AuthError::duplicate_username());
+            return Err(InternalError::from(CredentialError::DuplicateUsername(username.clone())));
         }
 
         // Generate UUID for user
@@ -88,9 +89,9 @@ impl CredentialStore {
             .map_err(|e| {
                 // Check if it's a unique constraint violation
                 if e.to_string().contains("UNIQUE") {
-                    AuthError::duplicate_username()
+                    InternalError::from(CredentialError::DuplicateUsername(username.clone()))
                 } else {
-                    AuthError::internal_error(format!("Database error: {}", e))
+                    InternalError::database("OPERATION", e)
                 }
             })?;
 
@@ -129,14 +130,14 @@ impl CredentialStore {
         ctx: &RequestContext,
         user_id: &str,
         new_privileges: AdminFlags,
-    ) -> Result<AdminFlags, AuthError> {
+    ) -> Result<AdminFlags, InternalError> {
         // Fetch current user to get old privileges
         let user = User::find()
             .filter(user::Column::Id.eq(user_id))
             .one(&self.db)
             .await
-            .map_err(|e| AuthError::internal_error(format!("Database error: {}", e)))?
-            .ok_or_else(|| AuthError::internal_error(format!("User not found: {}", user_id)))?;
+            .map_err(|e| InternalError::database("get_user_for_privileges", e))?
+            .ok_or_else(|| InternalError::Credential(CredentialError::UserNotFound(user_id.to_string())))?;
 
         // Store old privileges for return value and audit logging
         let old_privileges = AdminFlags::from(&user);
@@ -154,7 +155,7 @@ impl CredentialStore {
         active_model
             .update(&self.db)
             .await
-            .map_err(|e| AuthError::internal_error(format!("Failed to update privileges: {}", e)))?;
+            .map_err(|e| InternalError::database("update_privileges", e))?;
 
         // Log privilege change event with before/after state immediately (at point of action)
         if let Err(audit_err) = audit_logger::log_privileges_changed(
@@ -183,16 +184,16 @@ impl CredentialStore {
     /// # Returns
     /// * `Ok(String)` - The user_id (UUID) of the created user
     /// * `Err(AuthError)` - DuplicateUsername if username already exists, or InternalError
-    pub async fn add_user(&self, username: String, password: String) -> Result<String, AuthError> {
+    pub async fn add_user(&self, username: String, password: String) -> Result<String, InternalError> {
         // Check if username already exists
         let existing_user = User::find()
             .filter(user::Column::Username.eq(&username))
             .one(&self.db)
             .await
-            .map_err(|e| AuthError::internal_error(format!("Database error: {}", e)))?;
+            .map_err(|e| InternalError::database("OPERATION", e))?;
 
         if existing_user.is_some() {
-            return Err(AuthError::duplicate_username());
+            return Err(InternalError::from(CredentialError::DuplicateUsername(username.clone())));
         }
 
         // Generate UUID for user
@@ -206,15 +207,18 @@ impl CredentialStore {
             Version::V0x13,
             Params::default(),
         )
-        .map_err(|e| AuthError::internal_error(format!("Failed to initialize Argon2 with secret: {}", e)))?;
+        .map_err(|e| InternalError::crypto("argon2_init", e.to_string()))?;
         
         let password_hash = argon2
             .hash_password(password.as_bytes(), &salt)
-            .map_err(|e| AuthError::internal_error(format!("Password hashing error: {}", e)))?
+            .map_err(|e| InternalError::from(CredentialError::PasswordHashingFailed(e.to_string())))?
             .to_string();
 
         // Get current timestamp
         let created_at = Utc::now().timestamp();
+
+        // Clone username for error handling (will be moved into ActiveModel)
+        let username_for_error = username.clone();
 
         // Create new user ActiveModel
         let new_user = ActiveModel {
@@ -236,9 +240,9 @@ impl CredentialStore {
             .map_err(|e| {
                 // Check if it's a unique constraint violation
                 if e.to_string().contains("UNIQUE") {
-                    AuthError::duplicate_username()
+                    InternalError::from(CredentialError::DuplicateUsername(username_for_error.clone()))
                 } else {
-                    AuthError::internal_error(format!("Database error: {}", e))
+                    InternalError::database("OPERATION", e)
                 }
             })?;
 
@@ -254,20 +258,20 @@ impl CredentialStore {
     /// Logs authentication attempts (success/failure) to audit database at point of action.
     /// 
     /// # Arguments
+    /// * `ctx` - Request context containing actor information for audit logging
     /// * `username` - The username to verify
     /// * `password` - The plaintext password to verify
-    /// * `ip_address` - Client IP address for audit logging
     /// 
     /// # Returns
     /// * `Ok(String)` - The user_id (UUID) if credentials are valid
     /// * `Err(AuthError)` - InvalidCredentials if username not found or password incorrect
-    pub async fn verify_credentials(&self, username: &str, password: &str, ip_address: Option<String>) -> Result<String, AuthError> {
+    pub async fn verify_credentials(&self, ctx: &RequestContext, username: &str, password: &str) -> Result<String, InternalError> {
         // Query user by username
         let user = User::find()
             .filter(user::Column::Username.eq(username))
             .one(&self.db)
             .await
-            .map_err(|_| AuthError::invalid_credentials())?;
+            .map_err(|_| InternalError::Credential(CredentialError::InvalidCredentials))?;
 
         // OWASP timing attack mitigation: Always execute Argon2 verification
         // Use a dummy hash when user doesn't exist to maintain constant-time behavior
@@ -286,7 +290,7 @@ impl CredentialStore {
 
         // Parse the password hash (real or dummy)
         let parsed_hash = PasswordHash::new(&password_hash)
-            .map_err(|_| AuthError::invalid_credentials())?;
+            .map_err(|_| InternalError::Credential(CredentialError::InvalidCredentials))?;
 
         // Initialize Argon2 with password_pepper as secret parameter
         let argon2 = Argon2::new_with_secret(
@@ -295,7 +299,7 @@ impl CredentialStore {
             Version::V0x13,
             Params::default(),
         )
-        .map_err(|_| AuthError::invalid_credentials())?;
+        .map_err(|_| InternalError::Credential(CredentialError::InvalidCredentials))?;
         
         // Always execute password verification (constant-time operation)
         let verification_result = argon2.verify_password(password.as_bytes(), &parsed_hash);
@@ -306,40 +310,40 @@ impl CredentialStore {
                 // User exists and password is correct
                 if let Err(audit_err) = audit_logger::log_login_success(
                     &self.audit_store,
+                    ctx,
                     uid.clone(),
-                    ip_address,
                 ).await {
                     tracing::error!("Failed to log login success: {:?}", audit_err);
                 }
                 Ok(uid)
             }
-            (Some(uid), Err(_)) => {
+            (Some(_uid), Err(_)) => {
                 // User exists but password is incorrect
                 // Audit log contains actual reason for forensic analysis
                 if let Err(audit_err) = audit_logger::log_login_failure(
                     &self.audit_store,
-                    Some(uid),
+                    ctx,
                     "invalid_password".to_string(),
-                    ip_address,
+                    Some(username.to_string()),
                 ).await {
                     tracing::error!("Failed to log login failure: {:?}", audit_err);
                 }
                 // User-facing error remains generic to prevent information disclosure
-                Err(AuthError::invalid_credentials())
+                Err(InternalError::Credential(CredentialError::InvalidCredentials))
             }
             (None, _) => {
                 // User doesn't exist (verification will always fail with dummy hash)
                 // Audit log contains actual reason for forensic analysis
                 if let Err(audit_err) = audit_logger::log_login_failure(
                     &self.audit_store,
-                    None,
+                    ctx,
                     "user_not_found".to_string(),
-                    ip_address,
+                    Some(username.to_string()),
                 ).await {
                     tracing::error!("Failed to log login failure: {:?}", audit_err);
                 }
                 // User-facing error remains generic to prevent username enumeration
-                Err(AuthError::invalid_credentials())
+                Err(InternalError::Credential(CredentialError::InvalidCredentials))
             }
         }
     }
@@ -365,10 +369,10 @@ impl CredentialStore {
         expires_at: i64,
         jwt_id: String,
         ip_address: Option<String>,
-    ) -> Result<(), AuthError> {
+    ) -> Result<(), InternalError> {
         // Use a transaction to ensure atomicity
         let txn = self.db.begin().await
-            .map_err(|e| AuthError::internal_error(format!("Failed to start transaction: {}", e)))?;
+            .map_err(|e| InternalError::transaction("store_refresh_token", e))?;
         
         let created_at = Utc::now().timestamp();
         
@@ -381,10 +385,10 @@ impl CredentialStore {
         };
         
         new_token.insert(&txn).await
-            .map_err(|e| AuthError::internal_error(format!("Failed to store refresh token: {}", e)))?;
+            .map_err(|e| InternalError::database("insert_refresh_token", e))?;
         
         txn.commit().await
-            .map_err(|e| AuthError::internal_error(format!("Failed to commit transaction: {}", e)))?;
+            .map_err(|e| InternalError::transaction("commit_refresh_token", e))?;
         
         // Log refresh token issuance at point of action
         if let Err(audit_err) = audit_logger::log_refresh_token_issued(
@@ -411,7 +415,7 @@ impl CredentialStore {
     /// # Returns
     /// * `Ok(String)` - The user_id (UUID) if token is valid and not expired
     /// * `Err(AuthError)` - InvalidRefreshToken if not found, ExpiredRefreshToken if expired
-    pub async fn validate_refresh_token(&self, token_hash: &str, ip_address: Option<String>) -> Result<String, AuthError> {
+    pub async fn validate_refresh_token(&self, token_hash: &str, ip_address: Option<String>) -> Result<String, InternalError> {
         use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
         
         // Query token by hash
@@ -419,7 +423,7 @@ impl CredentialStore {
             .filter(Column::TokenHash.eq(token_hash))
             .one(&self.db)
             .await
-            .map_err(|e| AuthError::internal_error(format!("Database error: {}", e)))?;
+            .map_err(|e| InternalError::database("OPERATION", e))?;
         
         // If token not found, log failure and return error
         let token = match token {
@@ -433,7 +437,7 @@ impl CredentialStore {
                 ).await {
                     tracing::error!("Failed to log refresh token validation failure: {:?}", audit_err);
                 }
-                return Err(AuthError::invalid_refresh_token());
+                return Err(InternalError::from(CredentialError::invalid_token("refresh_token", "not found")));
             }
         };
         
@@ -448,7 +452,7 @@ impl CredentialStore {
             ).await {
                 tracing::error!("Failed to log refresh token validation failure: {:?}", audit_err);
             }
-            return Err(AuthError::expired_refresh_token());
+            return Err(InternalError::from(CredentialError::ExpiredToken("refresh_token".to_string())));
         }
         
         // Return user_id on success (no audit log for successful validation - logged at JWT issuance)
@@ -468,15 +472,15 @@ impl CredentialStore {
     /// * `Ok(user_id)` - Token revoked successfully, returns the user_id
     /// * `Err(AuthError::InvalidRefreshToken)` - Token not found in database
     /// * `Err(AuthError::InternalError)` - Database error
-    pub async fn revoke_refresh_token(&self, token_hash: &str, jwt_id: Option<String>) -> Result<String, AuthError> {
+    pub async fn revoke_refresh_token(&self, token_hash: &str, jwt_id: Option<String>) -> Result<String, InternalError> {
         use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
         
         let token = RefreshToken::find()
             .filter(Column::TokenHash.eq(token_hash))
             .one(&self.db)
             .await
-            .map_err(|e| AuthError::internal_error(format!("Failed to query refresh token: {}", e)))?
-            .ok_or_else(|| AuthError::invalid_refresh_token())?;
+            .map_err(|e| InternalError::database("query_refresh_token", e))?
+            .ok_or_else(|| InternalError::from(CredentialError::invalid_token("refresh_token", "not found")))?;
         
         let user_id = token.user_id.clone();
         
@@ -484,7 +488,7 @@ impl CredentialStore {
             .filter(Column::TokenHash.eq(token_hash))
             .exec(&self.db)
             .await
-            .map_err(|e| AuthError::internal_error(format!("Failed to revoke refresh token: {}", e)))?;
+            .map_err(|e| InternalError::database("delete_refresh_token", e))?;
         
         // Log revocation at point of action
         if let Err(audit_err) = audit_logger::log_refresh_token_revoked(
@@ -518,7 +522,7 @@ impl CredentialStore {
         ctx: &crate::types::internal::context::RequestContext,
         user_id: &str,
         reason: &str,
-    ) -> Result<(), AuthError> {
+    ) -> Result<(), InternalError> {
         use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
         
         // Delete all refresh tokens for the user
@@ -564,7 +568,7 @@ impl CredentialStore {
                     tracing::error!("Failed to log token invalidation failure: {:?}", audit_err);
                 }
                 
-                Err(AuthError::internal_error(error_msg))
+                Err(InternalError::database("invalidate_all_tokens", sea_orm::DbErr::Custom(error_msg)))
             }
         }
     }
@@ -577,13 +581,13 @@ impl CredentialStore {
     /// # Returns
     /// * `Ok(Model)` - The user model
     /// * `Err(AuthError)` - User not found or database error
-    pub async fn get_user_by_id(&self, user_id: &str) -> Result<user::Model, AuthError> {
+    pub async fn get_user_by_id(&self, user_id: &str) -> Result<user::Model, InternalError> {
         User::find()
             .filter(user::Column::Id.eq(user_id))
             .one(&self.db)
             .await
-            .map_err(|e| AuthError::internal_error(format!("Database error: {}", e)))?
-            .ok_or_else(|| AuthError::internal_error(format!("User not found: {}", user_id)))
+            .map_err(|e| InternalError::database("OPERATION", e))?
+            .ok_or_else(|| InternalError::from(CredentialError::UserNotFound(user_id.to_string())))
     }
 
     /// Get the owner account
@@ -594,12 +598,12 @@ impl CredentialStore {
     /// * `Ok(Some(Model))` - The owner user model if found
     /// * `Ok(None)` - No owner account exists
     /// * `Err(AuthError)` - Database error
-    pub async fn get_owner(&self) -> Result<Option<user::Model>, AuthError> {
+    pub async fn get_owner(&self) -> Result<Option<user::Model>, InternalError> {
         User::find()
             .filter(user::Column::IsOwner.eq(true))
             .one(&self.db)
             .await
-            .map_err(|e| AuthError::internal_error(format!("Database error: {}", e)))
+            .map_err(|e| InternalError::database("OPERATION", e))
     }
 
     /// Create an admin user with specific admin roles (helper method)
@@ -626,10 +630,10 @@ impl CredentialStore {
         username: String,
         password_hash: String,
         admin_flags: AdminFlags,
-    ) -> Result<user::Model, AuthError> {
+    ) -> Result<user::Model, InternalError> {
         // Start transaction
         let txn = self.db.begin().await
-            .map_err(|e| AuthError::internal_error(format!("Failed to start transaction: {}", e)))?;
+            .map_err(|e| InternalError::transaction("store_refresh_token", e))?;
 
         // Step 1: Create user with no privileges (primitive operation)
         // Check if username already exists
@@ -637,10 +641,10 @@ impl CredentialStore {
             .filter(user::Column::Username.eq(&username))
             .one(&txn)
             .await
-            .map_err(|e| AuthError::internal_error(format!("Database error: {}", e)))?;
+            .map_err(|e| InternalError::database("OPERATION", e))?;
 
         if existing_user.is_some() {
-            return Err(AuthError::duplicate_username());
+            return Err(InternalError::from(CredentialError::DuplicateUsername(username.clone())));
         }
 
         // Generate UUID for user
@@ -669,9 +673,9 @@ impl CredentialStore {
             .map_err(|e| {
                 // Check if it's a unique constraint violation
                 if e.to_string().contains("UNIQUE") {
-                    AuthError::duplicate_username()
+                    InternalError::from(CredentialError::DuplicateUsername(username.clone()))
                 } else {
-                    AuthError::internal_error(format!("Database error: {}", e))
+                    InternalError::database("OPERATION", e)
                 }
             })?;
 
@@ -691,8 +695,8 @@ impl CredentialStore {
             .filter(user::Column::Id.eq(&user_id))
             .one(&txn)
             .await
-            .map_err(|e| AuthError::internal_error(format!("Database error: {}", e)))?
-            .ok_or_else(|| AuthError::internal_error(format!("User not found: {}", user_id)))?;
+            .map_err(|e| InternalError::database("get_user_in_transaction", e))?
+            .ok_or_else(|| InternalError::Credential(CredentialError::UserNotFound(user_id.to_string())))?;
 
         // Store old privileges for audit logging (should all be false)
         let old_privileges = AdminFlags::from(&user);
@@ -730,7 +734,7 @@ impl CredentialStore {
 
                 // Commit transaction
                 txn.commit().await
-                    .map_err(|e| AuthError::internal_error(format!("Failed to commit transaction: {}", e)))?;
+                    .map_err(|e| InternalError::transaction("commit_refresh_token", e))?;
 
                 Ok(user_model)
             }
@@ -747,7 +751,7 @@ impl CredentialStore {
                 }
 
                 // Transaction automatically rolls back when dropped
-                Err(AuthError::internal_error(format!("Failed to update privileges: {}", e)))
+                Err(InternalError::database("update_privileges", e))
             }
         }
     }
@@ -803,7 +807,7 @@ mod tests {
         
         assert!(result2.is_err());
         match result2 {
-            Err(AuthError::DuplicateUsername(_)) => {}
+            Err(InternalError::Credential(CredentialError::DuplicateUsername(_))) => {}
             _ => panic!("Expected DuplicateUsername error"),
         }
     }
@@ -917,7 +921,7 @@ mod tests {
         
         assert!(result.is_err());
         match result {
-            Err(AuthError::InvalidRefreshToken(_)) => {
+            Err(InternalError::Credential(CredentialError::InvalidToken { .. })) => {
                 // Expected error type
             }
             _ => panic!("Expected InvalidRefreshToken error"),
@@ -949,7 +953,7 @@ mod tests {
         
         assert!(result.is_err());
         match result {
-            Err(AuthError::ExpiredRefreshToken(_)) => {
+            Err(InternalError::Credential(CredentialError::ExpiredToken(_))) => {
                 // Expected error type
             }
             _ => panic!("Expected ExpiredRefreshToken error"),
@@ -1044,20 +1048,23 @@ mod tests {
         // Verify hashes are different (different peppers produce different hashes)
         assert_ne!(user1.password_hash, user2.password_hash);
         
+        // Create test context
+        let ctx = RequestContext::new();
+        
         // Verify user1 can only be verified with pepper1
-        let verify_result = store1.verify_credentials("user1", password, None).await;
+        let verify_result = store1.verify_credentials(&ctx, "user1", password).await;
         assert!(verify_result.is_ok());
         
         // Verify user2 can only be verified with pepper2
-        let verify_result = store2.verify_credentials("user2", password, None).await;
+        let verify_result = store2.verify_credentials(&ctx, "user2", password).await;
         assert!(verify_result.is_ok());
         
         // Verify cross-verification fails (user1 with pepper2)
-        let verify_result = store2.verify_credentials("user1", password, None).await;
+        let verify_result = store2.verify_credentials(&ctx, "user1", password).await;
         assert!(verify_result.is_err());
         
         // Verify cross-verification fails (user2 with pepper1)
-        let verify_result = store1.verify_credentials("user2", password, None).await;
+        let verify_result = store1.verify_credentials(&ctx, "user2", password).await;
         assert!(verify_result.is_err());
     }
 
@@ -1357,7 +1364,7 @@ mod tests {
         
         assert!(result2.is_err());
         match result2 {
-            Err(AuthError::DuplicateUsername(_)) => {}
+            Err(InternalError::Credential(CredentialError::DuplicateUsername(_))) => {}
             _ => panic!("Expected DuplicateUsername error"),
         }
     }
@@ -1435,3 +1442,14 @@ mod tests {
 #[cfg(test)]
 #[path = "credential_store_invalidate_test.rs"]
 mod credential_store_invalidate_test;
+
+
+
+
+
+
+
+
+
+
+

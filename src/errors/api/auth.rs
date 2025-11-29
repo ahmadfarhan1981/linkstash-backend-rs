@@ -1,5 +1,6 @@
 use poem_openapi::{payload::Json, ApiResponse, Object};
 use std::fmt;
+use crate::errors::internal::{InternalError, CredentialError};
 
 /// Standardized error response for authentication endpoints
 #[derive(Object, Debug)]
@@ -127,11 +128,76 @@ impl AuthError {
         }))
     }
     
-    /// Create an InternalError
-    pub fn internal_error(message: String) -> Self {
+    /// Convert InternalError to AuthError
+    /// 
+    /// This is the explicit conversion point from internal errors to API errors.
+    /// Internal error details are logged but not exposed to clients.
+    pub fn from_internal_error(err: InternalError) -> Self {
+        match &err {
+            // Infrastructure errors - always log and return generic error
+            InternalError::Database { operation, .. } => {
+                tracing::error!("Database error in {}: {}", operation, err);
+                Self::internal_server_error()
+            }
+            InternalError::Transaction { operation, .. } => {
+                tracing::error!("Transaction error in {}: {}", operation, err);
+                Self::internal_server_error()
+            }
+            InternalError::Parse { value_type, .. } => {
+                tracing::error!("Parse error for {}: {}", value_type, err);
+                Self::internal_server_error()
+            }
+            InternalError::Crypto { operation, .. } => {
+                tracing::error!("Crypto error in {}: {}", operation, err);
+                Self::internal_server_error()
+            }
+            
+            // Domain errors - convert to specific API errors
+            InternalError::Credential(CredentialError::InvalidCredentials) => {
+                tracing::debug!("Invalid credentials attempt");
+                Self::invalid_credentials()
+            }
+            InternalError::Credential(CredentialError::DuplicateUsername(username)) => {
+                tracing::warn!("Duplicate username attempt: {}", username);
+                Self::duplicate_username()
+            }
+            InternalError::Credential(CredentialError::InvalidToken { token_type, reason }) => {
+                tracing::debug!("Invalid token: {} - {}", token_type, reason);
+                if token_type == "jwt" {
+                    Self::invalid_token()
+                } else if token_type == "refresh_token" {
+                    Self::invalid_refresh_token()
+                } else {
+                    Self::invalid_token()
+                }
+            }
+            InternalError::Credential(CredentialError::ExpiredToken(token_type)) => {
+                tracing::debug!("Expired token: {}", token_type);
+                if token_type == "jwt" {
+                    Self::expired_token()
+                } else if token_type == "refresh_token" {
+                    Self::expired_refresh_token()
+                } else {
+                    Self::expired_token()
+                }
+            }
+            
+            // Other domain errors that shouldn't appear in auth context
+            _ => {
+                tracing::error!("Unexpected error in auth operation: {}", err);
+                Self::internal_server_error()
+            }
+        }
+    }
+    
+    /// Create a generic internal server error
+    /// 
+    /// This replaces the old internal_error() method. It always returns
+    /// a generic message without exposing internal details.
+    fn internal_server_error() -> Self {
         AuthError::InternalError(Json(AuthErrorResponse {
             error: "internal_error".to_string(),
-            message,
+            message: "An internal error occurred".to_string(),
             status_code: 500,
         }))
     }

@@ -1,6 +1,6 @@
 # Implementation Plan
 
-- [ ] 1. Reorganize error module structure
+- [x] 1. Reorganize error module structure
   - Create `src/errors/api/` directory
   - Move `src/errors/auth.rs` to `src/errors/api/auth.rs`
   - Move `src/errors/admin.rs` to `src/errors/api/admin.rs`
@@ -11,7 +11,10 @@
   - Run tests to verify no breakage from file moves
   - _Requirements: 3.1_
 
-- [ ] 2. Create InternalError type and domain error enums
+- [x] 2. Create InternalError type and domain error enums
+
+
+
   - Add `thiserror = "1.0"` to `Cargo.toml` dependencies
   - Create `src/errors/internal.rs` with `InternalError` enum
   - Define infrastructure error variants: `Database { operation, source }`, `Transaction { operation, source }`, `Parse { value_type, message }`, `Crypto { operation, message }`
@@ -24,7 +27,10 @@
   - Add `pub mod internal;` and `pub use internal::InternalError;` to `src/errors/mod.rs`
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 4.1, 4.2, 4.3, 4.4_
 
-- [ ] 3. Update AuthError with conversion logic
+- [x] 3. Update AuthError with conversion logic
+
+
+
   - Add `from_internal_error(err: InternalError) -> Self` method to `AuthError` in `src/errors/api/auth.rs`
   - Add private `internal_server_error() -> Self` helper method that returns generic "An internal error occurred" message
   - Implement conversion for infrastructure errors: `Database`, `Transaction`, `Parse`, `Crypto` → log at ERROR level and return `internal_server_error()`
@@ -36,7 +42,13 @@
   - Keep existing error constructors for backward compatibility
   - _Requirements: 2.2, 2.3, 3.2, 3.3_
 
-- [ ] 4. Update AdminError with conversion logic
+- [x] 4. Update AdminError with conversion logic
+
+
+
+
+
+
   - Add `from_internal_error(err: InternalError) -> Self` method to `AdminError` in `src/errors/api/admin.rs`
   - Add private `internal_server_error() -> Self` helper method that returns generic "An internal error occurred" message
   - Implement conversion for infrastructure errors: `Database`, `Transaction`, `Parse`, `Crypto` → log at ERROR level and return `internal_server_error()`
@@ -48,7 +60,10 @@
   - Keep existing error constructors for backward compatibility
   - _Requirements: 2.2, 2.3, 3.2, 3.3_
 
-- [ ] 5. Update SystemConfigStore to use InternalError
+- [x] 5. Update SystemConfigStore to use InternalError
+
+
+
   - Change all method return types from `Result<T, AuthError>` to `Result<T, InternalError>`
   - Replace `AuthError::internal_error("Database error: ...")` with `InternalError::database("operation_name", e)` for all database operations
   - Replace `AuthError::internal_error("System config not found")` with `SystemConfigError::ConfigNotFound.into()`
@@ -57,7 +72,9 @@
   - Run tests to verify behavior unchanged
   - _Requirements: 1.1, 1.5, 4.1, 4.5, 6.1_
 
-- [ ] 6. Update AuditStore to use InternalError
+- [x] 6. Update AuditStore to use InternalError
+
+
   - Change return types from `Result<T, AuthError>` to `Result<T, InternalError>`
   - Replace `AuthError::internal_error()` with `InternalError::database()` for DB errors
   - Replace domain-specific errors with `AuditError` variants
@@ -65,7 +82,13 @@
   - Run tests to verify behavior
   - _Requirements: 1.1, 4.1, 6.1_
 
-- [ ] 7. Update CredentialStore to use InternalError
+- [x] 7. Update CredentialStore to use InternalError
+
+
+
+
+
+
   - Change all method return types from `Result<T, AuthError>` to `Result<T, InternalError>`
   - Replace `AuthError::internal_error("Database error: ...")` with `InternalError::database("operation_name", e)` for all database queries
   - Replace `AuthError::duplicate_username()` with `CredentialError::DuplicateUsername(username).into()`
@@ -81,7 +104,9 @@
   - Run tests to verify behavior unchanged
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 4.1, 4.2, 4.3, 4.4, 4.5, 6.1_
 
-- [ ] 8. Update TokenService to use InternalError
+- [x] 8. Update TokenService to use InternalError
+
+
   - Change all method return types from `Result<T, AuthError>` to `Result<T, InternalError>`
   - Replace `AuthError::internal_error("Invalid expiration timestamp...")` with `InternalError::parse("timestamp", msg)`
   - Replace `AuthError::internal_error("Failed to generate JWT...")` with `InternalError::crypto("jwt_generation", msg)` or appropriate variant
@@ -92,7 +117,9 @@
   - Run tests to verify behavior unchanged
   - _Requirements: 3.1, 6.2_
 
-- [ ] 9. Update AuthService to use InternalError
+
+- [x] 9. Update AuthService to use InternalError
+
   - Change all method return types from `Result<T, AuthError>` to `Result<T, InternalError>`
   - Replace `AuthError::internal_error("Invalid user_id format...")` with `InternalError::parse("UUID", e.to_string())`
   - Propagate InternalError from CredentialStore unchanged (no conversion needed)
@@ -101,7 +128,10 @@
   - Run tests to verify behavior unchanged
   - _Requirements: 1.2, 3.1, 4.2, 6.2_
 
-- [ ] 10. Update AdminService to use InternalError
+
+- [x] 10. Update AdminService to use InternalError
+
+
   - Change all method return types from `Result<T, AuthError>` to `Result<T, InternalError>`
   - Propagate InternalError from CredentialStore unchanged (no conversion needed)
   - Propagate InternalError from SystemConfigStore unchanged (no conversion needed)
@@ -109,31 +139,44 @@
   - Run tests to verify behavior unchanged
   - _Requirements: 3.1, 6.2_
 
-- [ ] 11. Update auth API endpoints to convert errors
+- [x] 11. Update auth API endpoints to convert errors
+
+
   - Add `.map_err(AuthError::from_internal_error)?` to all service calls in `src/api/auth.rs`
   - Verify error messages are appropriate for users
   - Run tests to verify correct HTTP status codes
   - Verify no internal details are exposed in responses
   - _Requirements: 2.2, 2.3, 3.2, 3.3, 3.5, 5.1_
 
-- [ ] 12. Update admin API endpoints to convert errors
+- [x] 12. Update admin API endpoints to convert errors
+
+
+
   - Add `.map_err(AdminError::from_internal_error)?` to all service calls in `src/api/admin.rs`
   - Verify error messages are appropriate for users
   - Run tests to verify correct HTTP status codes
   - Verify no internal details are exposed in responses
   - _Requirements: 2.2, 2.3, 3.2, 3.3, 3.5, 5.1_
 
-- [ ] 13. Update AppData initialization
+- [x] 13. Update AppData initialization
+
+
+
   - Change `AppData::init()` return type to `Result<Self, InternalError>`
   - Update `main.rs` to handle InternalError from AppData::init()
   - Convert InternalError to appropriate startup error
   - Run tests to verify behavior
   - _Requirements: 3.1_
 
-- [ ] 14. Checkpoint - Ensure all tests pass
+- [x] 14. Checkpoint - Ensure all tests pass
+
+
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 15. Remove deprecated error constructors
+
+
+
+- [x] 15. Remove deprecated error constructors
   - Remove `internal_error(message: String)` method from `AuthError` in `src/errors/api/auth.rs`
   - Remove `internal_error(message: String)` method from `AdminError` in `src/errors/api/admin.rs`
   - Search codebase for any remaining `AuthError::internal_error` usage in stores/services
@@ -149,3 +192,21 @@
   - Verify error messages are user-appropriate
   - Update inline code comments if needed
   - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5_
+
+- [x] 17. Create error handling documentation
+
+
+
+
+
+  - Create `docs/error-handling.md` for developers extending the system
+  - Document the two-layer error architecture (InternalError vs API errors)
+  - Explain when to use each InternalError variant (infrastructure vs domain errors)
+  - Document domain error enums and their use cases (CredentialError, SystemConfigError, AuditError)
+  - Show concrete code examples of error flow through layers (Store → Service → API)
+  - Document the conversion pattern at API boundary using `from_internal_error()`
+  - Provide step-by-step guide for adding new error types to the system
+  - Document helper method conventions (database(), transaction(), parse(), crypto())
+  - Explain layer-specific error handling responsibilities
+  - Include decision tree: "Which error type should I use?"
+  - _Requirements: 2.1, 2.2, 2.3, 3.1, 3.2, 3.3, 3.4, 3.5_

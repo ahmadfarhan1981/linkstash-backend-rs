@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use crate::stores::{CredentialStore, SystemConfigStore, AuditStore};
 use crate::services::TokenService;
-use crate::errors::admin::AdminError;
+use crate::errors::InternalError;
+use crate::errors::internal::CredentialError;
 use crate::types::internal::context::RequestContext;
 use crate::types::internal::auth::AdminFlags;
 
@@ -62,29 +63,28 @@ impl AdminService {
     /// 
     /// # Returns
     /// * `Ok(())` - Role assigned successfully
-    /// * `Err(AdminError)` - Authorization failed, self-modification, user not found, or database error
+    /// * `Err(InternalError)` - Authorization failed, self-modification, user not found, or database error
     pub async fn assign_system_admin(
         &self,
         ctx: &RequestContext,
         target_user_id: &str,
-    ) -> Result<(), AdminError> {
+    ) -> Result<(), InternalError> {
         // Extract claims from context and check authentication
         let claims = ctx.claims.as_ref()
-            .ok_or_else(|| AdminError::internal_error("Unauthenticated".to_string()))?;
+            .ok_or_else(|| InternalError::parse("claims", "Unauthenticated"))?;
         
         // Check authorization: only owner can assign System Admin
         if !claims.is_owner {
-            return Err(AdminError::owner_required());
+            return Err(InternalError::from(CredentialError::InvalidCredentials));
         }
         
         // Check self-modification: cannot assign role to yourself
         if claims.sub == target_user_id {
-            return Err(AdminError::self_modification_denied());
+            return Err(InternalError::from(CredentialError::InvalidCredentials));
         }
         
         // Get current user to build AdminFlags with updated privileges
-        let user = self.credential_store.get_user_by_id(target_user_id).await
-            .map_err(|_| AdminError::user_not_found(target_user_id.to_string()))?;
+        let user = self.credential_store.get_user_by_id(target_user_id).await?;
         
         // Build new AdminFlags with is_system_admin=true, preserving other flags
         let new_privileges = AdminFlags {
@@ -123,29 +123,28 @@ impl AdminService {
     /// 
     /// # Returns
     /// * `Ok(())` - Role removed successfully
-    /// * `Err(AdminError)` - Authorization failed, self-modification, user not found, or database error
+    /// * `Err(InternalError)` - Authorization failed, self-modification, user not found, or database error
     pub async fn remove_system_admin(
         &self,
         ctx: &RequestContext,
         target_user_id: &str,
-    ) -> Result<(), AdminError> {
+    ) -> Result<(), InternalError> {
         // Extract claims from context and check authentication
         let claims = ctx.claims.as_ref()
-            .ok_or_else(|| AdminError::internal_error("Unauthenticated".to_string()))?;
+            .ok_or_else(|| InternalError::parse("claims", "Unauthenticated"))?;
         
         // Check authorization: only owner can remove System Admin
         if !claims.is_owner {
-            return Err(AdminError::owner_required());
+            return Err(InternalError::from(CredentialError::InvalidCredentials));
         }
         
         // Check self-modification: cannot remove role from yourself
         if claims.sub == target_user_id {
-            return Err(AdminError::self_modification_denied());
+            return Err(InternalError::from(CredentialError::InvalidCredentials));
         }
         
         // Get current user to build AdminFlags with updated privileges
-        let user = self.credential_store.get_user_by_id(target_user_id).await
-            .map_err(|_| AdminError::user_not_found(target_user_id.to_string()))?;
+        let user = self.credential_store.get_user_by_id(target_user_id).await?;
         
         // Build new AdminFlags with is_system_admin=false, preserving other flags
         let new_privileges = AdminFlags {
@@ -184,29 +183,28 @@ impl AdminService {
     /// 
     /// # Returns
     /// * `Ok(())` - Role assigned successfully
-    /// * `Err(AdminError)` - Authorization failed, self-modification, user not found, or database error
+    /// * `Err(InternalError)` - Authorization failed, self-modification, user not found, or database error
     pub async fn assign_role_admin(
         &self,
         ctx: &RequestContext,
         target_user_id: &str,
-    ) -> Result<(), AdminError> {
+    ) -> Result<(), InternalError> {
         // Extract claims from context and check authentication
         let claims = ctx.claims.as_ref()
-            .ok_or_else(|| AdminError::internal_error("Unauthenticated".to_string()))?;
+            .ok_or_else(|| InternalError::parse("claims", "Unauthenticated"))?;
         
         // Check authorization: owner OR system admin can assign Role Admin
         if !claims.is_owner && !claims.is_system_admin {
-            return Err(AdminError::owner_or_system_admin_required());
+            return Err(InternalError::from(CredentialError::InvalidCredentials));
         }
         
         // Check self-modification: cannot assign role to yourself
         if claims.sub == target_user_id {
-            return Err(AdminError::self_modification_denied());
+            return Err(InternalError::from(CredentialError::InvalidCredentials));
         }
         
         // Get current user to build AdminFlags with updated privileges
-        let user = self.credential_store.get_user_by_id(target_user_id).await
-            .map_err(|_| AdminError::user_not_found(target_user_id.to_string()))?;
+        let user = self.credential_store.get_user_by_id(target_user_id).await?;
         
         // Build new AdminFlags with is_role_admin=true, preserving other flags
         let new_privileges = AdminFlags {
@@ -245,29 +243,28 @@ impl AdminService {
     /// 
     /// # Returns
     /// * `Ok(())` - Role removed successfully
-    /// * `Err(AdminError)` - Authorization failed, self-modification, user not found, or database error
+    /// * `Err(InternalError)` - Authorization failed, self-modification, user not found, or database error
     pub async fn remove_role_admin(
         &self,
         ctx: &RequestContext,
         target_user_id: &str,
-    ) -> Result<(), AdminError> {
+    ) -> Result<(), InternalError> {
         // Extract claims from context and check authentication
         let claims = ctx.claims.as_ref()
-            .ok_or_else(|| AdminError::internal_error("Unauthenticated".to_string()))?;
+            .ok_or_else(|| InternalError::parse("claims", "Unauthenticated"))?;
         
         // Check authorization: owner OR system admin can remove Role Admin
         if !claims.is_owner && !claims.is_system_admin {
-            return Err(AdminError::owner_or_system_admin_required());
+            return Err(InternalError::from(CredentialError::InvalidCredentials));
         }
         
         // Check self-modification: cannot remove role from yourself
         if claims.sub == target_user_id {
-            return Err(AdminError::self_modification_denied());
+            return Err(InternalError::from(CredentialError::InvalidCredentials));
         }
         
         // Get current user to build AdminFlags with updated privileges
-        let user = self.credential_store.get_user_by_id(target_user_id).await
-            .map_err(|_| AdminError::user_not_found(target_user_id.to_string()))?;
+        let user = self.credential_store.get_user_by_id(target_user_id).await?;
         
         // Build new AdminFlags with is_role_admin=false, preserving other flags
         let new_privileges = AdminFlags {
@@ -305,18 +302,18 @@ impl AdminService {
     /// 
     /// # Returns
     /// * `Ok(())` - Owner deactivated successfully
-    /// * `Err(AdminError)` - Authorization failed or database error
+    /// * `Err(InternalError)` - Authorization failed or database error
     pub async fn deactivate_owner(
         &self,
         ctx: &RequestContext,
-    ) -> Result<(), AdminError> {
+    ) -> Result<(), InternalError> {
         // Extract claims from context and check authentication
         let claims = ctx.claims.as_ref()
-            .ok_or_else(|| AdminError::internal_error("Unauthenticated".to_string()))?;
+            .ok_or_else(|| InternalError::parse("claims", "Unauthenticated"))?;
         
         // Check authorization: only owner can deactivate themselves
         if !claims.is_owner {
-            return Err(AdminError::owner_required());
+            return Err(InternalError::from(CredentialError::InvalidCredentials));
         }
         
         // Set owner_active=false in system config (with audit logging at point of action)

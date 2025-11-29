@@ -7,7 +7,7 @@ inclusion: always
 ## Critical Rules
 
 - This is a BINARY application with `main.rs` entry point
-- Use `cargo run`, `cargo test`, `cargo build` (NOT `cargo test --lib`)
+- Use `cargo run`, `cargo test --lib`, `cargo build` for development
 - Platform: Windows with cmd shell
 - All code must be fully async using Tokio runtime
 
@@ -34,17 +34,18 @@ inclusion: always
 
 ## Server Config
 
-- Host: `0.0.0.0:3000`
+- Host/Port: Configured via `HOST` and `PORT` environment variables (defaults: `0.0.0.0:3000`)
+- Check `.env` file for actual server address
 - API base: `/api`
 - Swagger UI: `/swagger`
 
 ## Commands
 
 ```bash
-cargo run              # Start server
-cargo test             # Run tests
-cargo build --release  # Production build
-sea-orm-cli migrate up # Run migrations
+cargo run                      # Start server
+cargo test --lib               # Run library tests
+cargo build --release          # Production build
+cargo run -p migration up      # Run migrations
 ```
 
 ## Manual Testing
@@ -56,4 +57,4 @@ sea-orm-cli migrate up # Run migrations
 - Ensure `.env` file exists with required variables before starting server
 - Use `getProcessOutput` to check server logs
 - Use `controlPwshProcess` with action "stop" to stop the server when done
-- Test endpoints via curl or by checking Swagger UI at http://localhost:3000/swagger
+- Test endpoints via curl or by checking Swagger UI (check `.env` for HOST/PORT, default: http://localhost:3000/swagger)
