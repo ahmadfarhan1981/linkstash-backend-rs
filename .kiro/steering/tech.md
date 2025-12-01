@@ -42,11 +42,16 @@ inclusion: always
 ## Commands
 
 ```bash
-cargo run                      # Start server
+cargo run                      # Start server (migrations run automatically on startup)
+cargo run migrate              # Run database migrations only (does not start server)
 cargo test --lib               # Run library tests
 cargo build --release          # Production build
-cargo run -p migration up      # Run migrations
 ```
+
+## Database Migrations
+
+- Migrations run automatically on server startup and before CLI commands
+- Use `cargo run migrate` to run migrations independently without starting the server
 
 ## Manual Testing
 

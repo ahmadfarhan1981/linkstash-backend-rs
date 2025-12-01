@@ -45,20 +45,39 @@ async fn main() -> Result<(), std::io::Error> {
     // Initialize logging
     init_logging().expect("Failed to initialize logging");
     
-    // Initialize AppData (databases, stores, stateless services)
-    let app_data = Arc::new(
-        AppData::init().await
-            .map_err(|e| format!("Failed to initialize application data: {}", e))
-            .expect("Failed to initialize application data")
-    );
+    // Initialize database connections and run migrations
+    tracing::info!("Initializing database connections...");
+    let db = config::init_database().await
+        .expect("Failed to connect to auth database");
+    let audit_db = config::init_audit_database().await
+        .expect("Failed to connect to audit database");
+    
+    tracing::info!("Running database migrations...");
+    config::migrate_auth_database(&db).await
+        .expect("Failed to run auth database migrations");
+    config::migrate_audit_database(&audit_db).await
+        .expect("Failed to run audit database migrations");
+    tracing::info!("Database migrations completed successfully");
     
     // Check if CLI arguments are present
     let args: Vec<String> = std::env::args().collect();
     
-    // If CLI arguments present (more than just the binary name), run CLI mode
+    // If CLI arguments present (more than just the binary name), check for migrate command first
     if args.len() > 1 {
         // Parse CLI arguments
         let cli = cli::Cli::parse();
+        
+        // Check if this is the migrate command - exit successfully since migrations are done
+        if matches!(cli.command, cli::Commands::Migrate) {
+            std::process::exit(0);
+        }
+        
+        // For other CLI commands, initialize AppData with the migrated connections
+        let app_data = Arc::new(
+            AppData::init(db, audit_db).await
+                .map_err(|e| format!("Failed to initialize application data: {}", e))
+                .expect("Failed to initialize application data")
+        );
         
         // Execute CLI command
         match cli::execute_command(cli, &app_data).await {
@@ -71,6 +90,14 @@ async fn main() -> Result<(), std::io::Error> {
             }
         }
     }
+    
+    // No CLI arguments - run server mode
+    // Initialize AppData with the migrated connections
+    let app_data = Arc::new(
+        AppData::init(db, audit_db).await
+            .map_err(|e| format!("Failed to initialize application data: {}", e))
+            .expect("Failed to initialize application data")
+    );
     
     // No CLI arguments - run server mode
     

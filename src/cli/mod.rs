@@ -3,6 +3,7 @@
 pub mod bootstrap;
 pub mod owner;
 pub mod credential_export;
+pub mod migrate;
 
 use clap::{Parser, Subcommand};
 
@@ -19,6 +20,9 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Run database migrations
+    Migrate,
+    
     /// Bootstrap the system by creating owner and initial admin accounts
     Bootstrap,
     
@@ -55,6 +59,9 @@ pub async fn execute_command(
     app_data: &AppData,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
+        Commands::Migrate => {
+            migrate::run_migrations().await?;
+        }
         Commands::Bootstrap => {
             bootstrap::bootstrap_system(
                 &app_data.credential_store,

@@ -63,42 +63,39 @@ pub struct AppData {
 impl AppData {
     /// Initialize all application data
     /// 
-    /// Creates databases, stores, and stateless services in the correct order.
-    /// This is the single entry point for initializing all application dependencies.
+    /// Creates stores and stateless services using the provided database connections.
+    /// Database connections should be initialized and migrated before calling this.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `db` - Main database connection (auth.db) - should already be migrated
+    /// * `audit_db` - Audit database connection (audit.db) - should already be migrated
     /// 
     /// # Initialization Order
     /// 
-    /// 1. Initialize databases (auth.db and audit.db)
-    /// 2. Initialize secret manager (loads JWT secrets, password pepper, etc.)
-    /// 3. Create stores (audit, credential, system_config)
-    /// 4. Create stateless services (token_service)
+    /// 1. Initialize secret manager (loads JWT secrets, password pepper, etc.)
+    /// 2. Create stores (audit, credential, system_config)
+    /// 3. Create stateless services (token_service)
     /// 
     /// # Returns
     /// 
     /// * `Ok(AppData)` - Fully initialized application data
-    /// * `Err(InternalError)` - Database or secret manager initialization failed
+    /// * `Err(InternalError)` - Secret manager initialization failed
     /// 
     /// # Errors
     /// 
     /// Returns `InternalError` when:
-    /// - Database initialization fails
     /// - Secret manager initialization fails (missing or invalid environment variables)
-    pub async fn init() -> Result<Self, InternalError> {
+    pub async fn init(db: DatabaseConnection, audit_db: DatabaseConnection) -> Result<Self, InternalError> {
         tracing::info!("Initializing AppData...");
         
-        // 1. Initialize databases
-        tracing::debug!("Initializing databases...");
-        let db = crate::config::init_database().await?;
-        let audit_db = crate::config::init_audit_database().await?;
-        tracing::debug!("Databases initialized");
-        
-        // 2. Initialize secrets
+        // 1. Initialize secrets
         tracing::debug!("Initializing secret manager...");
         let secret_manager = Arc::new(SecretManager::init()
             .map_err(|e| InternalError::parse("secret_manager", format!("Secret manager init failed: {}", e)))?);
         tracing::debug!("Secret manager initialized");
         
-        // 3. Create stores (order matters: audit_store first, then others that depend on it)
+        // 2. Create stores (order matters: audit_store first, then others that depend on it)
         tracing::debug!("Creating stores...");
         let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
         
@@ -114,7 +111,7 @@ impl AppData {
         ));
         tracing::debug!("Stores created");
         
-        // 4. Create stateless services
+        // 3. Create stateless services
         tracing::debug!("Creating stateless services...");
         let token_service = Arc::new(TokenService::new(
             secret_manager.jwt_secret().to_string(),

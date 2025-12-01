@@ -6,4 +6,4 @@ mod database;
 pub use secret_config::{SecretConfig, SecretType};
 pub use secret_manager::{SecretManager, SecretError};
 pub use logging::init_logging;
-pub use database::{init_database, init_audit_database};
+pub use database::{init_database, init_audit_database, migrate_auth_database, migrate_audit_database};
