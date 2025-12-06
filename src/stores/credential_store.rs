@@ -29,7 +29,38 @@ impl CredentialStore {
     pub fn new(db: DatabaseConnection, password_pepper: String, audit_store: Arc<AuditStore>) -> Self {
         Self { db, password_pepper, audit_store }
     }
-
+    
+    /// Begin a database transaction
+    /// 
+    /// Logs transaction start to audit database.
+    /// 
+    /// # Arguments
+    /// * `ctx` - Request context for audit logging
+    /// * `operation_type` - Type of operation (e.g., "password_change")
+    /// 
+    /// # Returns
+    /// * `Ok(DatabaseTransaction)` - Transaction handle
+    /// * `Err(InternalError)` - Failed to start transaction
+    pub async fn begin_transaction(
+        &self,
+        ctx: &RequestContext,
+        operation_type: &str,
+    ) -> Result<sea_orm::DatabaseTransaction, InternalError> {
+        let txn = self.db.begin().await
+            .map_err(|e| InternalError::transaction("begin_transaction", e))?;
+        
+        // Log transaction start
+        if let Err(audit_err) = audit_logger::log_transaction_started(
+            &self.audit_store,
+            ctx,
+            operation_type,
+        ).await {
+            tracing::error!("Failed to log transaction start: {:?}", audit_err);
+        }
+        
+        Ok(txn)
+    }
+    
     /// Create a new user with no administrative privileges (primitive operation)
     /// 
     /// This is the primitive operation for user creation. All user creation
@@ -348,11 +379,12 @@ impl CredentialStore {
         }
     }
     
-    /// Store a refresh token in the database
+    /// Store a refresh token in the database (private implementation)
     /// 
     /// Logs token issuance to audit database at point of action.
     /// 
     /// # Arguments
+    /// * `conn` - Database connection or transaction
     /// * `ctx` - Request context containing actor information
     /// * `token_hash` - The SHA-256 hash of the refresh token
     /// * `user_id` - The user_id (UUID string) this token belongs to (token owner)
@@ -361,19 +393,16 @@ impl CredentialStore {
     /// 
     /// # Returns
     /// * `Ok(())` - Token stored successfully
-    /// * `Err(AuthError)` - Database error
-    pub async fn store_refresh_token(
+    /// * `Err(InternalError)` - Database error
+    async fn store_refresh_token(
         &self,
+        conn: &impl sea_orm::ConnectionTrait,
         ctx: &crate::types::internal::context::RequestContext,
         token_hash: String,
         user_id: String,
         expires_at: i64,
         jwt_id: String,
     ) -> Result<(), InternalError> {
-        // Use a transaction to ensure atomicity
-        let txn = self.db.begin().await
-            .map_err(|e| InternalError::transaction("store_refresh_token", e))?;
-        
         let created_at = Utc::now().timestamp();
         
         let new_token = RefreshTokenActiveModel {
@@ -384,11 +413,8 @@ impl CredentialStore {
             created_at: Set(created_at),
         };
         
-        new_token.insert(&txn).await
+        new_token.insert(conn).await
             .map_err(|e| InternalError::database("insert_refresh_token", e))?;
-        
-        txn.commit().await
-            .map_err(|e| InternalError::transaction("commit_refresh_token", e))?;
         
         // Log refresh token issuance at point of action
         if let Err(audit_err) = audit_logger::log_refresh_token_issued(
@@ -402,6 +428,54 @@ impl CredentialStore {
         }
         
         Ok(())
+    }
+    
+    /// Store a refresh token without transaction
+    /// 
+    /// # Arguments
+    /// * `ctx` - Request context containing actor information
+    /// * `token_hash` - The SHA-256 hash of the refresh token
+    /// * `user_id` - The user_id (UUID string) this token belongs to
+    /// * `expires_at` - Unix timestamp when the token expires
+    /// * `jwt_id` - The JWT ID associated with this refresh token
+    /// 
+    /// # Returns
+    /// * `Ok(())` - Token stored successfully
+    /// * `Err(InternalError)` - Database error
+    pub async fn store_refresh_token_no_txn(
+        &self,
+        ctx: &crate::types::internal::context::RequestContext,
+        token_hash: String,
+        user_id: String,
+        expires_at: i64,
+        jwt_id: String,
+    ) -> Result<(), InternalError> {
+        self.store_refresh_token(&self.db, ctx, token_hash, user_id, expires_at, jwt_id).await
+    }
+    
+    /// Store a refresh token within a transaction
+    /// 
+    /// # Arguments
+    /// * `txn` - Database transaction
+    /// * `ctx` - Request context containing actor information
+    /// * `token_hash` - The SHA-256 hash of the refresh token
+    /// * `user_id` - The user_id (UUID string) this token belongs to
+    /// * `expires_at` - Unix timestamp when the token expires
+    /// * `jwt_id` - The JWT ID associated with this refresh token
+    /// 
+    /// # Returns
+    /// * `Ok(())` - Token stored successfully
+    /// * `Err(InternalError)` - Database error
+    pub async fn store_refresh_token_in_txn(
+        &self,
+        txn: &sea_orm::DatabaseTransaction,
+        ctx: &crate::types::internal::context::RequestContext,
+        token_hash: String,
+        user_id: String,
+        expires_at: i64,
+        jwt_id: String,
+    ) -> Result<(), InternalError> {
+        self.store_refresh_token(txn, ctx, token_hash, user_id, expires_at, jwt_id).await
     }
     
     /// Validate a refresh token and return the associated user_id
@@ -612,6 +686,171 @@ impl CredentialStore {
             .one(&self.db)
             .await
             .map_err(|e| InternalError::database("OPERATION", e))
+    }
+
+    /// Update user password (private implementation)
+    /// 
+    /// Updates the password for a user in the database. Takes plaintext password,
+    /// hashes it internally, and logs the change to audit database at point of action.
+    /// 
+    /// # Arguments
+    /// * `conn` - Database connection or transaction
+    /// * `ctx` - Request context containing actor information for audit logging
+    /// * `user_id` - The user_id (UUID string) whose password to update
+    /// * `new_password` - The new plaintext password (will be hashed internally)
+    /// 
+    /// # Returns
+    /// * `Ok(())` - Password updated successfully and audit logged
+    /// * `Err(InternalError)` - User not found or database error
+    async fn update_password(
+        &self,
+        conn: &impl sea_orm::ConnectionTrait,
+        ctx: &RequestContext,
+        user_id: &str,
+        new_password: &str,
+    ) -> Result<(), InternalError> {
+        // Fetch user to verify existence
+        let user = User::find()
+            .filter(user::Column::Id.eq(user_id))
+            .one(conn)
+            .await
+            .map_err(|e| InternalError::database("get_user_for_password_update", e))?
+            .ok_or_else(|| InternalError::Credential(CredentialError::UserNotFound(user_id.to_string())))?;
+
+        // Hash password internally
+        let salt = SaltString::generate(&mut rand_core::OsRng);
+        let argon2 = Argon2::new_with_secret(
+            self.password_pepper.as_bytes(),
+            Algorithm::Argon2id,
+            Version::V0x13,
+            Params::default(),
+        )
+        .map_err(|e| InternalError::crypto("argon2_init", e.to_string()))?;
+        
+        let new_hash = argon2
+            .hash_password(new_password.as_bytes(), &salt)
+            .map_err(|e| InternalError::from(CredentialError::PasswordHashingFailed(e.to_string())))?
+            .to_string();
+
+        // Get current timestamp
+        let now = Utc::now().timestamp();
+
+        // Update password hash
+        let mut active_model: ActiveModel = user.into();
+        active_model.password_hash = Set(new_hash);
+        active_model.updated_at = Set(now);
+
+        active_model
+            .update(conn)
+            .await
+            .map_err(|e| InternalError::database("update_password", e))?;
+
+        // Log password change at point of action
+        if let Err(audit_err) = audit_logger::log_password_changed(
+            &self.audit_store,
+            ctx,
+            user_id.to_string(),
+        ).await {
+            tracing::error!("Failed to log password change: {:?}", audit_err);
+        }
+
+        Ok(())
+    }
+    
+    /// Update user password without transaction
+    /// 
+    /// # Arguments
+    /// * `ctx` - Request context containing actor information for audit logging
+    /// * `user_id` - The user_id (UUID string) whose password to update
+    /// * `new_password` - The new plaintext password
+    /// 
+    /// # Returns
+    /// * `Ok(())` - Password updated successfully
+    /// * `Err(InternalError)` - User not found or database error
+    pub async fn update_password_no_txn(
+        &self,
+        ctx: &RequestContext,
+        user_id: &str,
+        new_password: &str,
+    ) -> Result<(), InternalError> {
+        self.update_password(&self.db, ctx, user_id, new_password).await
+    }
+    
+    /// Update user password within a transaction
+    /// 
+    /// # Arguments
+    /// * `txn` - Database transaction
+    /// * `ctx` - Request context containing actor information for audit logging
+    /// * `user_id` - The user_id (UUID string) whose password to update
+    /// * `new_password` - The new plaintext password
+    /// 
+    /// # Returns
+    /// * `Ok(())` - Password updated successfully
+    /// * `Err(InternalError)` - User not found or database error
+    pub async fn update_password_in_txn(
+        &self,
+        txn: &sea_orm::DatabaseTransaction,
+        ctx: &RequestContext,
+        user_id: &str,
+        new_password: &str,
+    ) -> Result<(), InternalError> {
+        self.update_password(txn, ctx, user_id, new_password).await
+    }
+
+    /// Revoke all refresh tokens for a user (private implementation)
+    /// 
+    /// Deletes all refresh tokens associated with a user.
+    /// 
+    /// # Arguments
+    /// * `conn` - Database connection or transaction
+    /// * `user_id` - The user_id (UUID string) whose tokens should be revoked
+    /// 
+    /// # Returns
+    /// * `Ok(())` - All tokens revoked successfully
+    /// * `Err(InternalError)` - Database error
+    async fn revoke_all_refresh_tokens(
+        &self,
+        conn: &impl sea_orm::ConnectionTrait,
+        user_id: &str,
+    ) -> Result<(), InternalError> {
+        use crate::types::db::refresh_token::{Entity as RefreshToken, Column};
+        
+        RefreshToken::delete_many()
+            .filter(Column::UserId.eq(user_id))
+            .exec(conn)
+            .await
+            .map_err(|e| InternalError::database("revoke_all_refresh_tokens", e))?;
+        
+        Ok(())
+    }
+    
+    /// Revoke all refresh tokens for a user without transaction
+    /// 
+    /// # Arguments
+    /// * `user_id` - The user_id (UUID string) whose tokens should be revoked
+    /// 
+    /// # Returns
+    /// * `Ok(())` - All tokens revoked successfully
+    /// * `Err(InternalError)` - Database error
+    pub async fn revoke_all_refresh_tokens_no_txn(&self, user_id: &str) -> Result<(), InternalError> {
+        self.revoke_all_refresh_tokens(&self.db, user_id).await
+    }
+    
+    /// Revoke all refresh tokens for a user within a transaction
+    /// 
+    /// # Arguments
+    /// * `txn` - Database transaction
+    /// * `user_id` - The user_id (UUID string) whose tokens should be revoked
+    /// 
+    /// # Returns
+    /// * `Ok(())` - All tokens revoked successfully
+    /// * `Err(InternalError)` - Database error
+    pub async fn revoke_all_refresh_tokens_in_txn(
+        &self,
+        txn: &sea_orm::DatabaseTransaction,
+        user_id: &str,
+    ) -> Result<(), InternalError> {
+        self.revoke_all_refresh_tokens(txn, user_id).await
     }
 
     /// Create an admin user with specific admin roles (helper method)
@@ -837,7 +1076,7 @@ mod tests {
         let ctx = crate::types::internal::context::RequestContext::new();
         
         let result = credential_store
-            .store_refresh_token(&ctx, token_hash.to_string(), user_id.clone(), expires_at, jwt_id)
+            .store_refresh_token_no_txn(&ctx, token_hash.to_string(), user_id.clone(), expires_at, jwt_id)
             .await;
         
         assert!(result.is_ok());
@@ -874,7 +1113,7 @@ mod tests {
         let ctx = crate::types::internal::context::RequestContext::new();
         
         let result = credential_store
-            .store_refresh_token(&ctx, token_hash.to_string(), user_id.clone(), expires_at, jwt_id)
+            .store_refresh_token_no_txn(&ctx, token_hash.to_string(), user_id.clone(), expires_at, jwt_id)
             .await;
         
         assert!(result.is_ok());
@@ -912,7 +1151,7 @@ mod tests {
         let ctx = crate::types::internal::context::RequestContext::new();
         
         credential_store
-            .store_refresh_token(&ctx, token_hash.to_string(), user_id.clone(), expires_at, jwt_id)
+            .store_refresh_token_no_txn(&ctx, token_hash.to_string(), user_id.clone(), expires_at, jwt_id)
             .await
             .expect("Failed to store token");
         
@@ -958,7 +1197,7 @@ mod tests {
         let ctx = crate::types::internal::context::RequestContext::new();
         
         credential_store
-            .store_refresh_token(&ctx, token_hash.to_string(), user_id.clone(), expires_at, jwt_id)
+            .store_refresh_token_no_txn(&ctx, token_hash.to_string(), user_id.clone(), expires_at, jwt_id)
             .await
             .expect("Failed to store token");
         
@@ -992,7 +1231,7 @@ mod tests {
         let ctx = crate::types::internal::context::RequestContext::new();
         
         credential_store
-            .store_refresh_token(&ctx, token_hash.to_string(), user_id.clone(), expires_at, jwt_id)
+            .store_refresh_token_no_txn(&ctx, token_hash.to_string(), user_id.clone(), expires_at, jwt_id)
             .await
             .expect("Failed to store token");
         

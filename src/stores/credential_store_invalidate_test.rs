@@ -30,7 +30,7 @@ mod tests {
             let jwt_id = format!("jwt-id-{}", i);
             
             credential_store
-                .store_refresh_token(&ctx, token_hash, user_id.clone(), expires_at, jwt_id)
+                .store_refresh_token_no_txn(&ctx, token_hash, user_id.clone(), expires_at, jwt_id)
                 .await
                 .expect("Failed to store token");
         }
@@ -96,7 +96,7 @@ mod tests {
             let expires_at = chrono::Utc::now().timestamp() + 3600;
             
             credential_store
-                .store_refresh_token(&ctx, token_hash, user_id.clone(), expires_at, "jwt-id".to_string())
+                .store_refresh_token_no_txn(&ctx, token_hash, user_id.clone(), expires_at, "jwt-id".to_string())
                 .await
                 .expect("Failed to store token");
         }

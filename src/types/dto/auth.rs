@@ -119,6 +119,51 @@ pub enum LogoutApiResponse {
     Unauthorized(Json<ErrorResponse>),
 }
 
+/// Request model for password change
+#[derive(Object, Debug, Serialize, Deserialize)]
+pub struct ChangePasswordRequest {
+    /// Current password for verification
+    pub old_password: String,
+    
+    /// New password to set
+    pub new_password: String,
+}
+
+/// Response model for password change
+#[derive(Object, Debug, Serialize, Deserialize)]
+pub struct ChangePasswordResponse {
+    /// Success message
+    pub message: String,
+    
+    /// New JWT access token for API authentication
+    pub access_token: String,
+    
+    /// New refresh token for obtaining new access tokens
+    pub refresh_token: String,
+    
+    /// Token type (always "Bearer")
+    pub token_type: String,
+    
+    /// Number of seconds until the access token expires
+    pub expires_in: i64,
+}
+
+/// API response for change password endpoint
+#[derive(ApiResponse)]
+pub enum ChangePasswordApiResponse {
+    /// Password changed successfully, new tokens provided
+    #[oai(status = 200)]
+    Ok(Json<ChangePasswordResponse>),
+    
+    /// Invalid current password or validation failed
+    #[oai(status = 401)]
+    Unauthorized(Json<ErrorResponse>),
+    
+    /// Password validation failed
+    #[oai(status = 400)]
+    BadRequest(Json<ErrorResponse>),
+}
+
 /// Generic error response
 #[derive(Object, Debug, Serialize, Deserialize)]
 pub struct ErrorResponse {

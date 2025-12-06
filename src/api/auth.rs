@@ -4,9 +4,11 @@ use crate::services::AuthService;
 use crate::types::dto::auth::{
     LoginRequest, TokenResponse, WhoAmIResponse, RefreshRequest, RefreshResponse, 
     LogoutRequest, LogoutResponse, LoginApiResponse, WhoAmIApiResponse, 
-    RefreshApiResponse, LogoutApiResponse, ErrorResponse
+    RefreshApiResponse, LogoutApiResponse, ErrorResponse, ChangePasswordRequest,
+    ChangePasswordResponse, ChangePasswordApiResponse
 };
 use crate::api::helpers;
+use crate::errors::InternalError;
 use std::sync::Arc;
 
 /// Authentication API endpoints
@@ -153,6 +155,53 @@ impl AuthApi {
         LogoutApiResponse::Ok(Json(LogoutResponse {
             message: "Logged out successfully".to_string(),
         }))
+    }
+    
+    /// Change user password
+    /// 
+    /// Changes the authenticated user's password. Requires the current password for verification.
+    /// On success, all existing refresh tokens are invalidated and new tokens are issued.
+    #[oai(path = "/change-password", method = "post", tag = "AuthTags::Authentication")]
+    async fn change_password(&self, req: &Request, auth: BearerAuth, body: Json<ChangePasswordRequest>) -> ChangePasswordApiResponse {
+        // Create request context with authentication
+        let ctx = helpers::create_request_context(req, Some(auth.0), &self.auth_service.token_service()).await;
+        
+        // Check if authenticated
+        if !ctx.authenticated {
+            return ChangePasswordApiResponse::Unauthorized(Json(ErrorResponse {
+                error: "Unauthenticated".to_string(),
+            }));
+        }
+        
+        // Call auth service to change password
+        match self.auth_service
+            .change_password(&ctx, &body.old_password, &body.new_password)
+            .await
+        {
+            Ok((access_token, refresh_token)) => {
+                ChangePasswordApiResponse::Ok(Json(ChangePasswordResponse {
+                    message: "Password changed successfully".to_string(),
+                    access_token,
+                    refresh_token,
+                    token_type: "Bearer".to_string(),
+                    expires_in: 900, // 15 minutes in seconds
+                }))
+            }
+            Err(internal_error) => {
+                // Check if it's an invalid credentials error (incorrect old password)
+                if matches!(internal_error, InternalError::Credential(crate::errors::internal::CredentialError::InvalidCredentials)) {
+                    ChangePasswordApiResponse::Unauthorized(Json(ErrorResponse {
+                        error: "Current password is incorrect".to_string(),
+                    }))
+                } else {
+                    // All other errors (validation, etc.) return 400
+                    let auth_error = crate::errors::AuthError::from_internal_error(internal_error);
+                    ChangePasswordApiResponse::BadRequest(Json(ErrorResponse {
+                        error: auth_error.to_string(),
+                    }))
+                }
+            }
+        }
     }
 }
 
@@ -573,7 +622,7 @@ mod tests {
         let ctx = crate::types::internal::context::RequestContext::new();
         
         credential_store
-            .store_refresh_token(&ctx, token_hash, user_id, expires_at, jwt_id)
+            .store_refresh_token_no_txn(&ctx, token_hash, user_id, expires_at, jwt_id)
             .await
             .expect("Failed to store expired token");
         
@@ -1090,7 +1139,7 @@ mod tests {
         let ctx = crate::types::internal::context::RequestContext::new();
         
         credential_store
-            .store_refresh_token(&ctx, token_hash, user_id, expires_at, jwt_id)
+            .store_refresh_token_no_txn(&ctx, token_hash, user_id, expires_at, jwt_id)
             .await
             .expect("Failed to store expired token");
         

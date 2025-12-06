@@ -25,6 +25,13 @@ pub enum EventType {
     UserCreated,
     PrivilegesChanged,
     OperationRolledBack,
+    // Password management events
+    PasswordChanged,
+    PasswordChangeFailed,
+    // Transaction events
+    TransactionStarted,
+    TransactionCommitted,
+    TransactionRolledBack,
     Custom(String),
 }
 
@@ -50,6 +57,11 @@ impl EventType {
             Self::UserCreated => "user_created",
             Self::PrivilegesChanged => "privileges_changed",
             Self::OperationRolledBack => "operation_rolled_back",
+            Self::PasswordChanged => "password_changed",
+            Self::PasswordChangeFailed => "password_change_failed",
+            Self::TransactionStarted => "transaction_started",
+            Self::TransactionCommitted => "transaction_committed",
+            Self::TransactionRolledBack => "transaction_rolled_back",
             Self::Custom(s) => s.as_str(),
         }
     }

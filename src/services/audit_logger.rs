@@ -540,6 +540,48 @@ pub async fn log_operation_rolled_back(
     store.write_event(event).await
 }
 
+/// Log successful password change
+///
+/// # Arguments
+/// * `store` - Reference to the AuditStore
+/// * `ctx` - Request context containing actor information
+/// * `target_user_id` - ID of the user whose password was changed (target of the action)
+pub async fn log_password_changed(
+    store: &AuditStore,
+    ctx: &RequestContext,
+    target_user_id: String,
+) -> Result<(), InternalError> {
+    let mut event = AuditEvent::new(EventType::PasswordChanged);
+    event.user_id = Some(ctx.actor_id.clone());
+    event.ip_address = ctx.ip_address.clone();
+    event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
+    event.data.insert("target_user_id".to_string(), json!(target_user_id));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
+    
+    store.write_event(event).await
+}
+
+/// Log failed password change attempt
+///
+/// # Arguments
+/// * `store` - Reference to the AuditStore
+/// * `ctx` - Request context containing actor information
+/// * `reason` - Reason for the password change failure (e.g., "incorrect_old_password", "validation_failed")
+pub async fn log_password_change_failed(
+    store: &AuditStore,
+    ctx: &RequestContext,
+    reason: String,
+) -> Result<(), InternalError> {
+    let mut event = AuditEvent::new(EventType::PasswordChangeFailed);
+    event.user_id = Some(ctx.actor_id.clone());
+    event.ip_address = ctx.ip_address.clone();
+    event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
+    event.data.insert("reason".to_string(), json!(reason));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
+    
+    store.write_event(event).await
+}
+
 /// Builder for creating custom audit events
 ///
 /// Provides a fluent API for constructing audit events with type-safe field addition
@@ -671,3 +713,69 @@ impl AuditBuilder {
     }
 }
 
+
+/// Log transaction started
+///
+/// # Arguments
+/// * `store` - The audit store
+/// * `ctx` - Request context containing actor information
+/// * `operation_type` - Type of operation the transaction is for (e.g., "password_change")
+pub async fn log_transaction_started(
+    store: &AuditStore,
+    ctx: &RequestContext,
+    operation_type: &str,
+) -> Result<(), InternalError> {
+    let mut event = AuditEvent::new(EventType::TransactionStarted);
+    event.user_id = Some(ctx.actor_id.clone());
+    event.ip_address = ctx.ip_address.clone();
+    event.data.insert("operation_type".to_string(), json!(operation_type));
+    event.data.insert("source".to_string(), json!(format!("{:?}", ctx.source)));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id));
+    
+    store.write_event(event).await
+}
+
+/// Log transaction committed
+///
+/// # Arguments
+/// * `store` - The audit store
+/// * `ctx` - Request context containing actor information
+/// * `operation_type` - Type of operation the transaction was for (e.g., "password_change")
+pub async fn log_transaction_committed(
+    store: &AuditStore,
+    ctx: &RequestContext,
+    operation_type: &str,
+) -> Result<(), InternalError> {
+    let mut event = AuditEvent::new(EventType::TransactionCommitted);
+    event.user_id = Some(ctx.actor_id.clone());
+    event.ip_address = ctx.ip_address.clone();
+    event.data.insert("operation_type".to_string(), json!(operation_type));
+    event.data.insert("source".to_string(), json!(format!("{:?}", ctx.source)));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id));
+    
+    store.write_event(event).await
+}
+
+/// Log transaction rolled back
+///
+/// # Arguments
+/// * `store` - The audit store
+/// * `ctx` - Request context containing actor information
+/// * `operation_type` - Type of operation the transaction was for (e.g., "password_change")
+/// * `reason` - Reason for rollback (e.g., "commit_failed", "operation_error")
+pub async fn log_transaction_rolled_back(
+    store: &AuditStore,
+    ctx: &RequestContext,
+    operation_type: &str,
+    reason: &str,
+) -> Result<(), InternalError> {
+    let mut event = AuditEvent::new(EventType::TransactionRolledBack);
+    event.user_id = Some(ctx.actor_id.clone());
+    event.ip_address = ctx.ip_address.clone();
+    event.data.insert("operation_type".to_string(), json!(operation_type));
+    event.data.insert("reason".to_string(), json!(reason));
+    event.data.insert("source".to_string(), json!(format!("{:?}", ctx.source)));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id));
+    
+    store.write_event(event).await
+}

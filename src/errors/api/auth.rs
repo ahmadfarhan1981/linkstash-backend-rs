@@ -22,6 +22,10 @@ pub enum AuthError {
     #[oai(status = 401)]
     InvalidCredentials(Json<AuthErrorResponse>),
     
+    /// Current password is incorrect (for password change)
+    #[oai(status = 401)]
+    IncorrectPassword(Json<AuthErrorResponse>),
+    
     /// Username already exists
     #[oai(status = 400)]
     DuplicateUsername(Json<AuthErrorResponse>),
@@ -61,6 +65,15 @@ impl AuthError {
         AuthError::InvalidCredentials(Json(AuthErrorResponse {
             error: "invalid_credentials".to_string(),
             message: "Invalid username or password".to_string(),
+            status_code: 401,
+        }))
+    }
+    
+    /// Create an IncorrectPassword error
+    pub fn incorrect_password() -> Self {
+        AuthError::IncorrectPassword(Json(AuthErrorResponse {
+            error: "incorrect_password".to_string(),
+            message: "Current password is incorrect".to_string(),
             status_code: 401,
         }))
     }
@@ -157,6 +170,10 @@ impl AuthError {
                 tracing::debug!("Invalid credentials attempt");
                 Self::invalid_credentials()
             }
+            InternalError::Credential(CredentialError::IncorrectPassword) => {
+                tracing::debug!("Incorrect password for password change");
+                Self::incorrect_password()
+            }
             InternalError::Credential(CredentialError::DuplicateUsername(username)) => {
                 tracing::warn!("Duplicate username attempt: {}", username);
                 Self::duplicate_username()
@@ -206,6 +223,7 @@ impl AuthError {
     pub fn message(&self) -> String {
         match self {
             AuthError::InvalidCredentials(json) => json.0.message.clone(),
+            AuthError::IncorrectPassword(json) => json.0.message.clone(),
             AuthError::DuplicateUsername(json) => json.0.message.clone(),
             AuthError::InvalidToken(json) => json.0.message.clone(),
             AuthError::ExpiredToken(json) => json.0.message.clone(),
