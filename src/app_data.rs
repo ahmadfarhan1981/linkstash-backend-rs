@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 use crate::config::SecretManager;
-use crate::stores::{AuditStore, CredentialStore, SystemConfigStore};
-use crate::services::TokenService;
+use crate::stores::{AuditStore, CredentialStore, SystemConfigStore, CommonPasswordStore};
+use crate::services::{TokenService, PasswordValidator};
 use crate::errors::InternalError;
 
 /// Centralized application data containing all databases, stores, and stateless services
@@ -56,8 +56,14 @@ pub struct AppData {
     /// System configuration store for owner status and system settings
     pub system_config_store: Arc<SystemConfigStore>,
     
+    /// Common password store for checking against common password list
+    pub common_password_store: Arc<CommonPasswordStore>,
+    
     /// Token service for JWT generation and validation
     pub token_service: Arc<TokenService>,
+    
+    /// Password validator for enforcing password policies
+    pub password_validator: Arc<PasswordValidator>,
 }
 
 impl AppData {
@@ -109,6 +115,9 @@ impl AppData {
             db.clone(),
             audit_store.clone(),
         ));
+        
+        let common_password_store = Arc::new(CommonPasswordStore::new(db.clone()));
+        
         tracing::debug!("Stores created");
         
         // 3. Create stateless services
@@ -118,6 +127,10 @@ impl AppData {
             secret_manager.refresh_token_secret().to_string(),
             audit_store.clone(),
         ));
+        
+        // Initialize password validator with common password store
+        let password_validator = Arc::new(PasswordValidator::new(common_password_store.clone()));
+        
         tracing::debug!("Stateless services created");
         
         tracing::info!("AppData initialization complete");
@@ -129,7 +142,9 @@ impl AppData {
             audit_store,
             credential_store,
             system_config_store,
+            common_password_store,
             token_service,
+            password_validator,
         })
     }
 }

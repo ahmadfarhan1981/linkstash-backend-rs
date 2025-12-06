@@ -3,7 +3,7 @@
 
 use sea_orm::{Database, DatabaseConnection};
 use migration::{AuthMigrator, AuditMigrator, MigratorTrait};
-use crate::{services::{AuthService, TokenService}, stores::{AuditStore, CredentialStore, SystemConfigStore}, app_data::AppData};
+use crate::{services::{AuthService, TokenService, PasswordValidator}, stores::{AuditStore, CredentialStore, SystemConfigStore}, app_data::AppData};
 use std::sync::{Arc, Mutex};
 
 /// Creates test databases and stores with standard configuration
@@ -94,6 +94,12 @@ pub async fn setup_test_auth_services() -> (
     let secret_manager = Arc::new(crate::config::SecretManager::init()
         .expect("Failed to initialize test SecretManager"));
     
+    // Create common password store
+    let common_password_store = Arc::new(crate::stores::CommonPasswordStore::new(auth_db.clone()));
+    
+    // Create password validator
+    let password_validator = Arc::new(PasswordValidator::new(common_password_store.clone()));
+    
     // Create mock AppData for testing
     let app_data = Arc::new(AppData {
         db: auth_db.clone(),
@@ -102,7 +108,9 @@ pub async fn setup_test_auth_services() -> (
         audit_store: audit_store.clone(),
         credential_store: credential_store.clone(),
         system_config_store,
+        common_password_store,
         token_service: token_service.clone(),
+        password_validator,
     });
     
     // Create auth service using AppData

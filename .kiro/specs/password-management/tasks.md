@@ -64,33 +64,46 @@
   - Verify endpoint works via Swagger UI: change password, get new tokens, old tokens invalidated
   - _Requirements: 2.1, 2.2, 2.3, 2.6, 2.7, 2.8_
 
-- [ ] 7. Checkpoint - Basic password change is working!
+- [x] 7. Checkpoint - Basic password change is working!
   - Users can change passwords through API (no validation yet)
   - Old tokens are invalidated, new tokens issued
   - Audit logs capture password changes
 
 ## Phase 2: Add Password Validation
 
-- [ ] 8. Create remaining database schema for validation
+- [x] 8. Create remaining database schema for validation
+
+
   - Create migration `m20250127_000001_create_common_passwords.rs` with password column (TEXT, primary key)
   - Create migration `m20250127_000002_create_hibp_cache.rs` with hash_prefix, response_data, fetched_at columns
   - Update migration lib.rs to register migrations
   - Run migrations
   - _Requirements: 5.1, 6.1_
 
-- [ ] 9. Create database entity models for validation
+- [x] 9. Create database entity models for validation
+
+
   - Create `src/types/db/common_password.rs` with DeriveEntityModel
   - Create `src/types/db/hibp_cache.rs` with DeriveEntityModel
   - Update `src/types/db/user.rs` to add password_change_required field
   - Export all entities from `src/types/db/mod.rs`
   - _Requirements: 3.1, 5.1, 6.1_
 
-- [ ] 10. Add validation error types
+- [x] 10. Add validation error types
+
+
+
+
   - Add PasswordValidationFailed(String) to AuthError enum
   - Implement Display and ResponseError for new variant
   - _Requirements: 2.5_
 
-- [ ] 11. Implement basic password validator (length only)
+- [x] 11. Implement basic password validator (length only)
+
+
+
+
+
   - Create `src/services/password_validator.rs` with PasswordValidator struct
   - Define complete PasswordValidationError enum (TooShort, TooLong, ContainsUsername, CommonPassword, CompromisedPassword)
   - Implement length validation only (15-128 characters)
@@ -100,7 +113,13 @@
   - Export from `src/services/mod.rs`
   - _Requirements: 1.1, 1.4, 1.5, 1.9_
 
-- [ ] 12. Integrate basic password validator into AppData and AuthService
+- [x] 12. Integrate basic password validator into AppData and AuthService
+
+
+
+
+
+
   - Add password_validator field to AppData struct
   - Initialize PasswordValidator in AppData::init() (no stores yet)
   - Add password_validator field to AuthService
@@ -109,7 +128,10 @@
   - Verify password change endpoint now enforces length requirements
   - _Requirements: 1.8, 2.4, 2.5_
 
-- [ ] 13. Implement CommonPasswordStore
+- [x] 13. Implement CommonPasswordStore
+
+
+
   - Create `src/stores/common_password_store.rs`
   - Implement `is_common_password()` with case-insensitive lookup
   - Implement `load_passwords()` with transaction and batch inserts (1000 per batch)
@@ -117,7 +139,10 @@
   - Export from `src/stores/mod.rs`
   - _Requirements: 1.2, 5.1, 5.6, 5.7_
 
-- [ ] 14. Enhance password validator with common password check
+- [x] 14. Enhance password validator with common password check
+
+
+
   - Update PasswordValidator constructor to accept Arc<CommonPasswordStore>
   - Update AppData to create CommonPasswordStore and pass to validator
   - Add common password validation to `validate()` method (after length check)
@@ -125,6 +150,9 @@
   - _Requirements: 1.2, 1.6_
 
 - [ ] 15. Implement download-passwords CLI command (USER-FACING FEATURE!)
+
+
+
   - Create `src/cli/password_management.rs` with download_and_load_passwords function
   - Use reqwest to fetch from URL, parse passwords (one per line)
   - Call common_password_store.load_passwords()

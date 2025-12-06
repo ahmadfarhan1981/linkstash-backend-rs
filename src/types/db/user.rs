@@ -18,6 +18,9 @@ pub struct Model {
     // Application roles (JSON array of strings)
     pub app_roles: Option<String>,
     
+    // Password management
+    pub password_change_required: bool,
+    
     // Last modification timestamp
     pub updated_at: i64,
 }

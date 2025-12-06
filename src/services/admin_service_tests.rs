@@ -35,6 +35,9 @@ mod tests {
         let secret_manager = Arc::new(crate::config::SecretManager::init()
             .expect("Failed to initialize test SecretManager"));
         
+        let common_password_store = Arc::new(crate::stores::CommonPasswordStore::new(db.clone()));
+        let password_validator = Arc::new(crate::services::PasswordValidator::new(common_password_store.clone()));
+        
         Arc::new(AppData {
             db,
             audit_db,
@@ -42,7 +45,9 @@ mod tests {
             audit_store,
             credential_store,
             system_config_store,
+            common_password_store,
             token_service,
+            password_validator,
         })
     }
 

@@ -28,6 +28,7 @@ pub enum EventType {
     // Password management events
     PasswordChanged,
     PasswordChangeFailed,
+    CommonPasswordListDownloaded,
     // Transaction events
     TransactionStarted,
     TransactionCommitted,
@@ -59,6 +60,7 @@ impl EventType {
             Self::OperationRolledBack => "operation_rolled_back",
             Self::PasswordChanged => "password_changed",
             Self::PasswordChangeFailed => "password_change_failed",
+            Self::CommonPasswordListDownloaded => "common_password_list_downloaded",
             Self::TransactionStarted => "transaction_started",
             Self::TransactionCommitted => "transaction_committed",
             Self::TransactionRolledBack => "transaction_rolled_back",

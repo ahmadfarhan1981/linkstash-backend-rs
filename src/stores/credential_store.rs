@@ -110,6 +110,7 @@ impl CredentialStore {
             is_system_admin: Set(false),
             is_role_admin: Set(false),
             app_roles: Set(None),
+            password_change_required: Set(false),
             updated_at: Set(created_at),
         };
 
@@ -261,6 +262,7 @@ impl CredentialStore {
             is_system_admin: Set(false),
             is_role_admin: Set(false),
             app_roles: Set(None),
+            password_change_required: Set(false),
             updated_at: Set(created_at),
         };
 
@@ -910,6 +912,7 @@ impl CredentialStore {
             is_system_admin: Set(false),
             is_role_admin: Set(false),
             app_roles: Set(None),
+            password_change_required: Set(false),
             updated_at: Set(created_at),
         };
 
@@ -1404,6 +1407,7 @@ mod tests {
             is_role_admin: Set(false),
             app_roles: Set(None),
             updated_at: Set(now),
+            password_change_required: Set(false),
         };
         
         owner.insert(&db).await.expect("Failed to insert owner");

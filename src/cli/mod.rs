@@ -4,6 +4,7 @@ pub mod bootstrap;
 pub mod owner;
 pub mod credential_export;
 pub mod migrate;
+pub mod password_management;
 
 use clap::{Parser, Subcommand};
 
@@ -29,6 +30,14 @@ pub enum Commands {
     /// Owner account management commands
     #[command(subcommand)]
     Owner(OwnerCommands),
+    
+    /// Download and load common password list from URL
+    DownloadPasswords {
+        /// URL to download password list from (default: Top 1000 most common passwords)
+        /// Good pro value : https://github.com/danielmiessler/SecLists/raw/refs/heads/master/Passwords/Common-Credentials/100k-most-used-passwords-NCSC.txt
+        #[arg(long, default_value = "https://github.com/danielmiessler/SecLists/raw/refs/heads/master/Passwords/Common-Credentials/10-million-password-list-top-1000.txt")]
+        url: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -93,6 +102,9 @@ pub async fn execute_command(
                     ).await?;
                 }
             }
+        }
+        Commands::DownloadPasswords { url } => {
+            password_management::download_and_load_passwords(&url, app_data).await?;
         }
     }
     

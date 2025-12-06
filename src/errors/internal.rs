@@ -106,6 +106,10 @@ pub enum CredentialError {
     #[error("Current password is incorrect")]
     IncorrectPassword,
     
+    /// Password validation failed
+    #[error("Password validation failed: {0}")]
+    PasswordValidationFailed(String),
+    
     /// Username already exists
     #[error("User already exists: {0}")]
     DuplicateUsername(String),

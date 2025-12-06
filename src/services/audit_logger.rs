@@ -779,3 +779,30 @@ pub async fn log_transaction_rolled_back(
     
     store.write_event(event).await
 }
+
+/// Log common password list download
+///
+/// Records when a common password list is downloaded from a URL and loaded into the database.
+/// This provides an audit trail of password policy updates.
+///
+/// # Arguments
+/// * `store` - Reference to the AuditStore
+/// * `ctx` - Request context containing actor information (typically CLI source)
+/// * `url` - URL from which the password list was downloaded
+/// * `password_count` - Number of passwords successfully loaded into the database
+pub async fn log_common_password_list_downloaded(
+    store: &AuditStore,
+    ctx: &RequestContext,
+    url: &str,
+    password_count: usize,
+) -> Result<(), InternalError> {
+    let mut event = AuditEvent::new(EventType::CommonPasswordListDownloaded);
+    event.user_id = Some(ctx.actor_id.clone());
+    event.ip_address = ctx.ip_address.clone();
+    event.data.insert("url".to_string(), json!(url));
+    event.data.insert("password_count".to_string(), json!(password_count));
+    event.data.insert("source".to_string(), json!(format!("{:?}", ctx.source)));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id));
+    
+    store.write_event(event).await
+}

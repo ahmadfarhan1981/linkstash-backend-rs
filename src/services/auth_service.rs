@@ -2,7 +2,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::stores::{CredentialStore, AuditStore, SystemConfigStore};
-use crate::services::TokenService;
+use crate::services::{TokenService, PasswordValidator};
 use crate::errors::InternalError;
 use crate::types::internal::context::RequestContext;
 
@@ -15,6 +15,7 @@ pub struct AuthService {
     system_config_store: Arc<SystemConfigStore>,
     token_service: Arc<TokenService>,
     audit_store: Arc<AuditStore>,
+    password_validator: Arc<PasswordValidator>,
 }
 
 impl AuthService {
@@ -28,6 +29,7 @@ impl AuthService {
             system_config_store: app_data.system_config_store.clone(),
             token_service: app_data.token_service.clone(),
             audit_store: app_data.audit_store.clone(),
+            password_validator: app_data.password_validator.clone(),
         }
     }
     
@@ -183,17 +185,16 @@ impl AuthService {
     /// Orchestrates the password change flow by coordinating store operations.
     /// The store handles password verification, hashing, and atomic updates.
     /// 
-    /// NOTE: This is the basic implementation without validation. Password validation
-    /// will be added in a later phase.
+    /// Validates the new password using PasswordValidator (currently length only).
     /// 
     /// # Arguments
     /// * `ctx` - Request context containing authenticated user information
     /// * `old_password` - Current password to verify
-    /// * `new_password` - New password to set (not validated in this phase)
+    /// * `new_password` - New password to set (validated for length requirements)
     /// 
     /// # Returns
     /// * `Ok((access_token, refresh_token))` - New tokens on success
-    /// * `Err(InternalError)` - Invalid credentials, user not found, or database error
+    /// * `Err(InternalError)` - Invalid credentials, validation failure, user not found, or database error
     pub async fn change_password(
         &self,
         ctx: &RequestContext,
@@ -206,6 +207,12 @@ impl AuthService {
         
         let user = self.credential_store.get_user_by_id(&user_id).await?;
         self.credential_store.verify_credentials(ctx, &user.username, old_password).await?;
+        
+        // Validate new password (length only for now)
+        self.password_validator
+            .validate(new_password, None)
+            .await
+            .map_err(|e| InternalError::Credential(crate::errors::internal::CredentialError::PasswordValidationFailed(e.to_string())))?;
         
         let txn = self.credential_store.begin_transaction(ctx, "password_change").await?;
         
@@ -316,7 +323,7 @@ mod change_password_tests {
         
         // Create a user
         let _user_id = credential_store
-            .add_user("testuser".to_string(), "oldpassword".to_string())
+            .add_user("testuser".to_string(), "oldpassword123456".to_string())
             .await
             .expect("Failed to create user");
         
@@ -327,17 +334,21 @@ mod change_password_tests {
             audit_store.clone(),
         ));
         
+        let common_password_store = Arc::new(crate::stores::CommonPasswordStore::new(db.clone()));
+        let password_validator = Arc::new(PasswordValidator::new(common_password_store));
+        
         let auth_service = AuthService {
             credential_store: credential_store.clone(),
             system_config_store: Arc::new(crate::stores::SystemConfigStore::new(db.clone(), audit_store.clone())),
             token_service: token_service.clone(),
             audit_store: audit_store.clone(),
+            password_validator,
         };
         
         // Login to get authenticated context
         let mut ctx = RequestContext::new();
         let (access_token, _refresh_token) = auth_service
-            .login(&ctx, "testuser".to_string(), "oldpassword".to_string())
+            .login(&ctx, "testuser".to_string(), "oldpassword123456".to_string())
             .await
             .expect("Failed to login");
         
@@ -346,9 +357,9 @@ mod change_password_tests {
         ctx.authenticated = true;
         ctx.claims = Some(claims);
         
-        // Change password
+        // Change password (new password must be 15+ chars)
         let result = auth_service
-            .change_password(&ctx, "oldpassword", "newpassword")
+            .change_password(&ctx, "oldpassword123456", "newpassword123456")
             .await;
         
         assert!(result.is_ok());
@@ -360,13 +371,13 @@ mod change_password_tests {
         
         // Verify can login with new password
         let login_result = auth_service
-            .login(&RequestContext::new(), "testuser".to_string(), "newpassword".to_string())
+            .login(&RequestContext::new(), "testuser".to_string(), "newpassword123456".to_string())
             .await;
         assert!(login_result.is_ok());
         
         // Verify cannot login with old password
         let old_login_result = auth_service
-            .login(&RequestContext::new(), "testuser".to_string(), "oldpassword".to_string())
+            .login(&RequestContext::new(), "testuser".to_string(), "oldpassword123456".to_string())
             .await;
         assert!(old_login_result.is_err());
     }
@@ -377,7 +388,7 @@ mod change_password_tests {
         
         // Create a user
         let _user_id = credential_store
-            .add_user("testuser".to_string(), "correctpassword".to_string())
+            .add_user("testuser".to_string(), "correctpassword123".to_string())
             .await
             .expect("Failed to create user");
         
@@ -388,17 +399,21 @@ mod change_password_tests {
             audit_store.clone(),
         ));
         
+        let common_password_store = Arc::new(crate::stores::CommonPasswordStore::new(db.clone()));
+        let password_validator = Arc::new(PasswordValidator::new(common_password_store));
+        
         let auth_service = AuthService {
             credential_store: credential_store.clone(),
             system_config_store: Arc::new(crate::stores::SystemConfigStore::new(db.clone(), audit_store.clone())),
             token_service: token_service.clone(),
             audit_store: audit_store.clone(),
+            password_validator,
         };
         
         // Login to get authenticated context
         let mut ctx = RequestContext::new();
         let (access_token, _refresh_token) = auth_service
-            .login(&ctx, "testuser".to_string(), "correctpassword".to_string())
+            .login(&ctx, "testuser".to_string(), "correctpassword123".to_string())
             .await
             .expect("Failed to login");
         
@@ -409,7 +424,7 @@ mod change_password_tests {
         
         // Try to change password with incorrect old password
         let result = auth_service
-            .change_password(&ctx, "wrongpassword", "newpassword")
+            .change_password(&ctx, "wrongpassword123", "newpassword123456")
             .await;
         
         assert!(result.is_err());
@@ -427,7 +442,7 @@ mod change_password_tests {
         
         // Create a user
         let _user_id = credential_store
-            .add_user("testuser".to_string(), "oldpassword".to_string())
+            .add_user("testuser".to_string(), "oldpassword123456".to_string())
             .await
             .expect("Failed to create user");
         
@@ -438,17 +453,21 @@ mod change_password_tests {
             audit_store.clone(),
         ));
         
+        let common_password_store = Arc::new(crate::stores::CommonPasswordStore::new(db.clone()));
+        let password_validator = Arc::new(PasswordValidator::new(common_password_store));
+        
         let auth_service = AuthService {
             credential_store: credential_store.clone(),
             system_config_store: Arc::new(crate::stores::SystemConfigStore::new(db.clone(), audit_store.clone())),
             token_service: token_service.clone(),
             audit_store: audit_store.clone(),
+            password_validator,
         };
         
         // Login to get authenticated context and old refresh token
         let mut ctx = RequestContext::new();
         let (access_token, old_refresh_token) = auth_service
-            .login(&ctx, "testuser".to_string(), "oldpassword".to_string())
+            .login(&ctx, "testuser".to_string(), "oldpassword123456".to_string())
             .await
             .expect("Failed to login");
         
@@ -459,7 +478,7 @@ mod change_password_tests {
         
         // Change password
         let result = auth_service
-            .change_password(&ctx, "oldpassword", "newpassword")
+            .change_password(&ctx, "oldpassword123456", "newpassword123456")
             .await;
         
         assert!(result.is_ok());
