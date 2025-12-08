@@ -295,12 +295,10 @@ impl PasswordValidator {
             return Err(PasswordValidationError::TooLong(self.max_length));
         }
         
-        // 2. Username substring check (skip for UUIDs)
+        // 2. Username substring check
         if let Some(username) = username {
-            if !Self::is_uuid(username) {
-                if password.to_lowercase().contains(&username.to_lowercase()) {
-                    return Err(PasswordValidationError::ContainsUsername);
-                }
+            if password.to_lowercase().contains(&username.to_lowercase()) {
+                return Err(PasswordValidationError::ContainsUsername);
             }
         }
         
@@ -367,10 +365,6 @@ impl PasswordValidator {
                 CHARSET[idx] as char
             })
             .collect()
-    }
-    
-    fn is_uuid(s: &str) -> bool {
-        uuid::Uuid::parse_str(s).is_ok()
     }
 }
 

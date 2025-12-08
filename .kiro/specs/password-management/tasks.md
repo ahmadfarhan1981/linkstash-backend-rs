@@ -180,11 +180,11 @@
   - Verify password change endpoint now rejects compromised passwords
   - _Requirements: 1.3, 1.7, 6.3, 6.4, 6.6, 6.8, 6.9, 6.10, 6.11_
 
-- [ ] 18. Enhance password validator with username check
-  - Add username substring check to `validate()` method (case-insensitive, skip for UUIDs using is_uuid helper)
+- [x] 18. Enhance password validator with username check
+  - Add username substring check to `validate()` method (case-insensitive)
   - Update AuthService change_password to pass username to validator
   - Verify password change endpoint rejects passwords containing username
-  - _Requirements: 7.1, 7.2, 7.3, 7.4_
+  - _Requirements: 7.1, 7.2, 7.3_
 
 - [ ] 19. Checkpoint - Password validation is complete!
   - All validation rules working: length, username, common passwords, compromised passwords

@@ -81,11 +81,6 @@ cargo run -- --env-file test.env bootstrap --non-interactive
 ```
 Creates: 1 owner (inactive), 0 admins
 
-3. **Activate owner:**
-```bash
-cargo run -- --env-file test.env owner activate
-```
-
 **FIXED TEST CREDENTIALS:**
 - Username: `test-owner`
 - Password: `test-owner-password-do-not-use-in-production`
@@ -93,6 +88,6 @@ cargo run -- --env-file test.env owner activate
 **CRITICAL RULES:**
 - ALWAYS delete database files before bootstrap (ensures clean state)
 - ALWAYS use `--env-file test.env` flag for all test commands
-- Owner account starts INACTIVE - must run `owner activate` before use
+- Owner account starts INACTIVE by default (this is expected)
 - Non-interactive bootstrap only available in debug builds or with `--features test-utils`
 - The `--env-file` flag must come BEFORE the subcommand (e.g., `cargo run -- --env-file test.env bootstrap`)

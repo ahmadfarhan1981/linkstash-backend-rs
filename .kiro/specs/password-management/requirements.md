@@ -115,5 +115,4 @@ This feature implements password management capabilities for the Linkstash authe
 1. WHEN validating a password for a user, THE Password Validator SHALL check if the password contains the username as a substring
 2. WHEN a password contains the username, THE Password Validator SHALL reject it with error message "Password must not contain your username"
 3. THE username check SHALL be case-insensitive
-4. WHEN the username is a UUID, THE System SHALL skip the username substring check
 

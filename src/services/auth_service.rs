@@ -185,12 +185,13 @@ impl AuthService {
     /// Orchestrates the password change flow by coordinating store operations.
     /// The store handles password verification, hashing, and atomic updates.
     /// 
-    /// Validates the new password using PasswordValidator (currently length only).
+    /// Validates the new password using PasswordValidator (length, username substring,
+    /// common passwords, and compromised passwords via HIBP).
     /// 
     /// # Arguments
     /// * `ctx` - Request context containing authenticated user information
     /// * `old_password` - Current password to verify
-    /// * `new_password` - New password to set (validated for length requirements)
+    /// * `new_password` - New password to set (validated against all password policies)
     /// 
     /// # Returns
     /// * `Ok((access_token, refresh_token))` - New tokens on success
@@ -208,9 +209,9 @@ impl AuthService {
         let user = self.credential_store.get_user_by_id(&user_id).await?;
         self.credential_store.verify_credentials(ctx, &user.username, old_password).await?;
         
-        // Validate new password (length only for now)
+        // Validate new password with username context
         self.password_validator
-            .validate(new_password, None)
+            .validate(new_password, Some(&user.username))
             .await
             .map_err(|e| InternalError::Credential(crate::errors::internal::CredentialError::PasswordValidationFailed(e.to_string())))?;
         

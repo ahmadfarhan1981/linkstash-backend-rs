@@ -1,5 +1,4 @@
 use rand::Rng;
-use uuid::Uuid;
 use std::sync::Arc;
 use sha1::{Sha1, Digest};
 use crate::stores::{CommonPasswordStore, HibpCacheStore};
@@ -8,10 +7,9 @@ use crate::stores::{CommonPasswordStore, HibpCacheStore};
 /// 
 /// Implements multiple validation layers:
 /// - Length validation (15-128 characters)
+/// - Username substring check (case-insensitive)
 /// - Common password detection (via database lookup)
 /// - Compromised password detection (via HaveIBeenPwned with k-anonymity)
-/// 
-/// Future enhancements will add username checks.
 pub struct PasswordValidator {
     min_length: usize,
     max_length: usize,
@@ -45,14 +43,13 @@ impl PasswordValidator {
     /// 
     /// Validates in order (fail fast):
     /// 1. Length (15-128 characters)
-    /// 2. Common password check (database lookup)
-    /// 3. Compromised password check (HaveIBeenPwned with k-anonymity)
-    /// 
-    /// Future versions will add username substring checks.
+    /// 2. Username substring check (case-insensitive, if username provided)
+    /// 3. Common password check (database lookup)
+    /// 4. Compromised password check (HaveIBeenPwned with k-anonymity)
     /// 
     /// # Arguments
     /// * `password` - The password to validate
-    /// * `_username` - Optional username for context-specific validation (not used yet)
+    /// * `username` - Optional username for context-specific validation
     /// 
     /// # Returns
     /// * `Ok(())` - Password passes all validation rules
@@ -60,7 +57,7 @@ impl PasswordValidator {
     pub async fn validate(
         &self,
         password: &str,
-        _username: Option<&str>,
+        username: Option<&str>,
     ) -> Result<(), PasswordValidationError> {
         // 1. Length validation
         if password.len() < self.min_length {
@@ -70,14 +67,21 @@ impl PasswordValidator {
             return Err(PasswordValidationError::TooLong(self.max_length));
         }
 
-        // 2. Common password check
+        // 2. Username substring check (case-insensitive)
+        if let Some(username) = username {
+            if password.to_lowercase().contains(&username.to_lowercase()) {
+                return Err(PasswordValidationError::ContainsUsername);
+            }
+        }
+
+        // 3. Common password check
         if self.common_password_store.is_common_password(password).await
             .map_err(|e| PasswordValidationError::DatabaseError(e.to_string()))? 
         {
             return Err(PasswordValidationError::CommonPassword);
         }
 
-        // 3. HIBP check (graceful degradation on API failure)
+        // 4. HIBP check (graceful degradation on API failure)
         match self.check_hibp(password).await {
             Ok(true) => return Err(PasswordValidationError::CompromisedPassword),
             Ok(false) => {},
@@ -184,20 +188,6 @@ impl PasswordValidator {
                 CHARSET[idx] as char
             })
             .collect()
-    }
-
-    /// Check if a string is a valid UUID
-    /// 
-    /// Used to skip username substring checks for system-generated UUID usernames
-    /// (e.g., owner accounts created during bootstrap).
-    /// 
-    /// # Arguments
-    /// * `s` - String to check
-    /// 
-    /// # Returns
-    /// `true` if the string is a valid UUID, `false` otherwise
-    fn is_uuid(s: &str) -> bool {
-        Uuid::parse_str(s).is_ok()
     }
 }
 

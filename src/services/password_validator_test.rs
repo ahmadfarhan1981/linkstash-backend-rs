@@ -127,4 +127,110 @@ mod tests {
         // Should pass validation (not compromised)
         assert!(result.is_ok(), "Unique secure password should pass HIBP check");
     }
+
+    #[tokio::test]
+    async fn test_password_contains_username_exact_match() {
+        let validator = setup_validator().await;
+        let username = "testuser";
+        let password = "mytestuserpassword123";
+        
+        let result = validator.validate(password, Some(username)).await;
+        
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PasswordValidationError::ContainsUsername => {
+                // Expected - password contains username
+            },
+            e => panic!("Expected ContainsUsername error, got: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_password_contains_username_case_insensitive() {
+        let validator = setup_validator().await;
+        let username = "TestUser";
+        let password = "mytestuserpassword123"; // lowercase username in password
+        
+        let result = validator.validate(password, Some(username)).await;
+        
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PasswordValidationError::ContainsUsername => {
+                // Expected - case-insensitive match
+            },
+            e => panic!("Expected ContainsUsername error, got: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_password_contains_username_uppercase_password() {
+        let validator = setup_validator().await;
+        let username = "testuser";
+        let password = "myTESTUSERpassword123"; // uppercase username in password
+        
+        let result = validator.validate(password, Some(username)).await;
+        
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PasswordValidationError::ContainsUsername => {
+                // Expected - case-insensitive match
+            },
+            e => panic!("Expected ContainsUsername error, got: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_password_does_not_contain_username() {
+        let validator = setup_validator().await;
+        let username = "testuser";
+        // Use UUID to ensure it's unique and won't be in HIBP
+        use uuid::Uuid;
+        let password = format!("SecurePass-{}", Uuid::new_v4());
+        
+        let result = validator.validate(&password, Some(username)).await;
+        
+        // Should pass username check (may fail other checks)
+        match result {
+            Ok(_) => {},
+            Err(PasswordValidationError::ContainsUsername) => {
+                panic!("Password should not contain username");
+            },
+            Err(_) => {
+                // Other validation errors are acceptable (common password, HIBP, etc.)
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_password_validation_without_username() {
+        let validator = setup_validator().await;
+        // Use UUID to ensure it's unique and won't be in HIBP
+        use uuid::Uuid;
+        let password = format!("SecurePass-{}", Uuid::new_v4());
+        
+        // Should pass when no username provided (skips username check)
+        let result = validator.validate(&password, None).await;
+        
+        assert!(result.is_ok(), "Password should pass when no username provided");
+    }
+
+    #[tokio::test]
+    async fn test_uuid_username_is_not_special_cased() {
+        let validator = setup_validator().await;
+        // Use a UUID as username
+        use uuid::Uuid;
+        let username = Uuid::new_v4().to_string();
+        let password = format!("mypassword{}", username); // Contains the UUID username
+        
+        let result = validator.validate(&password, Some(&username)).await;
+        
+        // Should fail - UUID usernames are NOT special-cased
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PasswordValidationError::ContainsUsername => {
+                // Expected - UUID usernames are checked like any other username
+            },
+            e => panic!("Expected ContainsUsername error, got: {:?}", e),
+        }
+    }
 }
