@@ -35,5 +35,9 @@ arboard = "3.4"
 clap = { version = "4.5", features = ["derive"] }
 reqwest = { version = "0.12", features = ["blocking"] }
 
+[features]
+# Test utilities - enables non-interactive bootstrap and other test-only commands
+test-utils = []
+
 [dev-dependencies]
 poem = { version = "3.1", features = ["test"] }

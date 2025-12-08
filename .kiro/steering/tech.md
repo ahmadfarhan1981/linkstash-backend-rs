@@ -63,3 +63,36 @@ cargo build --release          # Production build
 - Use `getProcessOutput` to check server logs
 - Use `controlPwshProcess` with action "stop" to stop the server when done
 - Test endpoints via curl or by checking Swagger UI (check `.env` for HOST/PORT, default: http://localhost:3000/swagger)
+
+## Testing Workflow for AI Agents
+
+**WHEN TO USE:** Testing requires a clean database with known credentials. Existing development data causes unexpected test behavior.
+
+**REQUIRED STEPS:**
+
+1. **Delete existing test databases:**
+```bash
+del test-auth.db test-audit.db
+```
+
+2. **Bootstrap with fixed credentials using test.env:**
+```bash
+cargo run -- --env-file test.env bootstrap --non-interactive
+```
+Creates: 1 owner (inactive), 0 admins
+
+3. **Activate owner:**
+```bash
+cargo run -- --env-file test.env owner activate
+```
+
+**FIXED TEST CREDENTIALS:**
+- Username: `test-owner`
+- Password: `test-owner-password-do-not-use-in-production`
+
+**CRITICAL RULES:**
+- ALWAYS delete database files before bootstrap (ensures clean state)
+- ALWAYS use `--env-file test.env` flag for all test commands
+- Owner account starts INACTIVE - must run `owner activate` before use
+- Non-interactive bootstrap only available in debug builds or with `--features test-utils`
+- The `--env-file` flag must come BEFORE the subcommand (e.g., `cargo run -- --env-file test.env bootstrap`)

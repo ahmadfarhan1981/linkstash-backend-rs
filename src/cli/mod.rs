@@ -15,6 +15,10 @@ use crate::app_data::AppData;
 #[command(name = "linkstash")]
 #[command(about = "Linkstash authentication backend CLI", long_about = None)]
 pub struct Cli {
+    /// Path to environment file (default: .env)
+    #[arg(long, global = true, default_value = ".env")]
+    pub env_file: String,
+    
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -25,7 +29,12 @@ pub enum Commands {
     Migrate,
     
     /// Bootstrap the system by creating owner and initial admin accounts
-    Bootstrap,
+    Bootstrap {
+        /// Non-interactive mode (TEST ONLY - creates owner with fixed password, no prompts)
+        #[cfg(any(debug_assertions, feature = "test-utils"))]
+        #[arg(long)]
+        non_interactive: bool,
+    },
     
     /// Owner account management commands
     #[command(subcommand)]
@@ -71,13 +80,38 @@ pub async fn execute_command(
         Commands::Migrate => {
             migrate::run_migrations().await?;
         }
-        Commands::Bootstrap => {
-            bootstrap::bootstrap_system(
-                &app_data.credential_store,
-                &app_data.system_config_store,
-                &app_data.audit_store,
-                &app_data.secret_manager,
-            ).await?;
+        Commands::Bootstrap {
+            #[cfg(any(debug_assertions, feature = "test-utils"))]
+            non_interactive,
+        } => {
+            #[cfg(any(debug_assertions, feature = "test-utils"))]
+            {
+                if non_interactive {
+                    bootstrap::bootstrap_system_non_interactive(
+                        &app_data.credential_store,
+                        &app_data.system_config_store,
+                        &app_data.audit_store,
+                        &app_data.secret_manager,
+                    ).await?;
+                } else {
+                    bootstrap::bootstrap_system(
+                        &app_data.credential_store,
+                        &app_data.system_config_store,
+                        &app_data.audit_store,
+                        &app_data.secret_manager,
+                    ).await?;
+                }
+            }
+            
+            #[cfg(not(any(debug_assertions, feature = "test-utils")))]
+            {
+                bootstrap::bootstrap_system(
+                    &app_data.credential_store,
+                    &app_data.system_config_store,
+                    &app_data.audit_store,
+                    &app_data.secret_manager,
+                ).await?;
+            }
         }
         Commands::Owner(owner_cmd) => {
             match owner_cmd {

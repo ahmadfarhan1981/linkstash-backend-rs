@@ -13,6 +13,13 @@ use crate::services::crypto::generate_secure_password;
 use crate::cli::credential_export::{ExportFormat, export_credentials};
 use crate::types::internal::context::RequestContext;
 
+// Fixed credentials for non-interactive bootstrap (TEST ONLY)
+#[cfg(any(debug_assertions, feature = "test-utils"))]
+const TEST_OWNER_USERNAME: &str = "test-owner";
+
+#[cfg(any(debug_assertions, feature = "test-utils"))]
+const TEST_OWNER_PASSWORD: &str = "test-owner-password-do-not-use-in-production";
+
 /// Bootstrap the system by creating owner and initial admin accounts
 /// 
 /// # Arguments
@@ -89,9 +96,6 @@ async fn bootstrap_system_impl(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::services::audit_logger;
     
-    // Get password pepper from secret manager
-    let password_pepper = secret_manager.password_pepper();
-    
     // Check if owner already exists
     let existing_owner = credential_store.get_owner().await
         .map_err(|e| format!("Failed to check for existing owner: {}", e))?;
@@ -104,89 +108,30 @@ async fn bootstrap_system_impl(
     // Create owner account
     let owner_username = Uuid::new_v4().to_string();
     let owner_password = prompt_for_password("Owner")?;
-    let owner_password_hash = hash_password(&owner_password, &password_pepper)?;
     
-    let _owner = credential_store.create_admin_user(
-        &ctx,
+    create_owner_account(
+        credential_store,
+        system_config_store,
+        secret_manager,
+        ctx,
         owner_username.clone(),
-        owner_password_hash,
-        AdminFlags::owner(),
-    ).await
-        .map_err(|e| format!("Failed to create owner account: {}", e))?;
-    
-    println!("\n✓ Owner account created");
-    println!("  Username: {}", owner_username);
-    println!("  Password: {}", owner_password);
-    
-    // Handle owner credentials
-    handle_credential_export(&owner_username, &owner_password, "owner")?;
-    
-    // Display owner inactive warning
-    println!("\n ⚠️  WARNING: Owner account is INACTIVE (system flag owner_active=false)");
-    println!("⚠️  The owner account cannot be used until activated via CLI:");
-    println!("⚠️  cargo run -- owner activate");
-    println!("⚠️  ");
-    println!("⚠️  Keep owner credentials secure and only activate when needed for");
-    println!("⚠️  emergency admin management. Deactivate immediately after use.\n");
-    
-    // Verify system config has owner_active=false
-    let is_active = system_config_store.is_owner_active().await
-        .map_err(|e| format!("Failed to check owner_active flag: {}", e))?;
-    if is_active {
-        println!("⚠️  WARNING: owner_active flag is unexpectedly true. Setting to false...");
-        system_config_store.set_owner_active(false, Some("system".to_string()), None).await
-            .map_err(|e| format!("Failed to set owner_active flag: {}", e))?;
-    }
-    
-    // Prompt for System Admin count
-    let system_admin_count = prompt_for_count("System Admin", 10)?;
+        owner_password,
+        false, // Don't skip export in interactive mode
+    ).await?;
     
     // Create System Admin accounts
-    for i in 1..=system_admin_count {
-        println!("\n--- System Admin {} of {} ---", i, system_admin_count);
-        let username = Uuid::new_v4().to_string();
-        let password = prompt_for_password("System Admin")?;
-        let password_hash = hash_password(&password, &password_pepper)?;
-        
-        let _admin = credential_store.create_admin_user(
-            &ctx,
-            username.clone(),
-            password_hash,
-            AdminFlags::system_admin(),
-        ).await
-            .map_err(|e| format!("Failed to create System Admin account: {}", e))?;
-        
-        println!("\n✓ System Admin account created");
-        println!("  Username: {}", username);
-        println!("  Password: {}", password);
-        
-        handle_credential_export(&username, &password, "system_admin")?;
-    }
-    
-    // Prompt for Role Admin count
-    let role_admin_count = prompt_for_count("Role Admin", 10)?;
+    let system_admin_count = create_system_admin_accounts(
+        credential_store,
+        secret_manager,
+        ctx,
+    ).await?;
     
     // Create Role Admin accounts
-    for i in 1..=role_admin_count {
-        println!("\n--- Role Admin {} of {} ---", i, role_admin_count);
-        let username = Uuid::new_v4().to_string();
-        let password = prompt_for_password("Role Admin")?;
-        let password_hash = hash_password(&password, &password_pepper)?;
-        
-        let _admin = credential_store.create_admin_user(
-            &ctx,
-            username.clone(),
-            password_hash,
-            AdminFlags::role_admin(),
-        ).await
-            .map_err(|e| format!("Failed to create Role Admin account: {}", e))?;
-        
-        println!("\n✓ Role Admin account created");
-        println!("  Username: {}", username);
-        println!("  Password: {}", password);
-        
-        handle_credential_export(&username, &password, "role_admin")?;
-    }
+    let role_admin_count = create_role_admin_accounts(
+        credential_store,
+        secret_manager,
+        ctx,
+    ).await?;
     
     // Log bootstrap completion
     if let Err(audit_err) = audit_logger::log_bootstrap_completed(
@@ -210,6 +155,137 @@ async fn bootstrap_system_impl(
     println!("  cargo run -- owner activate\n");
     
     Ok(())
+}
+
+/// Create owner account
+/// 
+/// # Arguments
+/// * `owner_username` - Username for the owner account
+/// * `owner_password` - Password for the owner account (will be hashed)
+/// * `skip_export` - If true, skip the credential export prompt
+async fn create_owner_account(
+    credential_store: &CredentialStore,
+    system_config_store: &SystemConfigStore,
+    secret_manager: &SecretManager,
+    ctx: &RequestContext,
+    owner_username: String,
+    owner_password: String,
+    skip_export: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let password_pepper = secret_manager.password_pepper();
+    let owner_password_hash = hash_password(&owner_password, &password_pepper)?;
+    
+    let _owner = credential_store.create_admin_user(
+        ctx,
+        owner_username.clone(),
+        owner_password_hash,
+        AdminFlags::owner(),
+    ).await
+        .map_err(|e| format!("Failed to create owner account: {}", e))?;
+    
+    println!("\n✓ Owner account created");
+    println!("  Username: {}", owner_username);
+    println!("  Password: {}", owner_password);
+    
+    // Handle owner credentials (skip if requested)
+    if !skip_export {
+        handle_credential_export(&owner_username, &owner_password, "owner")?;
+    }
+    
+    // Display owner inactive warning
+    println!("\n ⚠️  WARNING: Owner account is INACTIVE (system flag owner_active=false)");
+    println!("⚠️  The owner account cannot be used until activated via CLI:");
+    println!("⚠️  cargo run -- owner activate");
+    println!("⚠️  ");
+    println!("⚠️  Keep owner credentials secure and only activate when needed for");
+    println!("⚠️  emergency admin management. Deactivate immediately after use.\n");
+    
+    // Verify system config has owner_active=false
+    let is_active = system_config_store.is_owner_active().await
+        .map_err(|e| format!("Failed to check owner_active flag: {}", e))?;
+    if is_active {
+        println!("⚠️  WARNING: owner_active flag is unexpectedly true. Setting to false...");
+        system_config_store.set_owner_active(false, Some("system".to_string()), None).await
+            .map_err(|e| format!("Failed to set owner_active flag: {}", e))?;
+    }
+    
+    Ok(())
+}
+
+/// Create System Admin accounts with interactive prompts
+/// 
+/// Returns the count of System Admin accounts created
+async fn create_system_admin_accounts(
+    credential_store: &CredentialStore,
+    secret_manager: &SecretManager,
+    ctx: &RequestContext,
+) -> Result<u32, Box<dyn std::error::Error>> {
+    let password_pepper = secret_manager.password_pepper();
+    
+    // Prompt for System Admin count
+    let system_admin_count = prompt_for_count("System Admin", 10)?;
+    
+    // Create System Admin accounts
+    for i in 1..=system_admin_count {
+        println!("\n--- System Admin {} of {} ---", i, system_admin_count);
+        let username = Uuid::new_v4().to_string();
+        let password = prompt_for_password("System Admin")?;
+        let password_hash = hash_password(&password, &password_pepper)?;
+        
+        let _admin = credential_store.create_admin_user(
+            ctx,
+            username.clone(),
+            password_hash,
+            AdminFlags::system_admin(),
+        ).await
+            .map_err(|e| format!("Failed to create System Admin account: {}", e))?;
+        
+        println!("\n✓ System Admin account created");
+        println!("  Username: {}", username);
+        println!("  Password: {}", password);
+        
+        handle_credential_export(&username, &password, "system_admin")?;
+    }
+    
+    Ok(system_admin_count)
+}
+
+/// Create Role Admin accounts with interactive prompts
+/// 
+/// Returns the count of Role Admin accounts created
+async fn create_role_admin_accounts(
+    credential_store: &CredentialStore,
+    secret_manager: &SecretManager,
+    ctx: &RequestContext,
+) -> Result<u32, Box<dyn std::error::Error>> {
+    let password_pepper = secret_manager.password_pepper();
+    
+    // Prompt for Role Admin count
+    let role_admin_count = prompt_for_count("Role Admin", 10)?;
+    
+    // Create Role Admin accounts
+    for i in 1..=role_admin_count {
+        println!("\n--- Role Admin {} of {} ---", i, role_admin_count);
+        let username = Uuid::new_v4().to_string();
+        let password = prompt_for_password("Role Admin")?;
+        let password_hash = hash_password(&password, &password_pepper)?;
+        
+        let _admin = credential_store.create_admin_user(
+            ctx,
+            username.clone(),
+            password_hash,
+            AdminFlags::role_admin(),
+        ).await
+            .map_err(|e| format!("Failed to create Role Admin account: {}", e))?;
+        
+        println!("\n✓ Role Admin account created");
+        println!("  Username: {}", username);
+        println!("  Password: {}", password);
+        
+        handle_credential_export(&username, &password, "role_admin")?;
+    }
+    
+    Ok(role_admin_count)
 }
 
 /// Prompt user for password (auto-generate or manual entry)
@@ -342,6 +418,129 @@ fn handle_credential_export(username: &str, password: &str, role_type: &str) -> 
     }
     
     Ok(())
+}
+
+/// Bootstrap the system non-interactively with fixed test credentials (TEST ONLY)
+/// 
+/// Creates only the owner account with fixed username and password.
+/// No prompts, no System Admin or Role Admin accounts.
+/// 
+/// # Arguments
+/// * `credential_store` - Credential store for user management
+/// * `system_config_store` - System config store for owner status
+/// * `audit_store` - Audit store for logging
+/// * `secret_manager` - Secret manager for accessing password pepper
+/// 
+/// # Returns
+/// * `Ok(())` - Bootstrap completed successfully
+/// * `Err(...)` - Bootstrap failed (e.g., system already bootstrapped)
+#[cfg(any(debug_assertions, feature = "test-utils"))]
+pub async fn bootstrap_system_non_interactive(
+    credential_store: &CredentialStore,
+    system_config_store: &SystemConfigStore,
+    audit_store: &Arc<AuditStore>,
+    secret_manager: &SecretManager,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::services::audit_logger;
+    
+    // Display test-only warning banner
+    println!("\n=== Linkstash Bootstrap (TEST MODE) ===\n");
+    println!("⚠️  WARNING: This is a TEST-ONLY command");
+    println!("⚠️  For production use, run: cargo run -- bootstrap\n");
+    
+    // Create RequestContext for CLI operation
+    let ctx = RequestContext::for_cli("bootstrap_test");
+    
+    // Log CLI session start
+    if let Err(audit_err) = audit_logger::log_cli_session_start(
+        audit_store,
+        &ctx,
+        "bootstrap_test",
+        vec![], // No sensitive args to log
+    ).await {
+        eprintln!("Warning: Failed to log CLI session start: {:?}", audit_err);
+    }
+    
+    // Execute bootstrap logic and capture result
+    let result: Result<(), Box<dyn std::error::Error>> = async {
+        // Check if owner already exists
+        let existing_owner = credential_store.get_owner().await
+            .map_err(|e| format!("Failed to check for existing owner: {}", e))?;
+        if existing_owner.is_some() {
+            return Err("System already bootstrapped".into());
+        }
+        
+        println!("No owner account found. Creating owner account...\n");
+        
+        // Use fixed credentials constants
+        let owner_username = TEST_OWNER_USERNAME.to_string();
+        let owner_password = TEST_OWNER_PASSWORD.to_string();
+        
+        // Create owner account using the shared helper function (skip export in non-interactive mode)
+        create_owner_account(
+            credential_store,
+            system_config_store,
+            secret_manager,
+            &ctx,
+            owner_username.clone(),
+            owner_password.clone(),
+            true, // Skip export in non-interactive mode
+        ).await?;
+        
+        // Display test-only credentials warning (in addition to the standard warnings from create_owner_account)
+        println!("⚠️  WARNING: These are FIXED TEST CREDENTIALS");
+        println!("⚠️  Both username and password are hardcoded for testing purposes only");
+        println!("⚠️  Never use this command or these credentials in production environments\n");
+        
+        // Log bootstrap completion (0 system admins, 0 role admins)
+        if let Err(audit_err) = audit_logger::log_bootstrap_completed(
+            audit_store,
+            "system".to_string(),
+            Some("localhost".to_string()),
+            owner_username,
+            0, // 0 system admins
+            0, // 0 role admins
+        ).await
+        {
+            eprintln!("Warning: Failed to log bootstrap completion: {:?}", audit_err);
+        }
+        
+        println!("=== Bootstrap Complete ===");
+        println!("Total accounts created:");
+        println!("  - 1 Owner (INACTIVE)");
+        println!("  - 0 System Admin(s)");
+        println!("  - 0 Role Admin(s)\n");
+        
+        Ok(())
+    }.await;
+    
+    // Log CLI session end based on result
+    match &result {
+        Ok(_) => {
+            if let Err(audit_err) = audit_logger::log_cli_session_end(
+                audit_store,
+                &ctx,
+                "bootstrap_test",
+                true,
+                None,
+            ).await {
+                eprintln!("Warning: Failed to log CLI session end: {:?}", audit_err);
+            }
+        }
+        Err(e) => {
+            if let Err(audit_err) = audit_logger::log_cli_session_end(
+                audit_store,
+                &ctx,
+                "bootstrap_test",
+                false,
+                Some(e.to_string()),
+            ).await {
+                eprintln!("Warning: Failed to log CLI session end: {:?}", audit_err);
+            }
+        }
+    }
+    
+    result
 }
 
 /// Hash a password using Argon2id with the password pepper

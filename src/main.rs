@@ -39,8 +39,22 @@ async fn seed_test_user(credential_store: &CredentialStore) {
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
-    // Load environment variables from .env file
-    dotenv::dotenv().ok();
+    // Check if CLI arguments are present
+    let args: Vec<String> = std::env::args().collect();
+    let is_cli_mode = args.len() > 1;
+    
+    // Parse CLI once if in CLI mode, otherwise use default env file
+    let cli_parsed = if is_cli_mode {
+        Some(cli::Cli::parse())
+    } else {
+        None
+    };
+    
+    // Load environment variables from specified file
+    let env_file = cli_parsed.as_ref()
+        .map(|c| c.env_file.as_str())
+        .unwrap_or(".env");
+    dotenv::from_filename(env_file).ok();
     
     // Initialize logging
     init_logging().expect("Failed to initialize logging");
@@ -59,13 +73,8 @@ async fn main() -> Result<(), std::io::Error> {
         .expect("Failed to run audit database migrations");
     tracing::info!("Database migrations completed successfully");
     
-    // Check if CLI arguments are present
-    let args: Vec<String> = std::env::args().collect();
-    
-    // If CLI arguments present (more than just the binary name), check for migrate command first
-    if args.len() > 1 {
-        // Parse CLI arguments
-        let cli = cli::Cli::parse();
+    // If CLI mode, execute command and exit
+    if let Some(cli) = cli_parsed {
         
         // Check if this is the migrate command - exit successfully since migrations are done
         if matches!(cli.command, cli::Commands::Migrate) {

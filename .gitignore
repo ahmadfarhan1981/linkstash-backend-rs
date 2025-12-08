@@ -11,6 +11,7 @@
 # Environment
 .env
 .env.local
+# test.env is committed to repo for AI agent testing
 
 # IDE
 .vscode/
