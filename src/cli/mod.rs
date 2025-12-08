@@ -40,11 +40,11 @@ pub enum Commands {
     #[command(subcommand)]
     Owner(OwnerCommands),
     
-    /// Download and load common password list from URL
-    DownloadPasswords {
-        /// URL to download password list from (default: Top 1000 most common passwords)
-        /// Good pro value : https://github.com/danielmiessler/SecLists/raw/refs/heads/master/Passwords/Common-Credentials/100k-most-used-passwords-NCSC.txt
-        #[arg(long, default_value = "https://github.com/danielmiessler/SecLists/raw/refs/heads/master/Passwords/Common-Credentials/10-million-password-list-top-1000.txt")]
+    /// Load common password blocklist from URL
+    LoadCommonPasswordBlocklist {
+        /// URL to download password blocklist from (default: Top 1000 most common passwords)
+        /// Good value for prod: https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Passwords/Common-Credentials/100k-most-used-passwords-NCSC.txt
+        #[arg(long, default_value = "https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Passwords/Common-Credentials/xato-net-10-million-passwords-1000.txt")]
         url: String,
     },
 }
@@ -137,7 +137,7 @@ pub async fn execute_command(
                 }
             }
         }
-        Commands::DownloadPasswords { url } => {
+        Commands::LoadCommonPasswordBlocklist { url } => {
             password_management::download_and_load_passwords(&url, app_data).await?;
         }
     }

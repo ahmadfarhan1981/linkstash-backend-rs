@@ -149,7 +149,7 @@
   - Verify password change endpoint now rejects common passwords
   - _Requirements: 1.2, 1.6_
 
-- [ ] 15. Implement download-passwords CLI command (USER-FACING FEATURE!)
+- [x] 15. Implement download-passwords CLI command (USER-FACING FEATURE!)
 
 
 
