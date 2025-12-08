@@ -175,7 +175,7 @@ async fn test_token_service_integration_with_secret_manager() {
     // Verify TokenService was created successfully
     let user_id = Uuid::new_v4();
     let ctx = linkstash_backend::types::internal::context::RequestContext::new();
-    let jwt_result = token_service.generate_jwt(&ctx, &user_id, false, false, false, vec![]).await;
+    let jwt_result = token_service.generate_jwt(&ctx, &user_id, false, false, false, vec![], false).await;
     
     assert!(jwt_result.is_ok(), "TokenService should generate JWT successfully");
 }
@@ -208,7 +208,7 @@ async fn test_jwt_generation_works_with_secrets_from_secret_manager() {
     // Generate JWT
     let user_id = Uuid::new_v4();
     let ctx = linkstash_backend::types::internal::context::RequestContext::new();
-    let (jwt, jwt_id) = token_service.generate_jwt(&ctx, &user_id, false, false, false, vec![]).await.expect("JWT generation should succeed");
+    let (jwt, jwt_id) = token_service.generate_jwt(&ctx, &user_id, false, false, false, vec![], false).await.expect("JWT generation should succeed");
     
     // Verify JWT is not empty
     assert!(!jwt.is_empty(), "Generated JWT should not be empty");
@@ -250,7 +250,7 @@ async fn test_jwt_validation_works_with_secrets_from_secret_manager() {
     // Generate and validate JWT
     let user_id = Uuid::new_v4();
     let ctx = linkstash_backend::types::internal::context::RequestContext::new();
-    let (jwt, _jwt_id) = token_service.generate_jwt(&ctx, &user_id, false, false, false, vec![]).await.unwrap();
+    let (jwt, _jwt_id) = token_service.generate_jwt(&ctx, &user_id, false, false, false, vec![], false).await.unwrap();
     let claims = token_service.validate_jwt(&jwt).await.unwrap();
     
     // Verify claims
@@ -293,7 +293,7 @@ async fn test_multiple_token_services_can_share_secret_manager() {
     // Generate JWT with first service
     let user_id = Uuid::new_v4();
     let ctx = linkstash_backend::types::internal::context::RequestContext::new();
-    let (jwt, _jwt_id) = token_service1.generate_jwt(&ctx, &user_id, false, false, false, vec![]).await.unwrap();
+    let (jwt, _jwt_id) = token_service1.generate_jwt(&ctx, &user_id, false, false, false, vec![], false).await.unwrap();
     
     // Validate JWT with second service (should work because they share the same secret)
     let claims = token_service2.validate_jwt(&jwt).await.unwrap();

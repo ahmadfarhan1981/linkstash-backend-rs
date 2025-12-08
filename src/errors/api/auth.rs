@@ -58,6 +58,10 @@ pub enum AuthError {
     #[oai(status = 401)]
     ExpiredRefreshToken(Json<AuthErrorResponse>),
     
+    /// Password change required - contains RequestContext for allowed endpoints
+    #[oai(status = 403)]
+    PasswordChangeRequired(Json<AuthErrorResponse>),
+    
     /// Internal server error
     #[oai(status = 500)]
     InternalError(Json<AuthErrorResponse>),
@@ -151,6 +155,15 @@ impl AuthError {
             error: "expired_refresh_token".to_string(),
             message: "Refresh token has expired".to_string(),
             status_code: 401,
+        }))
+    }
+    
+    /// Create a PasswordChangeRequired error
+    pub fn password_change_required() -> Self {
+        AuthError::PasswordChangeRequired(Json(AuthErrorResponse {
+            error: "password_change_required".to_string(),
+            message: "Password change required. Please change your password at /auth/change-password".to_string(),
+            status_code: 403,
         }))
     }
     
@@ -249,6 +262,7 @@ impl AuthError {
             AuthError::InvalidAuthHeader(json) => json.0.message.clone(),
             AuthError::InvalidRefreshToken(json) => json.0.message.clone(),
             AuthError::ExpiredRefreshToken(json) => json.0.message.clone(),
+            AuthError::PasswordChangeRequired(json) => json.0.message.clone(),
             AuthError::InternalError(json) => json.0.message.clone(),
         }
     }

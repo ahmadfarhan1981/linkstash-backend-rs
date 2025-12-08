@@ -59,7 +59,7 @@ This feature implements password management capabilities for the Linkstash authe
 2. THE System SHALL include the password_change_required flag in JWT claims
 3. WHEN a user account is created during bootstrap, THE System SHALL set password_change_required to true
 4. WHEN a user successfully changes their password, THE System SHALL set password_change_required to false
-5. WHEN a user with password_change_required=true attempts to access any endpoint except /auth/change-password and /auth/whoami, THE System SHALL reject the request with 403 status code and error message "Password change required. Please change your password at /auth/change-password"
+5. WHEN a user with password_change_required=true attempts to access a protected endpoint, THE System SHALL reject the request with 403 status code and error message "Password change required. Please change your password at /auth/change-password"
 6. THE System SHALL allow users with password_change_required=true to access /auth/whoami to check their status
 7. THE System SHALL allow users with password_change_required=true to access /auth/change-password to update their password
 

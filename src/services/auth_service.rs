@@ -55,7 +55,6 @@ impl AuthService {
         username: String,
         password: String,
     ) -> Result<(String, String), InternalError> {
-        // Credential verification with audit logging happens in the store
         let user_id_str = self.credential_store
             .verify_credentials(ctx, &username, &password)
             .await?;
@@ -63,10 +62,8 @@ impl AuthService {
         let user_id = Uuid::parse_str(&user_id_str)
             .map_err(|e| InternalError::parse("UUID", e.to_string()))?;
         
-        // Fetch user data to get admin roles
         let user = self.credential_store.get_user_by_id(&user_id_str).await?;
         
-        // Parse app_roles from JSON
         let app_roles = if let Some(roles_json) = &user.app_roles {
             serde_json::from_str::<Vec<String>>(roles_json)
                 .unwrap_or_else(|_| vec![])
@@ -74,7 +71,6 @@ impl AuthService {
             vec![]
         };
         
-        // Generate JWT with admin roles and audit logging at point of action
         let (access_token, jwt_id) = self.token_service.generate_jwt(
             ctx,
             &user_id,
@@ -82,6 +78,7 @@ impl AuthService {
             user.is_system_admin,
             user.is_role_admin,
             app_roles,
+            user.password_change_required,
         ).await?;
         
         let refresh_token = self.token_service.generate_refresh_token();
@@ -89,7 +86,6 @@ impl AuthService {
         let token_hash = self.token_service.hash_refresh_token(&refresh_token);
         let expires_at = self.token_service.get_refresh_expiration();
         
-        // Store refresh token with audit logging in the store
         self.credential_store
             .store_refresh_token_no_txn(
                 ctx,
@@ -118,7 +114,6 @@ impl AuthService {
     ) -> Result<String, InternalError> {
         let token_hash = self.token_service.hash_refresh_token(&refresh_token);
         
-        // Validation with audit logging happens in the store
         let user_id_str = self.credential_store
             .validate_refresh_token(ctx, &token_hash)
             .await?;
@@ -126,10 +121,8 @@ impl AuthService {
         let user_id = Uuid::parse_str(&user_id_str)
             .map_err(|e| InternalError::parse("UUID", e.to_string()))?;
         
-        // Fetch user data to get admin roles
         let user = self.credential_store.get_user_by_id(&user_id_str).await?;
         
-        // Parse app_roles from JSON
         let app_roles = if let Some(roles_json) = &user.app_roles {
             serde_json::from_str::<Vec<String>>(roles_json)
                 .unwrap_or_else(|_| vec![])
@@ -137,7 +130,6 @@ impl AuthService {
             vec![]
         };
         
-        // Generate JWT with admin roles and audit logging at point of action
         let (access_token, _jwt_id) = self.token_service.generate_jwt(
             ctx,
             &user_id,
@@ -145,6 +137,7 @@ impl AuthService {
             user.is_system_admin,
             user.is_role_admin,
             app_roles,
+            user.password_change_required,
         ).await?;
         
         Ok(access_token)
@@ -169,12 +162,11 @@ impl AuthService {
     ) -> Result<(), InternalError> {
         let token_hash = self.token_service.hash_refresh_token(&refresh_token);
         
-        // Log warning for unauthenticated logout attempts
+        // Unauthenticated logout is allowed but logged for security monitoring
         if !ctx.authenticated {
             tracing::warn!("Unauthenticated logout from IP: {:?}", ctx.ip_address);
         }
         
-        // Revocation with audit logging happens in the store
         self.credential_store.revoke_refresh_token(ctx, &token_hash).await?;
         
         Ok(())
@@ -209,7 +201,6 @@ impl AuthService {
         let user = self.credential_store.get_user_by_id(&user_id).await?;
         self.credential_store.verify_credentials(ctx, &user.username, old_password).await?;
         
-        // Validate new password with username context
         self.password_validator
             .validate(new_password, Some(&user.username))
             .await
@@ -224,6 +215,19 @@ impl AuthService {
                 ctx,
                 "password_change",
                 &format!("update_password_failed: {}", e),
+            ).await {
+                tracing::error!("Failed to log transaction rollback: {:?}", audit_err);
+            }
+            return Err(e);
+        }
+        
+        let clear_flag_result = self.credential_store.clear_password_change_required_in_txn(&txn, ctx, &user_id).await;
+        if let Err(e) = clear_flag_result {
+            if let Err(audit_err) = crate::services::audit_logger::log_transaction_rolled_back(
+                &self.audit_store,
+                ctx,
+                "password_change",
+                &format!("clear_password_change_required_failed: {}", e),
             ).await {
                 tracing::error!("Failed to log transaction rollback: {:?}", audit_err);
             }
@@ -246,7 +250,10 @@ impl AuthService {
         let user_uuid = Uuid::parse_str(&user_id)
             .map_err(|e| InternalError::parse("UUID", e.to_string()))?;
         
-        let app_roles = if let Some(roles_json) = &user.app_roles {
+        // Re-fetch user within transaction to get current password_change_required state
+        let updated_user = self.credential_store.get_user_by_id_in_txn(&txn, &user_id).await?;
+        
+        let app_roles = if let Some(roles_json) = &updated_user.app_roles {
             serde_json::from_str::<Vec<String>>(roles_json).unwrap_or_else(|_| vec![])
         } else {
             vec![]
@@ -255,10 +262,11 @@ impl AuthService {
         let (access_token, jwt_id) = self.token_service.generate_jwt(
             ctx,
             &user_uuid,
-            user.is_owner,
-            user.is_system_admin,
-            user.is_role_admin,
+            updated_user.is_owner,
+            updated_user.is_system_admin,
+            updated_user.is_role_admin,
             app_roles,
+            updated_user.password_change_required,
         ).await?;
         
         let refresh_token = self.token_service.generate_refresh_token();
@@ -317,10 +325,12 @@ mod change_password_tests {
     use super::*;
     use crate::test::utils::setup_test_stores;
     use crate::types::internal::context::RequestContext;
+    use sea_orm::ActiveModelTrait;
     
     #[tokio::test]
     async fn test_change_password_success() {
         let (db, _audit_db, credential_store, audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
         
         // Use secure passwords that won't be in HIBP (UUID-based)
         use uuid::Uuid;
@@ -329,7 +339,7 @@ mod change_password_tests {
         
         // Create a user
         let _user_id = credential_store
-            .add_user("testuser".to_string(), old_password.clone())
+            .add_user(&password_validator, "testuser".to_string(), old_password.clone())
             .await
             .expect("Failed to create user");
         
@@ -393,10 +403,11 @@ mod change_password_tests {
     #[tokio::test]
     async fn test_change_password_fails_with_incorrect_old_password() {
         let (db, _audit_db, credential_store, audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
         
         // Create a user
         let _user_id = credential_store
-            .add_user("testuser".to_string(), "correctpassword123".to_string())
+            .add_user(&password_validator, "testuser".to_string(), "SecureTest-CorrectPass-123".to_string())
             .await
             .expect("Failed to create user");
         
@@ -423,7 +434,7 @@ mod change_password_tests {
         // Login to get authenticated context
         let mut ctx = RequestContext::new();
         let (access_token, _refresh_token) = auth_service
-            .login(&ctx, "testuser".to_string(), "correctpassword123".to_string())
+            .login(&ctx, "testuser".to_string(), "SecureTest-CorrectPass-123".to_string())
             .await
             .expect("Failed to login");
         
@@ -449,6 +460,7 @@ mod change_password_tests {
     #[tokio::test]
     async fn test_change_password_revokes_old_refresh_tokens() {
         let (db, _audit_db, credential_store, audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
         
         // Use secure passwords that won't be in HIBP (UUID-based)
         use uuid::Uuid;
@@ -457,7 +469,7 @@ mod change_password_tests {
         
         // Create a user
         let _user_id = credential_store
-            .add_user("testuser".to_string(), old_password.clone())
+            .add_user(&password_validator, "testuser".to_string(), old_password.clone())
             .await
             .expect("Failed to create user");
         
@@ -506,5 +518,293 @@ mod change_password_tests {
             .await;
         
         assert!(refresh_result.is_err());
+    }
+    
+    #[tokio::test]
+    async fn test_login_includes_password_change_required_from_user_record() {
+        let (db, _audit_db, credential_store, audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
+        
+        // Create a user
+        let user_id = credential_store
+            .add_user(&password_validator, "testuser".to_string(), "SecureTest-Pass-123456789".to_string())
+            .await
+            .expect("Failed to create user");
+        
+        // Manually set password_change_required to true in the database
+        use sea_orm::{EntityTrait, Set};
+        use crate::types::db::user;
+        
+        let mut user_model: user::ActiveModel = user::Entity::find_by_id(user_id.clone())
+            .one(&db)
+            .await
+            .expect("Failed to find user")
+            .expect("User not found")
+            .into();
+        
+        user_model.password_change_required = Set(true);
+        user_model.update(&db).await.expect("Failed to update user");
+        
+        // Create auth service
+        let token_service = Arc::new(TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+            audit_store.clone(),
+        ));
+        
+        let common_password_store = Arc::new(crate::stores::CommonPasswordStore::new(db.clone()));
+        let system_config_store = Arc::new(crate::stores::SystemConfigStore::new(db.clone(), audit_store.clone()));
+        let hibp_cache_store = Arc::new(crate::stores::HibpCacheStore::new(db.clone(), system_config_store.clone()));
+        let password_validator = Arc::new(PasswordValidator::new(common_password_store, hibp_cache_store));
+        
+        let auth_service = AuthService {
+            credential_store: credential_store.clone(),
+            system_config_store,
+            token_service: token_service.clone(),
+            audit_store: audit_store.clone(),
+            password_validator,
+        };
+        
+        // Login
+        let ctx = RequestContext::new();
+        let (access_token, _refresh_token) = auth_service
+            .login(&ctx, "testuser".to_string(), "SecureTest-Pass-123456789".to_string())
+            .await
+            .expect("Failed to login");
+        
+        // Validate JWT and check password_change_required flag
+        let claims = token_service.validate_jwt(&access_token).await.expect("Failed to validate JWT");
+        
+        assert_eq!(claims.password_change_required, true, "JWT should include password_change_required=true from user record");
+    }
+    
+    #[tokio::test]
+    async fn test_refresh_includes_password_change_required_from_user_record() {
+        let (db, _audit_db, credential_store, audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
+        
+        // Create a user
+        let user_id = credential_store
+            .add_user(&password_validator, "testuser".to_string(), "SecureTest-Pass-123456789".to_string())
+            .await
+            .expect("Failed to create user");
+        
+        // Create auth service
+        let token_service = Arc::new(TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+            audit_store.clone(),
+        ));
+        
+        let common_password_store = Arc::new(crate::stores::CommonPasswordStore::new(db.clone()));
+        let system_config_store = Arc::new(crate::stores::SystemConfigStore::new(db.clone(), audit_store.clone()));
+        let hibp_cache_store = Arc::new(crate::stores::HibpCacheStore::new(db.clone(), system_config_store.clone()));
+        let password_validator = Arc::new(PasswordValidator::new(common_password_store, hibp_cache_store));
+        
+        let auth_service = AuthService {
+            credential_store: credential_store.clone(),
+            system_config_store,
+            token_service: token_service.clone(),
+            audit_store: audit_store.clone(),
+            password_validator,
+        };
+        
+        // Login to get refresh token
+        let ctx = RequestContext::new();
+        let (_access_token, refresh_token) = auth_service
+            .login(&ctx, "testuser".to_string(), "SecureTest-Pass-123456789".to_string())
+            .await
+            .expect("Failed to login");
+        
+        // Manually set password_change_required to true in the database
+        use sea_orm::{EntityTrait, Set};
+        use crate::types::db::user;
+        
+        let mut user_model: user::ActiveModel = user::Entity::find_by_id(user_id.clone())
+            .one(&db)
+            .await
+            .expect("Failed to find user")
+            .expect("User not found")
+            .into();
+        
+        user_model.password_change_required = Set(true);
+        user_model.update(&db).await.expect("Failed to update user");
+        
+        // Refresh token
+        let new_access_token = auth_service
+            .refresh(&ctx, refresh_token)
+            .await
+            .expect("Failed to refresh token");
+        
+        // Validate JWT and check password_change_required flag
+        let claims = token_service.validate_jwt(&new_access_token).await.expect("Failed to validate JWT");
+        
+        assert_eq!(claims.password_change_required, true, "Refreshed JWT should include password_change_required=true from user record");
+    }
+    
+    #[tokio::test]
+    async fn test_change_password_clears_password_change_required() {
+        let (db, _audit_db, credential_store, audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
+        
+        // Use secure passwords that won't be in HIBP (UUID-based)
+        use uuid::Uuid;
+        let old_password = format!("OldSecure-{}", Uuid::new_v4());
+        let new_password = format!("NewSecure-{}", Uuid::new_v4());
+        
+        // Create a user with password_change_required=true
+        let user_id = credential_store
+            .add_user(&password_validator, "testuser".to_string(), old_password.clone())
+            .await
+            .expect("Failed to create user");
+        
+        // Set password_change_required to true
+        use sea_orm::{EntityTrait, Set};
+        use crate::types::db::user;
+        
+        let mut user_model: user::ActiveModel = user::Entity::find_by_id(user_id.clone())
+            .one(&db)
+            .await
+            .expect("Failed to find user")
+            .expect("User not found")
+            .into();
+        
+        user_model.password_change_required = Set(true);
+        user_model.update(&db).await.expect("Failed to update user");
+        
+        // Verify flag is set
+        let user_before = user::Entity::find_by_id(user_id.clone())
+            .one(&db)
+            .await
+            .expect("Failed to find user")
+            .expect("User not found");
+        assert_eq!(user_before.password_change_required, true, "password_change_required should be true before password change");
+        
+        // Create auth service
+        let token_service = Arc::new(TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+            audit_store.clone(),
+        ));
+        
+        let common_password_store = Arc::new(crate::stores::CommonPasswordStore::new(db.clone()));
+        let system_config_store = Arc::new(crate::stores::SystemConfigStore::new(db.clone(), audit_store.clone()));
+        let hibp_cache_store = Arc::new(crate::stores::HibpCacheStore::new(db.clone(), system_config_store.clone()));
+        let password_validator = Arc::new(PasswordValidator::new(common_password_store, hibp_cache_store));
+        
+        let auth_service = AuthService {
+            credential_store: credential_store.clone(),
+            system_config_store,
+            token_service: token_service.clone(),
+            audit_store: audit_store.clone(),
+            password_validator,
+        };
+        
+        // Login to get authenticated context
+        let mut ctx = RequestContext::new();
+        let (access_token, _refresh_token) = auth_service
+            .login(&ctx, "testuser".to_string(), old_password.clone())
+            .await
+            .expect("Failed to login");
+        
+        // Validate JWT to get claims
+        let claims = token_service.validate_jwt(&access_token).await.expect("Failed to validate JWT");
+        ctx.authenticated = true;
+        ctx.claims = Some(claims);
+        
+        // Change password
+        let result = auth_service
+            .change_password(&ctx, &old_password, &new_password)
+            .await;
+        
+        assert!(result.is_ok(), "Password change should succeed");
+        
+        // Verify flag is cleared in database
+        let user_after = user::Entity::find_by_id(user_id.clone())
+            .one(&db)
+            .await
+            .expect("Failed to find user")
+            .expect("User not found");
+        assert_eq!(user_after.password_change_required, false, "password_change_required should be false after successful password change");
+    }
+    
+    #[tokio::test]
+    async fn test_change_password_reads_password_change_required_from_transaction() {
+        let (db, _audit_db, credential_store, audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
+        
+        // Use secure passwords that won't be in HIBP (UUID-based)
+        use uuid::Uuid;
+        let old_password = format!("OldSecure-{}", Uuid::new_v4());
+        let new_password = format!("NewSecure-{}", Uuid::new_v4());
+        
+        // Create a user with password_change_required=true
+        let user_id = credential_store
+            .add_user(&password_validator, "testuser".to_string(), old_password.clone())
+            .await
+            .expect("Failed to create user");
+        
+        // Set password_change_required to true
+        use sea_orm::{EntityTrait, Set};
+        use crate::types::db::user;
+        
+        let mut user_model: user::ActiveModel = user::Entity::find_by_id(user_id.clone())
+            .one(&db)
+            .await
+            .expect("Failed to find user")
+            .expect("User not found")
+            .into();
+        
+        user_model.password_change_required = Set(true);
+        user_model.update(&db).await.expect("Failed to update user");
+        
+        // Create auth service
+        let token_service = Arc::new(TokenService::new(
+            "test-secret-key-minimum-32-characters-long".to_string(),
+            "test-refresh-secret-minimum-32-chars".to_string(),
+            audit_store.clone(),
+        ));
+        
+        let common_password_store = Arc::new(crate::stores::CommonPasswordStore::new(db.clone()));
+        let system_config_store = Arc::new(crate::stores::SystemConfigStore::new(db.clone(), audit_store.clone()));
+        let hibp_cache_store = Arc::new(crate::stores::HibpCacheStore::new(db.clone(), system_config_store.clone()));
+        let password_validator = Arc::new(PasswordValidator::new(common_password_store, hibp_cache_store));
+        
+        let auth_service = AuthService {
+            credential_store: credential_store.clone(),
+            system_config_store,
+            token_service: token_service.clone(),
+            audit_store: audit_store.clone(),
+            password_validator,
+        };
+        
+        // Login to get authenticated context
+        let mut ctx = RequestContext::new();
+        let (access_token, _refresh_token) = auth_service
+            .login(&ctx, "testuser".to_string(), old_password.clone())
+            .await
+            .expect("Failed to login");
+        
+        // Validate JWT to get claims
+        let claims = token_service.validate_jwt(&access_token).await.expect("Failed to validate JWT");
+        ctx.authenticated = true;
+        ctx.claims = Some(claims);
+        
+        // Verify initial JWT has password_change_required=true
+        let initial_claims = token_service.validate_jwt(&access_token).await.expect("Failed to validate JWT");
+        assert_eq!(initial_claims.password_change_required, true, "Initial JWT should have password_change_required=true");
+        
+        // Change password
+        let result = auth_service
+            .change_password(&ctx, &old_password, &new_password)
+            .await;
+        
+        assert!(result.is_ok());
+        let (new_access_token, _new_refresh_token) = result.unwrap();
+        
+        // Verify new JWT reads password_change_required from database
+        // Task 21 clears the flag after successful password change
+        let new_claims = token_service.validate_jwt(&new_access_token).await.expect("Failed to validate JWT");
+        assert_eq!(new_claims.password_change_required, false, "New JWT should have password_change_required=false after successful password change (task 21 clears it)");
     }
 }

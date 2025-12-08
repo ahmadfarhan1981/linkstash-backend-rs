@@ -186,30 +186,30 @@
   - Verify password change endpoint rejects passwords containing username
   - _Requirements: 7.1, 7.2, 7.3_
 
-- [ ] 19. Checkpoint - Password validation is complete!
+- [x] 19. Checkpoint - Password validation is complete!
   - All validation rules working: length, username, common passwords, compromised passwords
   - Test each validation type through password change endpoint
 
 ## Phase 3: Password Change Requirement Enforcement
 
-- [ ] 20. Update TokenService to include password_change_required in JWT
+- [x] 20. Update TokenService to include password_change_required in JWT
   - Add password_change_required field to Claims struct in `src/types/internal/auth.rs`
   - Update `generate_jwt()` to accept password_change_required parameter
   - Include password_change_required in JWT claims
   - Update all existing callers to pass false (default for existing users)
   - _Requirements: 3.2_
 
-- [ ] 21. Extend CredentialStore with password change requirement management
+- [x] 21. Extend CredentialStore with password change requirement management
   - Add `clear_password_change_required()` with audit logging at point of action
   - Update AuthService `change_password()` to clear flag after successful change
   - _Requirements: 3.4_
 
-- [ ] 22. Update CredentialStore to validate passwords on user creation
+- [x] 22. Update CredentialStore to validate passwords on user creation
   - Update `add_user()` in CredentialStore to validate password using PasswordValidator before hashing
   - Return PasswordValidationFailed error if validation fails
   - _Requirements: 4.1, 4.2, 4.4_
 
-- [ ] 23. Update bootstrap command for password management
+- [x] 23. Update bootstrap command for password management
   - Set password_change_required=true when creating owner/admin users
   - Display warning: "Password change required on first login"
   - Use PasswordValidator::generate_secure_password() for auto-generated passwords
@@ -217,12 +217,21 @@
   - Test bootstrap flow with both auto-generated and manual passwords
   - _Requirements: 3.3, 4.3_
 
-- [ ] 24. Implement password change requirement enforcement
-  - Add PasswordChangeRequired to AuthError enum
-  - Add password_change_blocked field to RequestContext struct
-  - Update create_request_context helper to check password_change_required claim and set blocked flag if path not in allowed list (["/api/auth/change-password", "/api/auth/whoami"])
-  - Update protected endpoints (/auth/refresh, /auth/logout, admin endpoints) to check blocked flag and return 403 PasswordChangeRequired
-  - Verify enforcement: bootstrap user → login → attempt protected endpoint (403) → change password → access works
+- [ ] 24. Implement password change requirement enforcement (context in error)
+
+
+
+
+
+
+  - Add PasswordChangeRequired(RequestContext) variant to AuthError enum with 403 status code (error contains the context)
+  - Update `create_request_context()` in `src/api/helpers.rs` to return `Result<RequestContext, AuthError>` instead of `RequestContext`
+  - Add check after successful JWT validation: if `claims.password_change_required` is true, return `Err(AuthError::PasswordChangeRequired(ctx))`
+  - Update ALL endpoints to handle the new Result return type:
+    - Most endpoints: Use `?` operator to automatically reject (e.g., `let ctx = self.create_request_context(req, auth).await?;`)
+    - Allowed endpoints (/auth/change-password, /auth/whoami): Extract context from error with `Err(AuthError::PasswordChangeRequired(ctx)) => ctx`
+  - No separate `create_request_context_unchecked()` needed - context is embedded in the error!
+  - Verify enforcement: bootstrap user → login → attempt /auth/refresh (403) → attempt /auth/whoami (200) → change password → /auth/refresh works (200)
   - _Requirements: 3.5, 3.6, 3.7_
 
 - [ ] 25. Final checkpoint - Complete end-to-end verification

@@ -9,7 +9,7 @@ use argon2::{Argon2, PasswordHasher, password_hash::SaltString, Algorithm, Versi
 use crate::config::SecretManager;
 use crate::stores::{CredentialStore, SystemConfigStore, AuditStore};
 use crate::types::internal::auth::AdminFlags;
-use crate::services::crypto::generate_secure_password;
+use crate::services::PasswordValidator;
 use crate::cli::credential_export::{ExportFormat, export_credentials};
 use crate::types::internal::context::RequestContext;
 
@@ -27,6 +27,7 @@ const TEST_OWNER_PASSWORD: &str = "test-owner-password-do-not-use-in-production"
 /// * `system_config_store` - System config store for owner status
 /// * `audit_store` - Audit store for logging
 /// * `secret_manager` - Secret manager for accessing password pepper
+/// * `password_validator` - Password validator for validating passwords
 /// 
 /// # Returns
 /// * `Ok(())` - Bootstrap completed successfully
@@ -36,6 +37,7 @@ pub async fn bootstrap_system(
     system_config_store: &SystemConfigStore,
     audit_store: &Arc<AuditStore>,
     secret_manager: &SecretManager,
+    password_validator: &PasswordValidator,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== Linkstash Bootstrap ===\n");
     
@@ -55,7 +57,7 @@ pub async fn bootstrap_system(
     }
     
     // Execute bootstrap logic and capture result
-    let result = bootstrap_system_impl(credential_store, system_config_store, audit_store, secret_manager, &ctx).await;
+    let result = bootstrap_system_impl(credential_store, system_config_store, audit_store, secret_manager, password_validator, &ctx).await;
     
     // Log CLI session end based on result
     match &result {
@@ -92,6 +94,7 @@ async fn bootstrap_system_impl(
     system_config_store: &SystemConfigStore,
     audit_store: &Arc<AuditStore>,
     secret_manager: &SecretManager,
+    password_validator: &PasswordValidator,
     ctx: &RequestContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::services::audit_logger;
@@ -107,7 +110,7 @@ async fn bootstrap_system_impl(
     
     // Create owner account
     let owner_username = Uuid::new_v4().to_string();
-    let owner_password = prompt_for_password("Owner")?;
+    let owner_password = prompt_for_password("Owner", password_validator, Some(&owner_username)).await?;
     
     create_owner_account(
         credential_store,
@@ -123,6 +126,7 @@ async fn bootstrap_system_impl(
     let system_admin_count = create_system_admin_accounts(
         credential_store,
         secret_manager,
+        password_validator,
         ctx,
     ).await?;
     
@@ -130,6 +134,7 @@ async fn bootstrap_system_impl(
     let role_admin_count = create_role_admin_accounts(
         credential_store,
         secret_manager,
+        password_validator,
         ctx,
     ).await?;
     
@@ -175,7 +180,8 @@ async fn create_owner_account(
     let password_pepper = secret_manager.password_pepper();
     let owner_password_hash = hash_password(&owner_password, &password_pepper)?;
     
-    let _owner = credential_store.create_admin_user(
+    let _owner = create_admin_user_with_password_change_required(
+        credential_store,
         ctx,
         owner_username.clone(),
         owner_password_hash,
@@ -200,6 +206,10 @@ async fn create_owner_account(
     println!("⚠️  Keep owner credentials secure and only activate when needed for");
     println!("⚠️  emergency admin management. Deactivate immediately after use.\n");
     
+    // Display password change requirement warning
+    println!("⚠️  WARNING: Password change required on first login");
+    println!("⚠️  This account must change its password before accessing protected endpoints.\n");
+    
     // Verify system config has owner_active=false
     let is_active = system_config_store.is_owner_active().await
         .map_err(|e| format!("Failed to check owner_active flag: {}", e))?;
@@ -218,6 +228,7 @@ async fn create_owner_account(
 async fn create_system_admin_accounts(
     credential_store: &CredentialStore,
     secret_manager: &SecretManager,
+    password_validator: &PasswordValidator,
     ctx: &RequestContext,
 ) -> Result<u32, Box<dyn std::error::Error>> {
     let password_pepper = secret_manager.password_pepper();
@@ -229,10 +240,11 @@ async fn create_system_admin_accounts(
     for i in 1..=system_admin_count {
         println!("\n--- System Admin {} of {} ---", i, system_admin_count);
         let username = Uuid::new_v4().to_string();
-        let password = prompt_for_password("System Admin")?;
+        let password = prompt_for_password("System Admin", password_validator, Some(&username)).await?;
         let password_hash = hash_password(&password, &password_pepper)?;
         
-        let _admin = credential_store.create_admin_user(
+        let _admin = create_admin_user_with_password_change_required(
+            credential_store,
             ctx,
             username.clone(),
             password_hash,
@@ -243,6 +255,7 @@ async fn create_system_admin_accounts(
         println!("\n✓ System Admin account created");
         println!("  Username: {}", username);
         println!("  Password: {}", password);
+        println!("  ⚠️  Password change required on first login");
         
         handle_credential_export(&username, &password, "system_admin")?;
     }
@@ -256,6 +269,7 @@ async fn create_system_admin_accounts(
 async fn create_role_admin_accounts(
     credential_store: &CredentialStore,
     secret_manager: &SecretManager,
+    password_validator: &PasswordValidator,
     ctx: &RequestContext,
 ) -> Result<u32, Box<dyn std::error::Error>> {
     let password_pepper = secret_manager.password_pepper();
@@ -267,10 +281,11 @@ async fn create_role_admin_accounts(
     for i in 1..=role_admin_count {
         println!("\n--- Role Admin {} of {} ---", i, role_admin_count);
         let username = Uuid::new_v4().to_string();
-        let password = prompt_for_password("Role Admin")?;
+        let password = prompt_for_password("Role Admin", password_validator, Some(&username)).await?;
         let password_hash = hash_password(&password, &password_pepper)?;
         
-        let _admin = credential_store.create_admin_user(
+        let _admin = create_admin_user_with_password_change_required(
+            credential_store,
             ctx,
             username.clone(),
             password_hash,
@@ -281,6 +296,7 @@ async fn create_role_admin_accounts(
         println!("\n✓ Role Admin account created");
         println!("  Username: {}", username);
         println!("  Password: {}", password);
+        println!("  ⚠️  Password change required on first login");
         
         handle_credential_export(&username, &password, "role_admin")?;
     }
@@ -292,42 +308,71 @@ async fn create_role_admin_accounts(
 /// 
 /// Default: Auto-generate (on empty input)
 /// Accepts: y/yes (any case) for yes, n/no (any case) for no
-fn prompt_for_password(role_type: &str) -> Result<String, Box<dyn std::error::Error>> {
-    // ANSI codes: \x1b[1m = bold, \x1b[36m = cyan, \x1b[0m = reset
-    print!("Generate password for {} automatically? (\x1b[1m\x1b[36mY\x1b[0m/n) [default: Y]: ", role_type);
-    io::stdout().flush()?;
-    
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let input = input.trim().to_lowercase();
-    
-    // Validate input: accept y/yes/n/no (any case) or empty
-    match input.as_str() {
-        "" | "y" | "yes" => {
-            // Default or explicit yes: auto-generate
-            let password = generate_secure_password();
-            println!("✓ Password auto-generated");
-            Ok(password)
-        }
-        "n" | "no" => {
-            // Explicit no: manual entry
-            print!("Enter password for {}: ", role_type);
-            io::stdout().flush()?;
-            
-            let mut password = String::new();
-            io::stdin().read_line(&mut password)?;
-            let password = password.trim().to_string();
-            
-            // Accept any password without validation (validation will be added later)
-            if password.is_empty() {
-                return Err("Password cannot be empty".into());
+/// 
+/// # Arguments
+/// * `role_type` - The type of role (e.g., "Owner", "System Admin")
+/// * `password_validator` - Password validator for validating manual passwords
+/// * `username` - Optional username for context-specific validation
+/// 
+/// # Returns
+/// * `Ok(String)` - Valid password (auto-generated or manually entered)
+/// * `Err(...)` - I/O error or validation error
+async fn prompt_for_password(
+    role_type: &str,
+    password_validator: &PasswordValidator,
+    username: Option<&str>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    // Loop for retry on invalid input (y/n choice)
+    loop {
+        // ANSI codes: \x1b[1m = bold, \x1b[36m = cyan, \x1b[0m = reset
+        print!("Generate password for {} automatically? (\x1b[1m\x1b[36mY\x1b[0m/n) [default: Y]: ", role_type);
+        io::stdout().flush()?;
+        
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let input = input.trim().to_lowercase();
+        
+        // Validate input: accept y/yes/n/no (any case) or empty
+        match input.as_str() {
+            "" | "y" | "yes" => {
+                // Default or explicit yes: auto-generate using PasswordValidator
+                let password = password_validator.generate_secure_password();
+                println!("✓ Password auto-generated");
+                return Ok(password);
             }
-            
-            Ok(password)
-        }
-        _ => {
-            println!("Invalid input. Please enter 'y'/'yes', 'n'/'no', or press Enter for default.");
-            prompt_for_password(role_type) // Retry
+            "n" | "no" => {
+                // Explicit no: manual entry with validation
+                loop {
+                    print!("Enter password for {}: ", role_type);
+                    io::stdout().flush()?;
+                    
+                    let mut password = String::new();
+                    io::stdin().read_line(&mut password)?;
+                    let password = password.trim().to_string();
+                    
+                    if password.is_empty() {
+                        println!("❌ Password cannot be empty");
+                        continue;
+                    }
+                    
+                    // Validate password using PasswordValidator
+                    match password_validator.validate(&password, username).await {
+                        Ok(_) => {
+                            println!("✓ Password validated successfully");
+                            return Ok(password);
+                        }
+                        Err(e) => {
+                            println!("❌ Password validation failed: {}", e);
+                            println!("Please try again or press Ctrl+C to cancel.");
+                            // Loop continues, prompting for password again
+                        }
+                    }
+                }
+            }
+            _ => {
+                println!("Invalid input. Please enter 'y'/'yes', 'n'/'no', or press Enter for default.");
+                // Loop continues, prompting for y/n choice again
+            }
         }
     }
 }
@@ -430,6 +475,7 @@ fn handle_credential_export(username: &str, password: &str, role_type: &str) -> 
 /// * `system_config_store` - System config store for owner status
 /// * `audit_store` - Audit store for logging
 /// * `secret_manager` - Secret manager for accessing password pepper
+/// * `password_validator` - Password validator (not used in non-interactive mode)
 /// 
 /// # Returns
 /// * `Ok(())` - Bootstrap completed successfully
@@ -440,6 +486,7 @@ pub async fn bootstrap_system_non_interactive(
     system_config_store: &SystemConfigStore,
     audit_store: &Arc<AuditStore>,
     secret_manager: &SecretManager,
+    _password_validator: &PasswordValidator,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::services::audit_logger;
     
@@ -541,6 +588,116 @@ pub async fn bootstrap_system_non_interactive(
     }
     
     result
+}
+
+/// Create an admin user with password_change_required=true
+/// 
+/// This is a helper function for bootstrap that creates admin users with the
+/// password_change_required flag set to true, forcing them to change their
+/// password on first login.
+/// 
+/// # Arguments
+/// * `credential_store` - Credential store for user management
+/// * `ctx` - Request context for audit logging
+/// * `username` - Username for the new admin user
+/// * `password_hash` - Pre-hashed password
+/// * `admin_flags` - Admin flags specifying which admin roles to assign
+/// 
+/// # Returns
+/// * `Ok(Model)` - The created user model with password_change_required=true
+/// * `Err(InternalError)` - User creation or privilege assignment failed
+async fn create_admin_user_with_password_change_required(
+    credential_store: &CredentialStore,
+    ctx: &RequestContext,
+    username: String,
+    password_hash: String,
+    admin_flags: AdminFlags,
+) -> Result<crate::types::db::user::Model, crate::errors::InternalError> {
+    use sea_orm::{EntityTrait, ColumnTrait, QueryFilter, ActiveModelTrait, Set};
+    use crate::types::db::user::{self, Entity as User, ActiveModel};
+    use crate::services::audit_logger;
+    use chrono::Utc;
+    
+    // Start transaction
+    let txn = credential_store.begin_transaction(ctx, "create_admin_with_password_change_required").await?;
+    
+    // Check if username already exists
+    let existing_user = User::find()
+        .filter(user::Column::Username.eq(&username))
+        .one(&txn)
+        .await
+        .map_err(|e| crate::errors::InternalError::database("check_username", e))?;
+    
+    if existing_user.is_some() {
+        return Err(crate::errors::InternalError::from(
+            crate::errors::internal::CredentialError::DuplicateUsername(username.clone())
+        ));
+    }
+    
+    // Generate UUID for user
+    let user_id = Uuid::new_v4().to_string();
+    
+    // Get current timestamp
+    let created_at = Utc::now().timestamp();
+    
+    // Create new user ActiveModel with password_change_required=true
+    let new_user = ActiveModel {
+        id: Set(user_id.clone()),
+        username: Set(username.clone()),
+        password_hash: Set(password_hash),
+        created_at: Set(created_at),
+        is_owner: Set(admin_flags.is_owner),
+        is_system_admin: Set(admin_flags.is_system_admin),
+        is_role_admin: Set(admin_flags.is_role_admin),
+        app_roles: Set(None),
+        password_change_required: Set(true), // Force password change on first login
+        updated_at: Set(created_at),
+    };
+    
+    // Insert into database
+    let user_model = new_user
+        .insert(&txn)
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("UNIQUE") {
+                crate::errors::InternalError::from(
+                    crate::errors::internal::CredentialError::DuplicateUsername(username.clone())
+                )
+            } else {
+                crate::errors::InternalError::database("insert_user", e)
+            }
+        })?;
+    
+    // Log user creation at point of action
+    if let Err(audit_err) = audit_logger::log_user_created(
+        &credential_store.audit_store,
+        ctx,
+        &user_id,
+        &username,
+    ).await {
+        tracing::error!("Failed to log user creation: {:?}", audit_err);
+    }
+    
+    // Log privilege assignment
+    if let Err(audit_err) = audit_logger::log_privileges_changed(
+        &credential_store.audit_store,
+        ctx,
+        &user_id,
+        false, // old is_owner
+        admin_flags.is_owner, // new is_owner
+        false, // old is_system_admin
+        admin_flags.is_system_admin, // new is_system_admin
+        false, // old is_role_admin
+        admin_flags.is_role_admin, // new is_role_admin
+    ).await {
+        tracing::error!("Failed to log privilege change: {:?}", audit_err);
+    }
+    
+    // Commit transaction
+    txn.commit().await
+        .map_err(|e| crate::errors::InternalError::transaction("commit_admin_user", e))?;
+    
+    Ok(user_model)
 }
 
 /// Hash a password using Argon2id with the password pepper

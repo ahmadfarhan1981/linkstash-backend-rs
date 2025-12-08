@@ -1,12 +1,13 @@
 #[cfg(test)]
 mod tests {
-    use crate::test::utils::setup_test_stores;
+    use crate::test::utils::{setup_test_stores, setup_test_password_validator};
     use crate::services::TokenService;
     use std::sync::Arc;
 
     #[tokio::test]
     async fn test_invalidate_all_tokens_deletes_all_user_tokens() {
         let (db, _audit_db, credential_store, audit_store) = setup_test_stores().await;
+        let password_validator = setup_test_password_validator().await;
         
         // Create token service
         let token_service = Arc::new(TokenService::new(
@@ -17,7 +18,7 @@ mod tests {
         
         // Add a user
         let user_id = credential_store
-            .add_user("testuser".to_string(), "password".to_string())
+            .add_user(&password_validator, "testuser".to_string(), "SecureTest-Pass-123456789".to_string())
             .await
             .expect("Failed to add user");
         
@@ -69,6 +70,7 @@ mod tests {
     #[tokio::test]
     async fn test_invalidate_all_tokens_doesnt_affect_other_users() {
         let (db, _audit_db, credential_store, audit_store) = setup_test_stores().await;
+        let password_validator = setup_test_password_validator().await;
         
         // Create token service
         let token_service = Arc::new(TokenService::new(
@@ -79,12 +81,12 @@ mod tests {
         
         // Add two users
         let user1_id = credential_store
-            .add_user("user1".to_string(), "password1".to_string())
+            .add_user(&password_validator, "user1".to_string(), "SecureTest-Pass-123456789".to_string())
             .await
             .expect("Failed to add user1");
         
         let user2_id = credential_store
-            .add_user("user2".to_string(), "password2".to_string())
+            .add_user(&password_validator, "user2".to_string(), "SecureTest-Pass-234567890".to_string())
             .await
             .expect("Failed to add user2");
         
@@ -135,10 +137,11 @@ mod tests {
     #[tokio::test]
     async fn test_invalidate_all_tokens_succeeds_when_user_has_no_tokens() {
         let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
+        let password_validator = setup_test_password_validator().await;
         
         // Add a user
         let user_id = credential_store
-            .add_user("testuser".to_string(), "password".to_string())
+            .add_user(&password_validator, "testuser".to_string(), "SecureTest-Pass-123456789".to_string())
             .await
             .expect("Failed to add user");
         
@@ -159,10 +162,11 @@ mod tests {
     #[tokio::test]
     async fn test_invalidate_all_tokens_creates_audit_log() {
         let (_db, audit_db, credential_store, _audit_store) = setup_test_stores().await;
+        let password_validator = setup_test_password_validator().await;
         
         // Add a user
         let user_id = credential_store
-            .add_user("testuser".to_string(), "password".to_string())
+            .add_user(&password_validator, "testuser".to_string(), "SecureTest-Pass-123456789".to_string())
             .await
             .expect("Failed to add user");
         

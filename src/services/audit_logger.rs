@@ -831,3 +831,27 @@ pub async fn log_password_validation_failed(
     
     store.write_event(event).await
 }
+
+/// Log password change requirement cleared
+///
+/// Records when the password_change_required flag is cleared for a user,
+/// typically after a successful password change.
+///
+/// # Arguments
+/// * `store` - Reference to the AuditStore
+/// * `ctx` - Request context containing actor information
+/// * `target_user_id` - ID of the user whose password change requirement was cleared
+pub async fn log_password_change_requirement_cleared(
+    store: &AuditStore,
+    ctx: &RequestContext,
+    target_user_id: String,
+) -> Result<(), InternalError> {
+    let mut event = AuditEvent::new(EventType::Custom("password_change_requirement_cleared".to_string()));
+    event.user_id = Some(ctx.actor_id.clone());
+    event.ip_address = ctx.ip_address.clone();
+    event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
+    event.data.insert("target_user_id".to_string(), json!(target_user_id));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
+    
+    store.write_event(event).await
+}

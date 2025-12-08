@@ -43,6 +43,7 @@ impl TokenService {
     /// * `is_system_admin` - System Admin role flag
     /// * `is_role_admin` - Role Admin role flag
     /// * `app_roles` - Application roles (list of role names)
+    /// * `password_change_required` - Password change required flag
     /// 
     /// # Returns
     /// * `Result<(String, String), InternalError>` - Tuple of (encoded JWT, JWT ID) or an error
@@ -54,6 +55,7 @@ impl TokenService {
         is_system_admin: bool,
         is_role_admin: bool,
         app_roles: Vec<String>,
+        password_change_required: bool,
     ) -> Result<(String, String), InternalError> {
         let now = Utc::now().timestamp();
         let expiration = now + (self.jwt_expiration_minutes * 60);
@@ -74,6 +76,7 @@ impl TokenService {
             is_system_admin,
             is_role_admin,
             app_roles,
+            password_change_required,
         };
         
         let token = encode(
@@ -262,7 +265,7 @@ mod tests {
         let user_id = Uuid::new_v4();
         let ctx = crate::types::internal::context::RequestContext::new();
         
-        let (token, _jwt_id) = token_manager.generate_jwt(&ctx, &user_id, false, false, false, vec![]).await.unwrap();
+        let (token, _jwt_id) = token_manager.generate_jwt(&ctx, &user_id, false, false, false, vec![], false).await.unwrap();
         
         let mut validation = Validation::new(Algorithm::HS256);
         validation.validate_exp = false;
@@ -380,6 +383,7 @@ mod tests {
             true,  // is_system_admin
             false, // is_role_admin
             vec!["editor".to_string(), "viewer".to_string()],
+            false, // password_change_required
         ).await.unwrap();
         
         let mut validation = Validation::new(Algorithm::HS256);
@@ -410,6 +414,7 @@ mod tests {
             false, // is_system_admin
             false, // is_role_admin
             vec![],
+            false, // password_change_required
         ).await.unwrap();
         
         let mut validation = Validation::new(Algorithm::HS256);
@@ -425,6 +430,54 @@ mod tests {
         assert_eq!(decoded.claims.is_system_admin, false);
         assert_eq!(decoded.claims.is_role_admin, false);
         assert_eq!(decoded.claims.app_roles.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_jwt_includes_password_change_required_flag() {
+        let token_manager = create_test_token_service().await;
+        let user_id = Uuid::new_v4();
+        let ctx = crate::types::internal::context::RequestContext::new();
+        
+        // Test with password_change_required = true
+        let (token_true, _jwt_id) = token_manager.generate_jwt(
+            &ctx,
+            &user_id,
+            false,
+            false,
+            false,
+            vec![],
+            true, // password_change_required
+        ).await.unwrap();
+        
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.validate_exp = false;
+        
+        let decoded_true = decode::<Claims>(
+            &token_true,
+            &DecodingKey::from_secret("test-secret-key-minimum-32-characters-long".as_bytes()),
+            &validation,
+        ).unwrap();
+        
+        assert_eq!(decoded_true.claims.password_change_required, true);
+        
+        // Test with password_change_required = false
+        let (token_false, _jwt_id) = token_manager.generate_jwt(
+            &ctx,
+            &user_id,
+            false,
+            false,
+            false,
+            vec![],
+            false, // password_change_required
+        ).await.unwrap();
+        
+        let decoded_false = decode::<Claims>(
+            &token_false,
+            &DecodingKey::from_secret("test-secret-key-minimum-32-characters-long".as_bytes()),
+            &validation,
+        ).unwrap();
+        
+        assert_eq!(decoded_false.claims.password_change_required, false);
     }
 }
 

@@ -57,7 +57,8 @@ impl AuthApi {
             .and_then(|h| h.strip_prefix("Bearer "))
             .map(|token| Bearer { token: token.to_string() });
         
-        let ctx = helpers::create_request_context(req, auth, &self.auth_service.token_service()).await;
+        // Login doesn't require password change check - extract context directly
+        let ctx = helpers::create_request_context(req, auth, &self.auth_service.token_service()).await.into_context();
         
         match self.auth_service
             .login(&ctx, body.username.clone(), body.password.clone())
@@ -85,8 +86,9 @@ impl AuthApi {
     /// Returns the authenticated user's ID and token expiration time.
     #[oai(path = "/whoami", method = "get", tag = "AuthTags::Authentication")]
     async fn whoami(&self, req: &Request, auth: BearerAuth) -> WhoAmIApiResponse {
-        // Create request context with authentication
-        let ctx = helpers::create_request_context(req, Some(auth.0), &self.auth_service.token_service()).await;
+        // Whoami should remain accessible even when password change is required
+        // Extract context directly without checking password_change_required
+        let ctx = helpers::create_request_context(req, Some(auth.0), &self.auth_service.token_service()).await.into_context();
         
         // Check if authenticated
         if !ctx.authenticated {
@@ -114,7 +116,15 @@ impl AuthApi {
             .and_then(|h| h.strip_prefix("Bearer "))
             .map(|token| Bearer { token: token.to_string() });
         
-        let ctx = helpers::create_request_context(req, auth, &self.auth_service.token_service()).await;
+        // Refresh should be blocked if password change is required
+        let ctx = match helpers::create_request_context(req, auth, &self.auth_service.token_service()).await.into_result() {
+            Ok(ctx) => ctx,
+            Err(auth_error) => {
+                return RefreshApiResponse::Unauthorized(Json(ErrorResponse {
+                    error: auth_error.to_string(),
+                }));
+            }
+        };
         
         match self.auth_service
             .refresh(&ctx, body.refresh_token.clone())
@@ -147,7 +157,8 @@ impl AuthApi {
             .and_then(|h| h.strip_prefix("Bearer "))
             .map(|token| Bearer { token: token.to_string() });
         
-        let ctx = helpers::create_request_context(req, auth, &self.auth_service.token_service()).await;
+        // Logout doesn't require password change check - extract context directly
+        let ctx = helpers::create_request_context(req, auth, &self.auth_service.token_service()).await.into_context();
         
         // Always return 200 to avoid leaking token validity information
         let _ = self.auth_service.logout(&ctx, body.refresh_token.clone()).await;
@@ -163,8 +174,9 @@ impl AuthApi {
     /// On success, all existing refresh tokens are invalidated and new tokens are issued.
     #[oai(path = "/change-password", method = "post", tag = "AuthTags::Authentication")]
     async fn change_password(&self, req: &Request, auth: BearerAuth, body: Json<ChangePasswordRequest>) -> ChangePasswordApiResponse {
-        // Create request context with authentication
-        let ctx = helpers::create_request_context(req, Some(auth.0), &self.auth_service.token_service()).await;
+        // Change password should remain accessible even when password change is required
+        // Extract context directly without checking password_change_required
+        let ctx = helpers::create_request_context(req, Some(auth.0), &self.auth_service.token_service()).await.into_context();
         
         // Check if authenticated
         if !ctx.authenticated {
@@ -279,7 +291,7 @@ mod tests {
         
         let request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
 
         let result = api.login(&req, request).await;
@@ -332,7 +344,7 @@ mod tests {
         
         let request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
 
         let result = api.login(&req, request).await;
@@ -372,7 +384,7 @@ mod tests {
         
         let request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
 
         let result = api.login(&req, request).await;
@@ -411,7 +423,7 @@ mod tests {
         // Login to get a valid JWT
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -467,6 +479,7 @@ mod tests {
             is_system_admin: false,
             is_role_admin: false,
             app_roles: vec![],
+            password_change_required: false,
         };
         
         let expired_token = encode(
@@ -496,7 +509,7 @@ mod tests {
         
         let request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
 
         let result = api.login(&req, request).await;
@@ -519,7 +532,7 @@ mod tests {
         
         let request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
 
         let result = api.login(&req, request).await;
@@ -561,7 +574,7 @@ mod tests {
         // Login to get tokens
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -603,6 +616,7 @@ mod tests {
     #[tokio::test]
     async fn test_refresh_with_expired_token_returns_401() {
         let (_db, _audit_db, auth_service, token_service, credential_store) = setup_test_db().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
         let api = AuthApi::new(auth_service.clone());
         
         // Create a mock request for testing
@@ -610,7 +624,7 @@ mod tests {
         
         // Add a user
         let user_id = credential_store
-            .add_user("expireduser".to_string(), "password".to_string())
+            .add_user(&password_validator, "expireduser".to_string(), "SecureTest-Pass-123456789".to_string())
             .await
             .expect("Failed to add user");
         
@@ -645,7 +659,7 @@ mod tests {
         // Login to get tokens
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -693,7 +707,7 @@ mod tests {
         // Login to get tokens
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -738,7 +752,7 @@ mod tests {
         // Login to get tokens
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -767,7 +781,7 @@ mod tests {
         // Login to get tokens
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -814,7 +828,7 @@ mod tests {
         // Login to get a valid JWT
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -845,7 +859,7 @@ mod tests {
         // Login to get tokens
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -873,6 +887,7 @@ mod tests {
     #[tokio::test]
     async fn test_logout_revokes_any_refresh_token() {
         let (db, _audit_db, auth_service, token_service, credential_store) = setup_test_db().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
         let api = AuthApi::new(auth_service.clone());
         
         // Create a mock request for testing
@@ -880,21 +895,21 @@ mod tests {
         
         // Create a second user
         credential_store
-            .add_user("user2".to_string(), "password2".to_string())
+            .add_user(&password_validator, "user2".to_string(), "SecureTest-Pass-234567890".to_string())
             .await
             .expect("Failed to create user2");
         
         // Login as testuser
         let login1_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let login1_response = unwrap_login_ok(api.login(&req, login1_request).await);
         
         // Login as user2
         let login2_request = Json(LoginRequest {
             username: "user2".to_string(),
-            password: "password2".to_string(),
+            password: "SecureTest-Pass-234567890".to_string(),
         });
         let login2_response = unwrap_login_ok(api.login(&req, login2_request).await);
         
@@ -940,7 +955,7 @@ mod tests {
         // Perform login
         let request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let result = api.login(&req, request).await;
         unwrap_login_ok(result);
@@ -1041,7 +1056,7 @@ mod tests {
         // First, login to get tokens
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -1120,6 +1135,7 @@ mod tests {
     #[tokio::test]
     async fn test_refresh_with_expired_token_creates_validation_failure_audit_trail() {
         let (_db, audit_db, auth_service, token_service, credential_store) = setup_test_db().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
         let api = AuthApi::new(auth_service.clone());
         
         // Create a mock request for testing
@@ -1127,7 +1143,7 @@ mod tests {
         
         // Add a user
         let user_id = credential_store
-            .add_user("expireduser".to_string(), "password".to_string())
+            .add_user(&password_validator, "expireduser".to_string(), "SecureTest-Pass-123456789".to_string())
             .await
             .expect("Failed to add user");
         
@@ -1186,7 +1202,7 @@ mod tests {
         // First, login to get tokens
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -1249,6 +1265,7 @@ mod tests {
             is_system_admin: false,
             is_role_admin: false,
             app_roles: vec![],
+            password_change_required: false,
         };
         
         let expired_token = encode(
@@ -1310,6 +1327,7 @@ mod tests {
             is_system_admin: false,
             is_role_admin: false,
             app_roles: vec![],
+            password_change_required: false,
         };
         
         // Sign with wrong secret (simulating tampering)
@@ -1361,7 +1379,7 @@ mod tests {
         // Login to get a valid JWT
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -1369,7 +1387,7 @@ mod tests {
         let bearer = Bearer { token: login_response.access_token.clone() };
         
         // Create request context with authentication using helpers
-        let ctx = helpers::create_request_context(&req, Some(bearer), &auth_service.token_service()).await;
+        let ctx = helpers::create_request_context(&req, Some(bearer), &auth_service.token_service()).await.into_context();
         
         // Verify context has API source
         assert_eq!(ctx.source, crate::types::internal::context::RequestSource::API);
@@ -1391,7 +1409,7 @@ mod tests {
         let req = poem::Request::builder().finish();
         
         // Create request context without authentication using helpers
-        let ctx = helpers::create_request_context(&req, None, &auth_service.token_service()).await;
+        let ctx = helpers::create_request_context(&req, None, &auth_service.token_service()).await.into_context();
         
         // Verify context has API source
         assert_eq!(ctx.source, crate::types::internal::context::RequestSource::API);
@@ -1410,7 +1428,7 @@ mod tests {
         let req = poem::Request::builder().finish();
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let first_login = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -1421,7 +1439,7 @@ mod tests {
         
         let second_login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         
         // This should succeed and the context should have captured the JWT
@@ -1447,7 +1465,7 @@ mod tests {
         let req = poem::Request::builder().finish();
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -1483,7 +1501,7 @@ mod tests {
         let req = poem::Request::builder().finish();
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         
         let login_response = api.login(&req, login_request).await;
@@ -1510,7 +1528,7 @@ mod tests {
         let req = poem::Request::builder().finish();
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let first_login = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -1531,7 +1549,7 @@ mod tests {
         
         let second_login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         
         let second_login = unwrap_login_ok(api.login(&req_with_auth, second_login_request).await);
@@ -1617,7 +1635,7 @@ mod tests {
         let req = poem::Request::builder().finish();
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
@@ -1700,7 +1718,7 @@ mod tests {
         let req = poem::Request::builder().finish();
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -1733,7 +1751,7 @@ mod tests {
         let req = poem::Request::builder().finish();
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -1812,7 +1830,7 @@ mod tests {
         let req = poem::Request::builder().finish();
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -1886,7 +1904,7 @@ mod tests {
         let req = poem::Request::builder().finish();
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -1957,7 +1975,7 @@ mod tests {
         let req = poem::Request::builder().finish();
         let login_request = Json(LoginRequest {
             username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            password: "TestSecure-Pass-12345-UUID".to_string(),
         });
         let login_response = unwrap_login_ok(api.login(&req, login_request).await);
         
@@ -2015,6 +2033,264 @@ mod tests {
         let data: serde_json::Value = serde_json::from_str(&revoke_event.data)
             .expect("Failed to parse audit data");
         assert_eq!(data["target_user_id"], jwt_claims.sub, "Target user should be the token owner");
+    }
+
+    // ========== Password Change Requirement Tests ==========
+
+    #[tokio::test]
+    async fn test_refresh_blocked_when_password_change_required() {
+        let (db, _audit_db, auth_service, token_service, credential_store) = setup_test_db().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
+        let api = AuthApi::new(auth_service.clone());
+        
+        // Create a user with password_change_required=true
+        let user_id = credential_store
+            .add_user(&password_validator, "pwchange_user".to_string(), "SecureTest-Pass-123456789".to_string())
+            .await
+            .expect("Failed to add user");
+        
+        // Manually set password_change_required=true
+        use crate::types::db::user::{Entity as User, ActiveModel as UserActiveModel, Column as UserColumn};
+        use sea_orm::{EntityTrait, Set, QueryFilter, ColumnTrait};
+        let user = User::find()
+            .filter(UserColumn::Id.eq(&user_id))
+            .one(&db)
+            .await
+            .expect("Failed to query user")
+            .expect("User not found");
+        
+        let mut user_active: UserActiveModel = user.into();
+        user_active.password_change_required = Set(true);
+        User::update(user_active)
+            .exec(&db)
+            .await
+            .expect("Failed to update user");
+        
+        // Generate JWT with password_change_required=true
+        let ctx = crate::types::internal::context::RequestContext::new();
+        let (jwt, _jwt_id) = token_service.generate_jwt(
+            &ctx,
+            &uuid::Uuid::parse_str(&user_id).unwrap(),
+            false,
+            false,
+            false,
+            vec![],
+            true, // password_change_required=true
+        ).await.unwrap();
+        
+        // Generate and store a refresh token
+        let refresh_token = token_service.generate_refresh_token();
+        let token_hash = token_service.hash_refresh_token(&refresh_token);
+        let expires_at = token_service.get_refresh_expiration();
+        credential_store.store_refresh_token_no_txn(
+            &ctx,
+            token_hash,
+            user_id.clone(),
+            expires_at,
+            "test-jwt-id".to_string(),
+        ).await.expect("Failed to store refresh token");
+        
+        // Try to refresh with password_change_required=true
+        // Provide the JWT in the Authorization header so the endpoint can check the flag
+        let req = poem::Request::builder()
+            .header("Authorization", format!("Bearer {}", jwt))
+            .finish();
+        let refresh_request = Json(RefreshRequest {
+            refresh_token: refresh_token.clone(),
+        });
+        
+        let result = api.refresh(&req, refresh_request).await;
+        
+        // Should be rejected with Unauthorized (403 mapped to 401 in this response type)
+        match result {
+            RefreshApiResponse::Unauthorized(json) => {
+                assert!(json.error.contains("Password change required") || json.error.contains("password"));
+            }
+            RefreshApiResponse::Ok(_) => {
+                panic!("Refresh should be blocked when password_change_required=true");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_whoami_allowed_when_password_change_required() {
+        let (_db, _audit_db, auth_service, token_service, credential_store) = setup_test_db().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
+        let api = AuthApi::new(auth_service.clone());
+        
+        // Create a user with password_change_required=true
+        let user_id = credential_store
+            .add_user(&password_validator, "pwchange_user2".to_string(), "SecureTest-Pass-234567890".to_string())
+            .await
+            .expect("Failed to add user");
+        
+        // Generate JWT with password_change_required=true
+        let ctx = crate::types::internal::context::RequestContext::new();
+        let (jwt, _jwt_id) = token_service.generate_jwt(
+            &ctx,
+            &uuid::Uuid::parse_str(&user_id).unwrap(),
+            false,
+            false,
+            false,
+            vec![],
+            true, // password_change_required=true
+        ).await.unwrap();
+        
+        // Try to call whoami with password_change_required=true
+        let req = poem::Request::builder().finish();
+        let auth = BearerAuth(Bearer { token: jwt });
+        
+        let result = api.whoami(&req, auth).await;
+        
+        // Should be allowed
+        match result {
+            WhoAmIApiResponse::Ok(json) => {
+                assert_eq!(json.user_id, user_id);
+            }
+            WhoAmIApiResponse::Unauthorized(_) => {
+                panic!("Whoami should be allowed when password_change_required=true");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_change_password_allowed_when_password_change_required() {
+        let (db, _audit_db, auth_service, token_service, credential_store) = setup_test_db().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
+        let api = AuthApi::new(auth_service.clone());
+        
+        // Create a user with password_change_required=true
+        let user_id = credential_store
+            .add_user(&password_validator, "pwchange_user3".to_string(), "SecureTest-Pass-345678901".to_string())
+            .await
+            .expect("Failed to add user");
+        
+        // Manually set password_change_required=true
+        use crate::types::db::user::{Entity as User, ActiveModel as UserActiveModel, Column as UserColumn};
+        use sea_orm::{EntityTrait, Set, QueryFilter, ColumnTrait};
+        let user = User::find()
+            .filter(UserColumn::Id.eq(&user_id))
+            .one(&db)
+            .await
+            .expect("Failed to query user")
+            .expect("User not found");
+        
+        let mut user_active: UserActiveModel = user.into();
+        user_active.password_change_required = Set(true);
+        User::update(user_active)
+            .exec(&db)
+            .await
+            .expect("Failed to update user");
+        
+        // Generate JWT with password_change_required=true
+        let ctx = crate::types::internal::context::RequestContext::new();
+        let (jwt, _jwt_id) = token_service.generate_jwt(
+            &ctx,
+            &uuid::Uuid::parse_str(&user_id).unwrap(),
+            false,
+            false,
+            false,
+            vec![],
+            true, // password_change_required=true
+        ).await.unwrap();
+        
+        // Try to change password with password_change_required=true
+        let req = poem::Request::builder().finish();
+        let auth = BearerAuth(Bearer { token: jwt });
+        let change_request = Json(ChangePasswordRequest {
+            old_password: "SecureTest-Pass-345678901".to_string(),
+            new_password: "NewSecureTest-Pass-456789012".to_string(),
+        });
+        
+        let result = api.change_password(&req, auth, change_request).await;
+        
+        // Should be allowed and succeed
+        match result {
+            ChangePasswordApiResponse::Ok(json) => {
+                assert_eq!(json.message, "Password changed successfully");
+                assert!(!json.access_token.is_empty());
+                assert!(!json.refresh_token.is_empty());
+            }
+            ChangePasswordApiResponse::Unauthorized(_) => {
+                panic!("Change password should be allowed when password_change_required=true");
+            }
+            ChangePasswordApiResponse::BadRequest(_) => {
+                panic!("Change password should succeed with valid passwords");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_refresh_allowed_after_password_change() {
+        let (db, _audit_db, auth_service, token_service, credential_store) = setup_test_db().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
+        let api = AuthApi::new(auth_service.clone());
+        
+        // Create a user with password_change_required=true
+        let user_id = credential_store
+            .add_user(&password_validator, "pwchange_user4".to_string(), "SecureTest-Pass-456789012".to_string())
+            .await
+            .expect("Failed to add user");
+        
+        // Manually set password_change_required=true
+        use crate::types::db::user::{Entity as User, ActiveModel as UserActiveModel, Column as UserColumn};
+        use sea_orm::{EntityTrait, Set, QueryFilter, ColumnTrait};
+        let user = User::find()
+            .filter(UserColumn::Id.eq(&user_id))
+            .one(&db)
+            .await
+            .expect("Failed to query user")
+            .expect("User not found");
+        
+        let mut user_active: UserActiveModel = user.into();
+        user_active.password_change_required = Set(true);
+        User::update(user_active)
+            .exec(&db)
+            .await
+            .expect("Failed to update user");
+        
+        // Generate JWT with password_change_required=true
+        let ctx = crate::types::internal::context::RequestContext::new();
+        let (jwt, _jwt_id) = token_service.generate_jwt(
+            &ctx,
+            &uuid::Uuid::parse_str(&user_id).unwrap(),
+            false,
+            false,
+            false,
+            vec![],
+            true, // password_change_required=true
+        ).await.unwrap();
+        
+        // Change password (this should clear password_change_required)
+        let req = poem::Request::builder().finish();
+        let auth = BearerAuth(Bearer { token: jwt });
+        let change_request = Json(ChangePasswordRequest {
+            old_password: "SecureTest-Pass-456789012".to_string(),
+            new_password: "NewSecureTest-Pass-567890123".to_string(),
+        });
+        
+        let change_result = api.change_password(&req, auth, change_request).await;
+        let new_tokens = match change_result {
+            ChangePasswordApiResponse::Ok(json) => json,
+            _ => panic!("Password change should succeed"),
+        };
+        
+        // Now try to refresh with the new tokens (password_change_required should be false)
+        let refresh_request = Json(RefreshRequest {
+            refresh_token: new_tokens.refresh_token.clone(),
+        });
+        
+        let refresh_result = api.refresh(&req, refresh_request).await;
+        
+        // Should be allowed now
+        match refresh_result {
+            RefreshApiResponse::Ok(json) => {
+                assert!(!json.access_token.is_empty());
+            }
+            RefreshApiResponse::Unauthorized(_) => {
+                panic!("Refresh should be allowed after password change");
+            }
+        }
     }
 }
 

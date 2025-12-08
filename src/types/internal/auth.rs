@@ -29,6 +29,9 @@ pub struct Claims {
     
     /// Application roles (list of role names)
     pub app_roles: Vec<String>,
+    
+    /// Password change required flag
+    pub password_change_required: bool,
 }
 
 /// Admin role flags for user creation and management

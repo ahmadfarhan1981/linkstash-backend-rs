@@ -6,6 +6,45 @@ use migration::{AuthMigrator, AuditMigrator, MigratorTrait};
 use crate::{services::{AuthService, TokenService, PasswordValidator}, stores::{AuditStore, CredentialStore, SystemConfigStore}, app_data::AppData};
 use std::sync::{Arc, Mutex};
 
+/// Creates a test password validator with in-memory stores
+/// 
+/// Returns a PasswordValidator configured with empty common password and HIBP cache stores.
+/// Useful for tests that need password validation but don't need full auth services.
+pub async fn setup_test_password_validator() -> Arc<PasswordValidator> {
+    // Create in-memory database for stores
+    let db = Database::connect("sqlite::memory:")
+        .await
+        .expect("Failed to create test database");
+    
+    AuthMigrator::up(&db, None)
+        .await
+        .expect("Failed to run auth migrations");
+    
+    // Create audit database (required for system_config_store)
+    let audit_db = Database::connect("sqlite::memory:")
+        .await
+        .expect("Failed to create audit database");
+    
+    AuditMigrator::up(&audit_db, None)
+        .await
+        .expect("Failed to run audit migrations");
+    
+    let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
+    
+    // Create stores needed for password validator
+    let common_password_store = Arc::new(crate::stores::CommonPasswordStore::new(db.clone()));
+    let system_config_store = Arc::new(SystemConfigStore::new(db.clone(), audit_store));
+    let hibp_cache_store = Arc::new(crate::stores::HibpCacheStore::new(
+        db.clone(),
+        system_config_store,
+    ));
+    
+    Arc::new(PasswordValidator::new(
+        common_password_store,
+        hibp_cache_store,
+    ))
+}
+
 /// Creates test databases and stores with standard configuration
 /// 
 /// Returns (auth_db, audit_db, credential_store, audit_store)
@@ -54,7 +93,7 @@ pub async fn setup_test_stores() -> (
 /// Creates a full auth test setup with all services configured
 /// 
 /// Returns (auth_db, audit_db, credential_store, audit_store, auth_service, token_service)
-/// with a test user "testuser"/"testpass" already created.
+/// with a test user "testuser"/"TestSecure-Pass-12345-UUID" already created.
 /// 
 /// Callers can discard what they don't need:
 /// ```rust
@@ -124,11 +163,13 @@ pub async fn setup_test_auth_services() -> (
     });
     
     // Create auth service using AppData
-    let auth_service = Arc::new(AuthService::new(app_data));
+    let auth_service = Arc::new(AuthService::new(app_data.clone()));
     
-    // Add test user
+    // Add test user (using password validator from app_data)
+    // Password must be at least 15 characters and not in HIBP database
+    // Using a UUID-based password to ensure it's unique and secure
     credential_store
-        .add_user("testuser".to_string(), "testpass".to_string())
+        .add_user(&app_data.password_validator, "testuser".to_string(), "TestSecure-Pass-12345-UUID".to_string())
         .await
         .expect("Failed to create test user");
     

@@ -648,53 +648,177 @@ impl AuthApi {
 
 #### Password Change Requirement Enforcement
 
-```rust
-// In src/api/helpers.rs or create_request_context
-async fn create_request_context(
-    &self,
-    req: &Request,
-    auth: Option<BearerAuth>,
-) -> RequestContext {
-    // ... existing JWT validation ...
-    
-    // After successful JWT validation, check password_change_required
-    if let Some(claims) = &ctx.claims {
-        if claims.password_change_required {
-            let path = req.uri().path();
-            let allowed_paths = ["/api/auth/change-password", "/api/auth/whoami"];
-            
-            if !allowed_paths.iter().any(|p| path.starts_with(p)) {
-                ctx.password_change_blocked = true;
-            }
-        }
-    }
-    
-    ctx
-}
+**Design Decision: Fail-Secure by Default with Context in Error**
 
-// In each protected endpoint:
-if ctx.password_change_blocked {
-    return ErrorResponse::PasswordChangeRequired;
-}
-```
+Instead of having endpoints check a flag, we make `create_request_context` return a `Result` where the error variant contains the `RequestContext`. This inverts the control flow:
+- **Most endpoints** use `?` operator and automatically bubble up the error (rejected by default)
+- **Allowed endpoints** extract the context from the error (opt-in)
 
-### 8. Error Handling
+This ensures:
+- New endpoints are secure by default (using `?` is natural, forgetting means compile error)
+- Impossible to accidentally allow access (must explicitly extract context from error)
+- Clear visibility of which endpoints bypass the check
+- No separate "unchecked" helper function needed
 
 ```rust
-// src/errors/auth.rs (extend existing AuthError)
+// In src/errors/auth.rs (extend existing AuthError)
 pub enum AuthError {
     // ... existing variants ...
     
     #[error("Password validation failed: {0}")]
     PasswordValidationFailed(String),
     
+    /// User must change password before accessing this endpoint
+    /// Contains the RequestContext so allowed endpoints can extract it
     #[error("Password change required. Please change your password at /auth/change-password")]
-    PasswordChangeRequired,
+    PasswordChangeRequired(RequestContext),
     
     #[error("Current password is incorrect")]
     IncorrectPassword,
 }
 ```
+
+```rust
+// In src/api/helpers.rs
+
+/// Create RequestContext and enforce password change requirement
+/// 
+/// Returns Err(AuthError::PasswordChangeRequired(ctx)) if user has password_change_required=true.
+/// The error contains the RequestContext so allowed endpoints can extract it.
+/// 
+/// Most endpoints should use `?` to automatically reject these users.
+/// Endpoints that should remain accessible (change-password, whoami) must explicitly
+/// extract the context from the error.
+/// 
+/// # Arguments
+/// * `req` - The HTTP request
+/// * `auth` - Optional Bearer token
+/// * `token_service` - TokenService for JWT validation
+/// 
+/// # Returns
+/// * `Ok(RequestContext)` - Context ready to use
+/// * `Err(AuthError::PasswordChangeRequired(ctx))` - User must change password first (context included)
+pub async fn create_request_context(
+    req: &Request,
+    auth: Option<Bearer>,
+    token_service: &Arc<TokenService>,
+) -> Result<RequestContext, AuthError> {
+    // Extract IP address
+    let ip_address = extract_ip_address(req);
+    
+    // Create base context
+    let mut ctx = RequestContext::new()
+        .with_ip_address(ip_address.unwrap_or_else(|| "unknown".to_string()));
+    
+    // If auth is provided, validate JWT and populate claims
+    if let Some(bearer) = auth {
+        match token_service.validate_jwt(&bearer.token).await {
+            Ok(claims) => {
+                ctx = ctx.with_auth(claims.clone()).with_actor_id(claims.sub.clone());
+                
+                // Check password change requirement AFTER successful JWT validation
+                if claims.password_change_required {
+                    return Err(AuthError::PasswordChangeRequired(ctx));
+                }
+            }
+            Err(_) => {
+                // JWT validation failed - context remains unauthenticated
+            }
+        }
+    }
+    
+    Ok(ctx)
+}
+```
+
+**Usage in endpoints:**
+
+```rust
+// MOST ENDPOINTS: Automatically reject with `?` operator (fail-secure by default)
+#[oai(path = "/refresh", method = "post")]
+async fn refresh_token(&self, req: &Request, body: Json<RefreshRequest>) -> Result<RefreshApiResponse, AuthError> {
+    // Using `?` automatically rejects users with password_change_required=true
+    let ctx = self.create_request_context(req, None).await?;
+    
+    // Continue with normal logic - only reaches here if password change not required
+    // ...
+}
+
+#[oai(path = "/admin/users", method = "get")]
+async fn list_users(&self, req: &Request, auth: BearerAuth) -> Result<ListUsersApiResponse, AuthError> {
+    // Using `?` automatically rejects users with password_change_required=true
+    let ctx = self.create_request_context(req, Some(auth)).await?;
+    
+    // Continue with normal logic
+    // ...
+}
+
+// ALLOWED ENDPOINTS: Extract context from error (opt-in)
+#[oai(path = "/change-password", method = "post")]
+async fn change_password(
+    &self,
+    req: &Request,
+    auth: BearerAuth,
+    body: Json<ChangePasswordRequest>,
+) -> ChangePasswordApiResponse {
+    // Extract context from PasswordChangeRequired error to allow access
+    let ctx = match self.create_request_context(req, Some(auth)).await {
+        Ok(ctx) => ctx,
+        Err(AuthError::PasswordChangeRequired(ctx)) => {
+            // This is expected and allowed for this endpoint
+            // Extract the context from the error
+            ctx
+        }
+        Err(e) => {
+            // Other errors (invalid JWT, etc.) should still fail
+            return ChangePasswordApiResponse::Unauthorized(Json(ErrorResponse {
+                error: e.to_string(),
+            }));
+        }
+    };
+    
+    if !ctx.authenticated {
+        return ChangePasswordApiResponse::Unauthorized(Json(ErrorResponse {
+            error: "Unauthenticated".to_string(),
+        }));
+    }
+    
+    // Continue with password change logic...
+}
+
+#[oai(path = "/whoami", method = "get")]
+async fn whoami(&self, req: &Request, auth: BearerAuth) -> WhoamiApiResponse {
+    // Extract context from PasswordChangeRequired error to allow access
+    let ctx = match self.create_request_context(req, Some(auth)).await {
+        Ok(ctx) => ctx,
+        Err(AuthError::PasswordChangeRequired(ctx)) => {
+            // This is expected and allowed - user needs to see their status
+            ctx
+        }
+        Err(e) => {
+            return WhoamiApiResponse::Unauthorized(Json(ErrorResponse {
+                error: e.to_string(),
+            }));
+        }
+    };
+    
+    // Return user info including password_change_required flag
+    // ...
+}
+```
+
+**Benefits:**
+- **Fail-secure by default**: Using `?` is the natural Rust pattern, automatically rejects
+- **Compile-time safety**: Forgetting to handle Result causes compile error
+- **No separate helper needed**: Context is embedded in the error, no `create_request_context_unchecked()`
+- **Impossible to accidentally allow**: Must explicitly extract context from error variant
+- **Clear intent**: Pattern matching makes it obvious which endpoints allow password-change-required users
+- **Auditable**: Easy to grep for `PasswordChangeRequired(ctx)` to find allowed endpoints
+- **Clean API**: Single function, no duplication
+
+### 8. Error Handling
+
+Error types are defined in section 7 (API Layer) above, integrated with the password change requirement enforcement pattern.
 
 ## Environment Configuration
 

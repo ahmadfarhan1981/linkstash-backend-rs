@@ -21,10 +21,10 @@ use errors::internal::CredentialError;
 /// Seed test user for development
 /// 
 /// Only runs in debug builds. Creates a test user with username "testuser"
-/// and password "testpass" for development and testing purposes.
+/// and password "TestSecure-Pass-12345-UUID" for development and testing purposes.
 #[cfg(debug_assertions)]
-async fn seed_test_user(credential_store: &CredentialStore) {
-    match credential_store.add_user("testuser".to_string(), "testpass".to_string()).await {
+async fn seed_test_user(app_data: &AppData) {
+    match app_data.credential_store.add_user(&app_data.password_validator, "testuser".to_string(), "TestSecure-Pass-12345-UUID".to_string()).await {
         Ok(user_id) => {
             tracing::info!("Test user created successfully with ID: {}", user_id);
         }
@@ -118,7 +118,7 @@ async fn main() -> Result<(), std::io::Error> {
     
     // Seed test user in debug mode
     #[cfg(debug_assertions)]
-    seed_test_user(&app_data.credential_store).await;
+    seed_test_user(&app_data).await;
     
     // Load server configuration from environment or use defaults
     let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());

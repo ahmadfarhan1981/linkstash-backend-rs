@@ -92,6 +92,7 @@ pub async fn execute_command(
                         &app_data.system_config_store,
                         &app_data.audit_store,
                         &app_data.secret_manager,
+                        &app_data.password_validator,
                     ).await?;
                 } else {
                     bootstrap::bootstrap_system(
@@ -99,6 +100,7 @@ pub async fn execute_command(
                         &app_data.system_config_store,
                         &app_data.audit_store,
                         &app_data.secret_manager,
+                        &app_data.password_validator,
                     ).await?;
                 }
             }
@@ -110,6 +112,7 @@ pub async fn execute_command(
                     &app_data.system_config_store,
                     &app_data.audit_store,
                     &app_data.secret_manager,
+                    &app_data.password_validator,
                 ).await?;
             }
         }

@@ -42,21 +42,22 @@ mod tests {
         
         // Generate a valid JWT
         let user_id = uuid::Uuid::new_v4();
-        let ctx = crate::types::internal::context::RequestContext::new()
+        let ctx_temp = crate::types::internal::context::RequestContext::new()
             .with_ip_address("127.0.0.1");
         let (jwt, _jwt_id) = token_service.generate_jwt(
-            &ctx,
+            &ctx_temp,
             &user_id,
             false,
             false,
             false,
             vec![],
+            false, // password_change_required
         ).await.unwrap();
         
         let req = Request::builder().finish();
         let bearer = Bearer { token: jwt };
         
-        let ctx = create_request_context(&req, Some(bearer), &token_service).await;
+        let ctx = create_request_context(&req, Some(bearer), &token_service).await.into_context();
         
         assert!(ctx.authenticated);
         assert!(ctx.claims.is_some());
@@ -71,7 +72,7 @@ mod tests {
         let req = Request::builder().finish();
         let bearer = Bearer { token: "invalid-jwt-token".to_string() };
         
-        let ctx = create_request_context(&req, Some(bearer), &token_service).await;
+        let ctx = create_request_context(&req, Some(bearer), &token_service).await.into_context();
         
         assert!(!ctx.authenticated);
         assert!(ctx.claims.is_none());
@@ -84,7 +85,7 @@ mod tests {
         
         let req = Request::builder().finish();
         
-        let ctx = create_request_context(&req, None, &token_service).await;
+        let ctx = create_request_context(&req, None, &token_service).await.into_context();
         
         assert!(!ctx.authenticated);
         assert!(ctx.claims.is_none());

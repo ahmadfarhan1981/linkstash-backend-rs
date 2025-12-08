@@ -16,7 +16,7 @@ use crate::types::internal::context::RequestContext;
 pub struct CredentialStore {
     db: DatabaseConnection,
     password_pepper: String,
-    audit_store: Arc<AuditStore>,
+    pub(crate) audit_store: Arc<AuditStore>,
 }
 
 impl CredentialStore {
@@ -209,14 +209,28 @@ impl CredentialStore {
 
     /// Add a new user to the database
     /// 
+    /// Validates the password using the provided PasswordValidator before hashing.
+    /// 
     /// # Arguments
+    /// * `password_validator` - The password validator to use for validation
     /// * `username` - The username for the new user
-    /// * `password` - The plaintext password to hash and store
+    /// * `password` - The plaintext password to validate, hash, and store
     /// 
     /// # Returns
     /// * `Ok(String)` - The user_id (UUID) of the created user
-    /// * `Err(AuthError)` - DuplicateUsername if username already exists, or InternalError
-    pub async fn add_user(&self, username: String, password: String) -> Result<String, InternalError> {
+    /// * `Err(InternalError)` - DuplicateUsername if username already exists, PasswordValidationFailed if password is invalid, or database error
+    pub async fn add_user(
+        &self,
+        password_validator: &crate::services::PasswordValidator,
+        username: String,
+        password: String,
+    ) -> Result<String, InternalError> {
+        // Validate password before proceeding
+        password_validator
+            .validate(&password, Some(&username))
+            .await
+            .map_err(|e| InternalError::from(CredentialError::PasswordValidationFailed(e.to_string())))?;
+
         // Check if username already exists
         let existing_user = User::find()
             .filter(user::Column::Username.eq(&username))
@@ -657,6 +671,28 @@ impl CredentialStore {
         }
     }
     
+    /// Internal helper to get user by ID from any connection
+    /// 
+    /// # Arguments
+    /// * `conn` - Database connection or transaction
+    /// * `user_id` - The user_id (UUID string) to fetch
+    /// 
+    /// # Returns
+    /// * `Ok(Model)` - The user model
+    /// * `Err(InternalError)` - User not found or database error
+    async fn get_user_by_id_internal(
+        &self,
+        conn: &impl sea_orm::ConnectionTrait,
+        user_id: &str,
+    ) -> Result<user::Model, InternalError> {
+        User::find()
+            .filter(user::Column::Id.eq(user_id))
+            .one(conn)
+            .await
+            .map_err(|e| InternalError::database("get_user_by_id", e))?
+            .ok_or_else(|| InternalError::from(CredentialError::UserNotFound(user_id.to_string())))
+    }
+
     /// Get user by ID
     /// 
     /// # Arguments
@@ -664,14 +700,26 @@ impl CredentialStore {
     /// 
     /// # Returns
     /// * `Ok(Model)` - The user model
-    /// * `Err(AuthError)` - User not found or database error
+    /// * `Err(InternalError)` - User not found or database error
     pub async fn get_user_by_id(&self, user_id: &str) -> Result<user::Model, InternalError> {
-        User::find()
-            .filter(user::Column::Id.eq(user_id))
-            .one(&self.db)
-            .await
-            .map_err(|e| InternalError::database("OPERATION", e))?
-            .ok_or_else(|| InternalError::from(CredentialError::UserNotFound(user_id.to_string())))
+        self.get_user_by_id_internal(&self.db, user_id).await
+    }
+
+    /// Get user by ID within a transaction
+    /// 
+    /// # Arguments
+    /// * `txn` - Database transaction
+    /// * `user_id` - The user_id (UUID string) to fetch
+    /// 
+    /// # Returns
+    /// * `Ok(Model)` - The user model
+    /// * `Err(InternalError)` - User not found or database error
+    pub async fn get_user_by_id_in_txn(
+        &self,
+        txn: &sea_orm::DatabaseTransaction,
+        user_id: &str,
+    ) -> Result<user::Model, InternalError> {
+        self.get_user_by_id_internal(txn, user_id).await
     }
 
     /// Get the owner account
@@ -797,6 +845,94 @@ impl CredentialStore {
         new_password: &str,
     ) -> Result<(), InternalError> {
         self.update_password(txn, ctx, user_id, new_password).await
+    }
+
+    /// Clear password change requirement flag (private implementation)
+    /// 
+    /// Sets password_change_required to false for a user.
+    /// Logs the change to audit database at point of action.
+    /// 
+    /// # Arguments
+    /// * `conn` - Database connection or transaction
+    /// * `ctx` - Request context containing actor information for audit logging
+    /// * `user_id` - The user_id (UUID string) whose flag to clear
+    /// 
+    /// # Returns
+    /// * `Ok(())` - Flag cleared successfully and audit logged
+    /// * `Err(InternalError)` - User not found or database error
+    async fn clear_password_change_required(
+        &self,
+        conn: &impl sea_orm::ConnectionTrait,
+        ctx: &RequestContext,
+        user_id: &str,
+    ) -> Result<(), InternalError> {
+        // Fetch user to verify existence
+        let user = User::find()
+            .filter(user::Column::Id.eq(user_id))
+            .one(conn)
+            .await
+            .map_err(|e| InternalError::database("get_user_for_clear_password_change_required", e))?
+            .ok_or_else(|| InternalError::Credential(CredentialError::UserNotFound(user_id.to_string())))?;
+
+        // Get current timestamp
+        let now = Utc::now().timestamp();
+
+        // Update password_change_required flag
+        let mut active_model: ActiveModel = user.into();
+        active_model.password_change_required = Set(false);
+        active_model.updated_at = Set(now);
+
+        active_model
+            .update(conn)
+            .await
+            .map_err(|e| InternalError::database("clear_password_change_required", e))?;
+
+        // Log password change requirement cleared at point of action
+        if let Err(audit_err) = audit_logger::log_password_change_requirement_cleared(
+            &self.audit_store,
+            ctx,
+            user_id.to_string(),
+        ).await {
+            tracing::error!("Failed to log password change requirement cleared: {:?}", audit_err);
+        }
+
+        Ok(())
+    }
+    
+    /// Clear password change requirement flag without transaction
+    /// 
+    /// # Arguments
+    /// * `ctx` - Request context containing actor information for audit logging
+    /// * `user_id` - The user_id (UUID string) whose flag to clear
+    /// 
+    /// # Returns
+    /// * `Ok(())` - Flag cleared successfully
+    /// * `Err(InternalError)` - User not found or database error
+    pub async fn clear_password_change_required_no_txn(
+        &self,
+        ctx: &RequestContext,
+        user_id: &str,
+    ) -> Result<(), InternalError> {
+        self.clear_password_change_required(&self.db, ctx, user_id).await
+    }
+    
+    /// Clear password change requirement flag within a transaction
+    /// 
+    /// # Arguments
+    /// * `txn` - Database transaction
+    /// * `ctx` - Request context containing actor information for audit logging
+    /// * `user_id` - The user_id (UUID string) whose flag to clear
+    /// 
+    /// # Returns
+    /// * `Ok(())` - Flag cleared successfully
+    /// * `Err(InternalError)` - User not found or database error
+    pub async fn clear_password_change_required_in_txn(
+        &self,
+        txn: &sea_orm::DatabaseTransaction,
+        ctx: &RequestContext,
+        user_id: &str,
+    ) -> Result<(), InternalError> {
+        self.clear_password_change_required(txn, ctx, user_id).await
     }
 
     /// Revoke all refresh tokens for a user (private implementation)
@@ -1031,9 +1167,10 @@ mod tests {
     #[tokio::test]
     async fn test_add_user_creates_user_in_database() {
         let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
         
         let result = credential_store
-            .add_user("newuser".to_string(), "password123".to_string())
+            .add_user(&password_validator, "newuser".to_string(), "SecureTest-Pass-123456789".to_string())
             .await;
         
         assert!(result.is_ok());
@@ -1044,15 +1181,16 @@ mod tests {
     #[tokio::test]
     async fn test_add_user_fails_with_duplicate_username() {
         let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
         
         let result1 = credential_store
-            .add_user("duplicate".to_string(), "password1".to_string())
+            .add_user(&password_validator, "duplicate".to_string(), "SecureTest-Pass-123456789".to_string())
             .await;
         
         assert!(result1.is_ok());
         
         let result2 = credential_store
-            .add_user("duplicate".to_string(), "password2".to_string())
+            .add_user(&password_validator, "duplicate".to_string(), "SecureTest-Pass-234567890".to_string())
             .await;
         
         assert!(result2.is_err());
@@ -1065,10 +1203,11 @@ mod tests {
     #[tokio::test]
     async fn test_store_refresh_token_saves_token_to_database() {
         let (db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
         
         // Add a user first
         let user_id = credential_store
-            .add_user("tokenuser".to_string(), "password".to_string())
+            .add_user(&password_validator, "tokenuser".to_string(), "SecureTest-Pass-123456789".to_string())
             .await
             .expect("Failed to add user");
         
@@ -1101,10 +1240,11 @@ mod tests {
     #[tokio::test]
     async fn test_stored_token_has_correct_expiration() {
         let (db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
         
         // Add a user
         let user_id = credential_store
-            .add_user("expiryuser".to_string(), "password".to_string())
+            .add_user(&password_validator, "expiryuser".to_string(), "SecureTest-Pass-123456789".to_string())
             .await
             .expect("Failed to add user");
         
@@ -1140,10 +1280,11 @@ mod tests {
     #[tokio::test]
     async fn test_validate_refresh_token_returns_correct_user_id() {
         let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
         
         // Add a user
         let user_id = credential_store
-            .add_user("useridtest".to_string(), "password".to_string())
+            .add_user(&password_validator, "useridtest".to_string(), "SecureTest-Pass-123456789".to_string())
             .await
             .expect("Failed to add user");
         
@@ -1186,10 +1327,11 @@ mod tests {
     #[tokio::test]
     async fn test_validate_refresh_token_fails_with_expired_token() {
         let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
         
         // Add a user
         let user_id = credential_store
-            .add_user("expireduser".to_string(), "password".to_string())
+            .add_user(&password_validator, "expireduser".to_string(), "SecureTest-Pass-123456789".to_string())
             .await
             .expect("Failed to add user");
         
@@ -1220,10 +1362,11 @@ mod tests {
     #[tokio::test]
     async fn test_revoke_refresh_token_removes_token_from_database() {
         let (db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
         
         // Add a user
         let user_id = credential_store
-            .add_user("revokeuser".to_string(), "password".to_string())
+            .add_user(&password_validator, "revokeuser".to_string(), "SecureTest-Pass-123456789".to_string())
             .await
             .expect("Failed to add user");
         
@@ -1268,15 +1411,16 @@ mod tests {
     async fn test_different_peppers_produce_different_hashes() {
         // Testing different peppers - need custom setup
         let (db, _audit_db, _credential_store, audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
         
-        let password = "same-password";
+        let password = "same-password-long-enough-15-chars";
         
         // Create first user with pepper1
         let pepper1 = "pepper-one-secret-key".to_string();
         let store1 = CredentialStore::new(db.clone(), pepper1, audit_store.clone());
         
         store1
-            .add_user("user1".to_string(), password.to_string())
+            .add_user(&password_validator, "user1".to_string(), password.to_string())
             .await
             .expect("Failed to add user1");
         
@@ -1285,7 +1429,7 @@ mod tests {
         let store2 = CredentialStore::new(db.clone(), pepper2, audit_store.clone());
         
         store2
-            .add_user("user2".to_string(), password.to_string())
+            .add_user(&password_validator, "user2".to_string(), password.to_string())
             .await
             .expect("Failed to add user2");
         
@@ -1358,10 +1502,11 @@ mod tests {
     #[tokio::test]
     async fn test_get_owner_returns_none_when_no_owner_exists() {
         let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
         
         // Add a regular user (not owner)
         credential_store
-            .add_user("regularuser".to_string(), "password".to_string())
+            .add_user(&password_validator, "regularuser".to_string(), "SecureTest-Pass-123456789".to_string())
             .await
             .expect("Failed to add user");
         
@@ -1375,10 +1520,11 @@ mod tests {
     #[tokio::test]
     async fn test_get_owner_returns_owner_when_exists() {
         let (db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
         
         // Add a regular user
         credential_store
-            .add_user("regularuser".to_string(), "password".to_string())
+            .add_user(&password_validator, "regularuser".to_string(), "SecureTest-Pass-123456789".to_string())
             .await
             .expect("Failed to add user");
         
@@ -1634,9 +1780,10 @@ mod tests {
     #[tokio::test]
     async fn test_set_privileges_updates_all_flags_atomically() {
         let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
         
         let user_id = credential_store
-            .add_user("testuser".to_string(), "password".to_string())
+            .add_user(&password_validator, "testuser".to_string(), "SecureTest-Pass-123456789".to_string())
             .await
             .expect("Failed to add user");
         
@@ -1660,9 +1807,10 @@ mod tests {
     #[tokio::test]
     async fn test_set_privileges_returns_old_privileges() {
         let (_db, _audit_db, credential_store, _audit_store) = setup_test_stores().await;
+        let password_validator = crate::test::utils::setup_test_password_validator().await;
         
         let user_id = credential_store
-            .add_user("testuser".to_string(), "password".to_string())
+            .add_user(&password_validator, "testuser".to_string(), "SecureTest-Pass-123456789".to_string())
             .await
             .expect("Failed to add user");
         

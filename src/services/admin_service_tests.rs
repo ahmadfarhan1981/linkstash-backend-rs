@@ -88,6 +88,7 @@ mod tests {
             is_system_admin,
             is_role_admin,
             app_roles: vec![],
+            password_change_required: false,
         };
         
         RequestContext::new()

@@ -42,12 +42,20 @@ impl AdminApi {
         auth: BearerAuth,
         body: Json<AssignRoleRequest>,
     ) -> poem::Result<Json<AssignRoleResponse>> {
-        // Create request context with JWT validation
-        let ctx = helpers::create_request_context(
+        // Admin endpoints should be blocked if password change is required
+        let ctx = match helpers::create_request_context(
             req,
             Some(auth.0),
             &self.admin_service.token_service(),
-        ).await;
+        ).await.into_result() {
+            Ok(ctx) => ctx,
+            Err(auth_error) => {
+                return Err(poem::Error::from_string(
+                    auth_error.to_string(),
+                    poem::http::StatusCode::FORBIDDEN,
+                ));
+            }
+        };
         
         // Check authentication
         if !ctx.authenticated {
@@ -86,12 +94,20 @@ impl AdminApi {
         auth: BearerAuth,
         body: Json<RemoveRoleRequest>,
     ) -> poem::Result<Json<RemoveRoleResponse>> {
-        // Create request context with JWT validation
-        let ctx = helpers::create_request_context(
+        // Admin endpoints should be blocked if password change is required
+        let ctx = match helpers::create_request_context(
             req,
             Some(auth.0),
             &self.admin_service.token_service(),
-        ).await;
+        ).await.into_result() {
+            Ok(ctx) => ctx,
+            Err(auth_error) => {
+                return Err(poem::Error::from_string(
+                    auth_error.to_string(),
+                    poem::http::StatusCode::FORBIDDEN,
+                ));
+            }
+        };
         
         // Check authentication
         if !ctx.authenticated {
@@ -130,12 +146,20 @@ impl AdminApi {
         auth: BearerAuth,
         body: Json<AssignRoleRequest>,
     ) -> poem::Result<Json<AssignRoleResponse>> {
-        // Create request context with JWT validation
-        let ctx = helpers::create_request_context(
+        // Admin endpoints should be blocked if password change is required
+        let ctx = match helpers::create_request_context(
             req,
             Some(auth.0),
             &self.admin_service.token_service(),
-        ).await;
+        ).await.into_result() {
+            Ok(ctx) => ctx,
+            Err(auth_error) => {
+                return Err(poem::Error::from_string(
+                    auth_error.to_string(),
+                    poem::http::StatusCode::FORBIDDEN,
+                ));
+            }
+        };
         
         // Check authentication
         if !ctx.authenticated {
@@ -174,12 +198,20 @@ impl AdminApi {
         auth: BearerAuth,
         body: Json<RemoveRoleRequest>,
     ) -> poem::Result<Json<RemoveRoleResponse>> {
-        // Create request context with JWT validation
-        let ctx = helpers::create_request_context(
+        // Admin endpoints should be blocked if password change is required
+        let ctx = match helpers::create_request_context(
             req,
             Some(auth.0),
             &self.admin_service.token_service(),
-        ).await;
+        ).await.into_result() {
+            Ok(ctx) => ctx,
+            Err(auth_error) => {
+                return Err(poem::Error::from_string(
+                    auth_error.to_string(),
+                    poem::http::StatusCode::FORBIDDEN,
+                ));
+            }
+        };
         
         // Check authentication
         if !ctx.authenticated {
@@ -216,12 +248,20 @@ impl AdminApi {
         req: &Request,
         auth: BearerAuth,
     ) -> poem::Result<Json<DeactivateResponse>> {
-        // Create request context with JWT validation
-        let ctx = helpers::create_request_context(
+        // Admin endpoints should be blocked if password change is required
+        let ctx = match helpers::create_request_context(
             req,
             Some(auth.0),
             &self.admin_service.token_service(),
-        ).await;
+        ).await.into_result() {
+            Ok(ctx) => ctx,
+            Err(auth_error) => {
+                return Err(poem::Error::from_string(
+                    auth_error.to_string(),
+                    poem::http::StatusCode::FORBIDDEN,
+                ));
+            }
+        };
         
         // Check authentication
         if !ctx.authenticated {
