@@ -806,3 +806,28 @@ pub async fn log_common_password_list_downloaded(
     
     store.write_event(event).await
 }
+
+/// Log password validation failure
+///
+/// Records when a password fails validation during password change or user creation.
+/// Never logs the actual password, only the validation failure reason.
+///
+/// # Arguments
+/// * `store` - Reference to the AuditStore
+/// * `ctx` - Request context containing actor information
+/// * `validation_reason` - Reason for validation failure (e.g., "too_short", "common_password", "compromised")
+pub async fn log_password_validation_failed(
+    store: &AuditStore,
+    ctx: &RequestContext,
+    validation_reason: String,
+) -> Result<(), InternalError> {
+    let mut event = AuditEvent::new(EventType::PasswordChangeFailed);
+    event.user_id = Some(ctx.actor_id.clone());
+    event.ip_address = ctx.ip_address.clone();
+    event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
+    event.data.insert("reason".to_string(), json!("validation_failed"));
+    event.data.insert("validation_reason".to_string(), json!(validation_reason));
+    event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
+    
+    store.write_event(event).await
+}

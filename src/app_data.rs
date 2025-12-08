@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 use crate::config::SecretManager;
-use crate::stores::{AuditStore, CredentialStore, SystemConfigStore, CommonPasswordStore};
+use crate::stores::{AuditStore, CredentialStore, SystemConfigStore, CommonPasswordStore, HibpCacheStore};
 use crate::services::{TokenService, PasswordValidator};
 use crate::errors::InternalError;
 
@@ -58,6 +58,9 @@ pub struct AppData {
     
     /// Common password store for checking against common password list
     pub common_password_store: Arc<CommonPasswordStore>,
+    
+    /// HIBP cache store for caching HaveIBeenPwned API responses
+    pub hibp_cache_store: Arc<HibpCacheStore>,
     
     /// Token service for JWT generation and validation
     pub token_service: Arc<TokenService>,
@@ -118,6 +121,11 @@ impl AppData {
         
         let common_password_store = Arc::new(CommonPasswordStore::new(db.clone()));
         
+        let hibp_cache_store = Arc::new(HibpCacheStore::new(
+            db.clone(),
+            system_config_store.clone(),
+        ));
+        
         tracing::debug!("Stores created");
         
         // 3. Create stateless services
@@ -128,8 +136,11 @@ impl AppData {
             audit_store.clone(),
         ));
         
-        // Initialize password validator with common password store
-        let password_validator = Arc::new(PasswordValidator::new(common_password_store.clone()));
+        // Initialize password validator with common password and HIBP cache stores
+        let password_validator = Arc::new(PasswordValidator::new(
+            common_password_store.clone(),
+            hibp_cache_store.clone(),
+        ));
         
         tracing::debug!("Stateless services created");
         
@@ -143,6 +154,7 @@ impl AppData {
             credential_store,
             system_config_store,
             common_password_store,
+            hibp_cache_store,
             token_service,
             password_validator,
         })

@@ -97,8 +97,17 @@ pub async fn setup_test_auth_services() -> (
     // Create common password store
     let common_password_store = Arc::new(crate::stores::CommonPasswordStore::new(auth_db.clone()));
     
+    // Create HIBP cache store
+    let hibp_cache_store = Arc::new(crate::stores::HibpCacheStore::new(
+        auth_db.clone(),
+        system_config_store.clone(),
+    ));
+    
     // Create password validator
-    let password_validator = Arc::new(PasswordValidator::new(common_password_store.clone()));
+    let password_validator = Arc::new(PasswordValidator::new(
+        common_password_store.clone(),
+        hibp_cache_store.clone(),
+    ));
     
     // Create mock AppData for testing
     let app_data = Arc::new(AppData {
@@ -109,6 +118,7 @@ pub async fn setup_test_auth_services() -> (
         credential_store: credential_store.clone(),
         system_config_store,
         common_password_store,
+        hibp_cache_store,
         token_service: token_service.clone(),
         password_validator,
     });

@@ -161,7 +161,7 @@
   - Test command: `cargo run -- download-passwords --url <URL>`
   - _Requirements: 5.2, 5.3, 5.4, 5.5_
 
-- [ ] 16. Implement HibpCacheStore
+- [x] 16. Implement HibpCacheStore
   - Create `src/stores/hibp_cache_store.rs`
   - Implement `get_cached_response()` with staleness check using system_config_store
   - Implement `store_response()` with upsert logic
@@ -169,7 +169,7 @@
   - Add HIBP cache staleness config to system_config table (30 days default) via manual insert or bootstrap
   - _Requirements: 6.1, 6.2, 6.5, 6.7_
 
-- [ ] 17. Enhance password validator with HIBP check
+- [x] 17. Enhance password validator with HIBP check
   - Update PasswordValidator constructor to accept Arc<HibpCacheStore>
   - Update AppData to create HibpCacheStore and pass to validator
   - Add HIBP validation to `validate()` method (after common password check)

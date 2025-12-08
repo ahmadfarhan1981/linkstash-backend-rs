@@ -321,9 +321,14 @@ mod change_password_tests {
     async fn test_change_password_success() {
         let (db, _audit_db, credential_store, audit_store) = setup_test_stores().await;
         
+        // Use secure passwords that won't be in HIBP (UUID-based)
+        use uuid::Uuid;
+        let old_password = format!("OldSecure-{}", Uuid::new_v4());
+        let new_password = format!("NewSecure-{}", Uuid::new_v4());
+        
         // Create a user
         let _user_id = credential_store
-            .add_user("testuser".to_string(), "oldpassword123456".to_string())
+            .add_user("testuser".to_string(), old_password.clone())
             .await
             .expect("Failed to create user");
         
@@ -335,11 +340,13 @@ mod change_password_tests {
         ));
         
         let common_password_store = Arc::new(crate::stores::CommonPasswordStore::new(db.clone()));
-        let password_validator = Arc::new(PasswordValidator::new(common_password_store));
+        let system_config_store = Arc::new(crate::stores::SystemConfigStore::new(db.clone(), audit_store.clone()));
+        let hibp_cache_store = Arc::new(crate::stores::HibpCacheStore::new(db.clone(), system_config_store.clone()));
+        let password_validator = Arc::new(PasswordValidator::new(common_password_store, hibp_cache_store));
         
         let auth_service = AuthService {
             credential_store: credential_store.clone(),
-            system_config_store: Arc::new(crate::stores::SystemConfigStore::new(db.clone(), audit_store.clone())),
+            system_config_store,
             token_service: token_service.clone(),
             audit_store: audit_store.clone(),
             password_validator,
@@ -348,7 +355,7 @@ mod change_password_tests {
         // Login to get authenticated context
         let mut ctx = RequestContext::new();
         let (access_token, _refresh_token) = auth_service
-            .login(&ctx, "testuser".to_string(), "oldpassword123456".to_string())
+            .login(&ctx, "testuser".to_string(), old_password.clone())
             .await
             .expect("Failed to login");
         
@@ -357,9 +364,9 @@ mod change_password_tests {
         ctx.authenticated = true;
         ctx.claims = Some(claims);
         
-        // Change password (new password must be 15+ chars)
+        // Change password
         let result = auth_service
-            .change_password(&ctx, "oldpassword123456", "newpassword123456")
+            .change_password(&ctx, &old_password, &new_password)
             .await;
         
         assert!(result.is_ok());
@@ -371,13 +378,13 @@ mod change_password_tests {
         
         // Verify can login with new password
         let login_result = auth_service
-            .login(&RequestContext::new(), "testuser".to_string(), "newpassword123456".to_string())
+            .login(&RequestContext::new(), "testuser".to_string(), new_password.clone())
             .await;
         assert!(login_result.is_ok());
         
         // Verify cannot login with old password
         let old_login_result = auth_service
-            .login(&RequestContext::new(), "testuser".to_string(), "oldpassword123456".to_string())
+            .login(&RequestContext::new(), "testuser".to_string(), old_password)
             .await;
         assert!(old_login_result.is_err());
     }
@@ -400,11 +407,13 @@ mod change_password_tests {
         ));
         
         let common_password_store = Arc::new(crate::stores::CommonPasswordStore::new(db.clone()));
-        let password_validator = Arc::new(PasswordValidator::new(common_password_store));
+        let system_config_store = Arc::new(crate::stores::SystemConfigStore::new(db.clone(), audit_store.clone()));
+        let hibp_cache_store = Arc::new(crate::stores::HibpCacheStore::new(db.clone(), system_config_store.clone()));
+        let password_validator = Arc::new(PasswordValidator::new(common_password_store, hibp_cache_store));
         
         let auth_service = AuthService {
             credential_store: credential_store.clone(),
-            system_config_store: Arc::new(crate::stores::SystemConfigStore::new(db.clone(), audit_store.clone())),
+            system_config_store,
             token_service: token_service.clone(),
             audit_store: audit_store.clone(),
             password_validator,
@@ -440,9 +449,14 @@ mod change_password_tests {
     async fn test_change_password_revokes_old_refresh_tokens() {
         let (db, _audit_db, credential_store, audit_store) = setup_test_stores().await;
         
+        // Use secure passwords that won't be in HIBP (UUID-based)
+        use uuid::Uuid;
+        let old_password = format!("OldSecure-{}", Uuid::new_v4());
+        let new_password = format!("NewSecure-{}", Uuid::new_v4());
+        
         // Create a user
         let _user_id = credential_store
-            .add_user("testuser".to_string(), "oldpassword123456".to_string())
+            .add_user("testuser".to_string(), old_password.clone())
             .await
             .expect("Failed to create user");
         
@@ -454,11 +468,13 @@ mod change_password_tests {
         ));
         
         let common_password_store = Arc::new(crate::stores::CommonPasswordStore::new(db.clone()));
-        let password_validator = Arc::new(PasswordValidator::new(common_password_store));
+        let system_config_store = Arc::new(crate::stores::SystemConfigStore::new(db.clone(), audit_store.clone()));
+        let hibp_cache_store = Arc::new(crate::stores::HibpCacheStore::new(db.clone(), system_config_store.clone()));
+        let password_validator = Arc::new(PasswordValidator::new(common_password_store, hibp_cache_store));
         
         let auth_service = AuthService {
             credential_store: credential_store.clone(),
-            system_config_store: Arc::new(crate::stores::SystemConfigStore::new(db.clone(), audit_store.clone())),
+            system_config_store,
             token_service: token_service.clone(),
             audit_store: audit_store.clone(),
             password_validator,
@@ -467,7 +483,7 @@ mod change_password_tests {
         // Login to get authenticated context and old refresh token
         let mut ctx = RequestContext::new();
         let (access_token, old_refresh_token) = auth_service
-            .login(&ctx, "testuser".to_string(), "oldpassword123456".to_string())
+            .login(&ctx, "testuser".to_string(), old_password.clone())
             .await
             .expect("Failed to login");
         
@@ -478,7 +494,7 @@ mod change_password_tests {
         
         // Change password
         let result = auth_service
-            .change_password(&ctx, "oldpassword123456", "newpassword123456")
+            .change_password(&ctx, &old_password, &new_password)
             .await;
         
         assert!(result.is_ok());

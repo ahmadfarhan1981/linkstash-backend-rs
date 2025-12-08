@@ -1,36 +1,43 @@
 use rand::Rng;
 use uuid::Uuid;
 use std::sync::Arc;
-use crate::stores::CommonPasswordStore;
+use sha1::{Sha1, Digest};
+use crate::stores::{CommonPasswordStore, HibpCacheStore};
 
 /// Password validator service that enforces password policies
 /// 
 /// Implements multiple validation layers:
 /// - Length validation (15-128 characters)
 /// - Common password detection (via database lookup)
+/// - Compromised password detection (via HaveIBeenPwned with k-anonymity)
 /// 
-/// Future enhancements will add username checks and compromised password
-/// checks via HaveIBeenPwned.
+/// Future enhancements will add username checks.
 pub struct PasswordValidator {
     min_length: usize,
     max_length: usize,
     common_password_store: Arc<CommonPasswordStore>,
+    hibp_cache_store: Arc<HibpCacheStore>,
 }
 
 impl PasswordValidator {
-    /// Create a new password validator with common password store
+    /// Create a new password validator with common password and HIBP cache stores
     /// 
     /// # Arguments
     /// * `common_password_store` - Store for checking against common password list
+    /// * `hibp_cache_store` - Store for caching HaveIBeenPwned API responses
     /// 
     /// # Returns
-    /// PasswordValidator configured with 15-128 character length requirements
-    /// and common password detection
-    pub fn new(common_password_store: Arc<CommonPasswordStore>) -> Self {
+    /// PasswordValidator configured with 15-128 character length requirements,
+    /// common password detection, and compromised password detection via HIBP
+    pub fn new(
+        common_password_store: Arc<CommonPasswordStore>,
+        hibp_cache_store: Arc<HibpCacheStore>,
+    ) -> Self {
         Self {
             min_length: 15,
             max_length: 128,
             common_password_store,
+            hibp_cache_store,
         }
     }
 
@@ -39,13 +46,13 @@ impl PasswordValidator {
     /// Validates in order (fail fast):
     /// 1. Length (15-128 characters)
     /// 2. Common password check (database lookup)
+    /// 3. Compromised password check (HaveIBeenPwned with k-anonymity)
     /// 
-    /// Future versions will add username substring checks and compromised
-    /// password checks via HaveIBeenPwned.
+    /// Future versions will add username substring checks.
     /// 
     /// # Arguments
     /// * `password` - The password to validate
-    /// * `username` - Optional username for context-specific validation (not used yet)
+    /// * `_username` - Optional username for context-specific validation (not used yet)
     /// 
     /// # Returns
     /// * `Ok(())` - Password passes all validation rules
@@ -70,7 +77,93 @@ impl PasswordValidator {
             return Err(PasswordValidationError::CommonPassword);
         }
 
+        // 3. HIBP check (graceful degradation on API failure)
+        match self.check_hibp(password).await {
+            Ok(true) => return Err(PasswordValidationError::CompromisedPassword),
+            Ok(false) => {},
+            Err(e) => {
+                // Log warning but allow password if API fails
+                tracing::warn!("HIBP check failed, allowing password: {}", e);
+            }
+        }
+
         Ok(())
+    }
+
+    /// Check if password has been compromised using HaveIBeenPwned API
+    /// 
+    /// Uses k-anonymity model by only sending the first 5 characters of the SHA-1 hash
+    /// to the HIBP API. Checks cache first to minimize API calls.
+    /// 
+    /// # Arguments
+    /// * `password` - The password to check
+    /// 
+    /// # Returns
+    /// * `Ok(true)` - Password found in HIBP database (compromised)
+    /// * `Ok(false)` - Password not found in HIBP database (safe)
+    /// * `Err(PasswordValidationError)` - API or network error
+    async fn check_hibp(&self, password: &str) -> Result<bool, PasswordValidationError> {
+        // Compute SHA-1 hash of password
+        let mut hasher = Sha1::new();
+        hasher.update(password.as_bytes());
+        let hash = format!("{:X}", hasher.finalize());
+
+        let prefix = &hash[..5];
+        let suffix = &hash[5..];
+
+        // Check cache first
+        if let Some(cached_data) = self.hibp_cache_store
+            .get_cached_response(prefix)
+            .await
+            .map_err(|e| PasswordValidationError::DatabaseError(e.to_string()))? 
+        {
+            return Ok(cached_data.contains(suffix));
+        }
+
+        // Fetch from API if not cached
+        let response = self.fetch_hibp_api(prefix).await?;
+        
+        // Store in cache
+        self.hibp_cache_store
+            .store_response(prefix, &response)
+            .await
+            .map_err(|e| PasswordValidationError::DatabaseError(e.to_string()))?;
+
+        Ok(response.contains(suffix))
+    }
+
+    /// Fetch hash suffixes from HaveIBeenPwned API
+    /// 
+    /// Uses the k-anonymity model by only sending the 5-character hash prefix.
+    /// 
+    /// # Arguments
+    /// * `prefix` - The 5-character SHA-1 hash prefix
+    /// 
+    /// # Returns
+    /// * `Ok(response)` - API response containing hash suffixes and counts
+    /// * `Err(PasswordValidationError)` - Network or API error
+    async fn fetch_hibp_api(&self, prefix: &str) -> Result<String, PasswordValidationError> {
+        let url = format!("https://api.pwnedpasswords.com/range/{}", prefix);
+        let client = reqwest::Client::new();
+
+        let response = client
+            .get(&url)
+            .header("User-Agent", "Linkstash-Auth")
+            .send()
+            .await
+            .map_err(|e| PasswordValidationError::NetworkError(e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(PasswordValidationError::ApiError(format!(
+                "HIBP API returned status: {}",
+                response.status()
+            )));
+        }
+
+        response
+            .text()
+            .await
+            .map_err(|e| PasswordValidationError::NetworkError(e.to_string()))
     }
 
     /// Generate a cryptographically secure random password
@@ -110,6 +203,10 @@ impl PasswordValidator {
 
 
 
+#[cfg(test)]
+#[path = "password_validator_test.rs"]
+mod password_validator_test;
+
 /// Errors that can occur during password validation
 #[derive(Debug, thiserror::Error)]
 pub enum PasswordValidationError {
@@ -136,4 +233,12 @@ pub enum PasswordValidationError {
     /// Database error during validation
     #[error("Database error: {0}")]
     DatabaseError(String),
+
+    /// Network error during HIBP API call
+    #[error("Network error: {0}")]
+    NetworkError(String),
+
+    /// HIBP API error
+    #[error("API error: {0}")]
+    ApiError(String),
 }
