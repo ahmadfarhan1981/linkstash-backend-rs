@@ -217,13 +217,7 @@
   - Test bootstrap flow with both auto-generated and manual passwords
   - _Requirements: 3.3, 4.3_
 
-- [ ] 24. Implement password change requirement enforcement (context in error)
-
-
-
-
-
-
+- [x] 24. Implement password change requirement enforcement (context in error)
   - Add PasswordChangeRequired(RequestContext) variant to AuthError enum with 403 status code (error contains the context)
   - Update `create_request_context()` in `src/api/helpers.rs` to return `Result<RequestContext, AuthError>` instead of `RequestContext`
   - Add check after successful JWT validation: if `claims.password_change_required` is true, return `Err(AuthError::PasswordChangeRequired(ctx))`
@@ -246,7 +240,12 @@
   - Check audit logs contain all expected events
   - _Requirements: All_
 
-- [ ] 26. Create password management documentation
+- [x] 26. Create password management documentation
+
+
+
+
+
   - Create `docs/password-management.md`
   - Document password policy (15-128 chars, common/compromised checks, username check)
   - Document password change flow and API usage
