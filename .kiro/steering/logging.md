@@ -78,13 +78,17 @@ With actor/target separation, you can query:
 ```
 API Layer (auth.rs)
   ↓ calls
-Service Layer (auth_service.rs)
+Coordinator Layer (auth_coordinator.rs)
+  ↓ calls
+Provider Layer (token_provider.rs, audit_logger_provider.rs)
   ↓ calls
 Store Layer (credential_store.rs)
   ↓ DB write fails here
   ✓ Store logs the failure (with full context)
   ↓ returns error
-Service Layer
+Provider Layer
+  ↓ bubbles error up (may add additional logging)
+Coordinator Layer
   ↓ bubbles error up (may add additional logging)
 API Layer
   ↓ returns error response (may add additional logging)
@@ -148,12 +152,12 @@ let ctx = RequestContext::for_system("token_cleanup");
 let ctx = self.create_request_context(req, Some(auth)).await;
 
 // Pass context through all layers
-let result = auth_service.login(&ctx, credentials).await?;
+let result = auth_coordinator.login(&ctx, credentials).await?;
   ↓
 let user = credential_store.verify_credentials(&ctx, username, password).await?;
   ↓
 // Store logs with full context - actor_id extracted automatically
-audit::log_login_success(&audit_store, &ctx, user.id).await?;
+audit_logger_provider.log_login_success(&ctx, user.id).await?;
 ```
 
 ### Benefits
@@ -183,7 +187,7 @@ tracing::error!("Failed to connect to database: {}", err);
 - For developers and operators
 - Not for compliance
 
-### Audit Logs (audit_logger service)
+### Audit Logs (AuditLoggerProvider)
 
 Use for security-relevant events:
 
@@ -246,31 +250,47 @@ audit::log_jwt_tampered(&audit_store, &ctx, full_jwt, "invalid_signature").await
 
 **Responsibilities:**
 - Create RequestContext using `create_request_context(req, auth)` helper
-- Pass context to service layer
+- Pass context to coordinator layer
 - MAY log high-level request/response info (application logs)
 - MAY log API-specific audit events (rate limiting, etc.)
 
 **DO NOT:**
 - Manually extract actor_id, ip_address, jwt_id (helper does this)
-- Call audit logging directly (let store layer handle it)
+- Call coordinators or providers directly (use coordinators only)
+- Call audit logging directly (let provider/store layers handle it)
 
-### Service Layer (services/*)
+### Coordinator Layer (coordinators/*)
 
 **Responsibilities:**
 - Receive RequestContext from API
-- Pass context to stores unchanged
-- Orchestrate business logic
+- Pass context to providers and stores unchanged
+- Orchestrate workflows by composing provider operations
+- MAY log coordination events (application logs)
+
+**DO NOT:**
+- Modify RequestContext
+- Skip passing context to providers/stores
+- Contain business logic (pure orchestration only)
+- Call other coordinators
+
+### Provider Layer (providers/*)
+
+**Responsibilities:**
+- Receive RequestContext from coordinators
+- Pass context to stores and other providers
+- Contain business logic and domain operations
 - MAY log business logic events (application logs)
-- MAY log service-specific audit events
+- MAY perform audit logging through AuditLoggerProvider
 
 **DO NOT:**
 - Modify RequestContext
 - Skip passing context to stores
+- Call coordinators (upward calls prohibited)
 
 ### Store Layer (stores/*)
 
 **Responsibilities:**
-- Receive RequestContext from service
+- Receive RequestContext from coordinator or provider
 - MUST log data access events (audit logs) at point of action
 - MUST log database errors (application logs)
 - Pass RequestContext to audit logging functions
@@ -347,16 +367,16 @@ audit::log_event(&audit_store, "unknown").await?;
 
 ### Available Audit Functions
 
-See `src/services/audit_logger.rs` for complete list:
-- `log_login_success(store, ctx, target_user_id)`
-- `log_login_failure(store, ctx, reason, username)`
-- `log_jwt_issued(store, ctx, target_user_id, jwt_id, expiration)`
-- `log_jwt_validation_failure(store, ctx, reason)`
-- `log_refresh_token_issued(store, ctx, target_user_id, jwt_id, token_id)`
-- `log_refresh_token_revoked(store, ctx, target_user_id, token_id)`
+See `src/providers/audit_logger_provider.rs` for complete list:
+- `log_login_success(ctx, target_user_id)`
+- `log_login_failure(ctx, reason, username)`
+- `log_jwt_issued(ctx, target_user_id, jwt_id, expiration)`
+- `log_jwt_validation_failure(ctx, reason)`
+- `log_refresh_token_issued(ctx, target_user_id, jwt_id, token_id)`
+- `log_refresh_token_revoked(ctx, target_user_id, token_id)`
 - And more...
 
-All follow the pattern: `(store, ctx, target_params...)`
+All follow the pattern: `(ctx, target_params...)` - the AuditLoggerProvider handles the audit store internally
 
 ### Creating RequestContext
 

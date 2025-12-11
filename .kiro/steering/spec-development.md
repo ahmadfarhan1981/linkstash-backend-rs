@@ -17,7 +17,7 @@ Build features **incrementally** where each task delivers a working, testable pi
 3. **Keep the system working** - Each task should leave the application in a runnable state
 4. **Verify as you go** - Verify each task's output works before moving forward
 
-**Key distinction:** "Working early" means **user-facing features** (API endpoints, CLI commands), not internal components (validators, stores, services). Internal components can be built more completely before integration if it reduces rework.
+**Key distinction:** "Working early" means **user-facing features** (API endpoints, CLI commands), not internal components (validators, stores, coordinators, providers). Internal components can be built more completely before integration if it reduces rework.
 
 ### Example: Password Change Feature with Multiple Validation Types
 
@@ -25,7 +25,7 @@ Build features **incrementally** where each task delivers a working, testable pi
 ```
 Task 1: Implement complete validator (length + common passwords + HIBP + username check)
 Task 2: Implement all stores (CommonPasswordStore + HibpCacheStore)
-Task 3: Implement service layer
+Task 3: Implement coordinator and provider layers
 Task 4: Implement API layer
 Task 5: Test everything
 ```
@@ -35,7 +35,7 @@ Task 5: Test everything
 Task 1: Database migrations (all tables - cheap and stable)
 Task 2: Database entities
 Task 3: Implement basic validator (length check only)
-Task 4: Implement password change service using basic validator
+Task 4: Implement password change coordinator and providers using basic validator
 Task 5: Implement password change API endpoint (users can change passwords!)
 Task 6: Add CommonPasswordStore
 Task 7: Enhance validator to check common passwords
@@ -46,7 +46,7 @@ Task 9: Enhance validator to check HIBP
 **Benefits:**
 - **User-facing feature (password change endpoint) works by Task 5** - even with basic validation
 - Each enhancement is testable through the user-facing feature
-- Early feedback on the complete flow (API → Service → Store → Database)
+- Early feedback on the complete flow (API → Coordinator → Provider → Store → Database)
 - Acceptable rework trade-off for faster user value
 
 **Key insight:** The validator is an internal component. It's okay to build it incrementally, but the priority is getting the **user-facing password change endpoint** working quickly.
@@ -72,7 +72,7 @@ Task 9: Enhance validator to check HIBP
    **Build incrementally:**
    - Validation logic - Easy to add rules without changing signatures
    - Business logic - Can enhance without breaking existing code
-   - Store/Service methods - Can add new methods without affecting existing ones
+   - Store/Coordinator/Provider methods - Can add new methods without affecting existing ones
    - API endpoints - Adding new endpoints doesn't affect existing ones
    
    **Rationale:** Database migrations and struct changes ripple through multiple layers. Cheaper to define the complete structure once and use it incrementally.
@@ -84,7 +84,7 @@ Task 9: Enhance validator to check HIBP
 
 **Example ordering:**
 ```
-✅ Good: Database/types/errors → Minimal logic → Service → API endpoint (user feature!) → Enhance logic
+✅ Good: Database/types/errors → Minimal logic → Coordinator/Provider → API endpoint (user feature!) → Enhance logic
 ❌ Bad: Complete all components before delivering any user-facing feature
 ```
 
@@ -93,7 +93,8 @@ Task 9: Enhance validator to check HIBP
 **Each task should produce a verifiable work product:**
 
 - A store implementation can be a task (verifiable via manual testing or existing tests)
-- A service method can be a task (verifiable via service layer)
+- A coordinator method can be a task (verifiable via coordinator layer)
+- A provider method can be a task (verifiable via provider layer)
 - An API endpoint can be a task (verifiable via HTTP calls)
 - An enhancement to existing code can be a task (verifiable by checking new behavior)
 
@@ -113,8 +114,9 @@ Task 11: Test everything
 
 ❌ **Don't order tasks backwards (consumers before dependencies):**
 ```
-Task 1: API endpoint that calls non-existent service
-Task 2: Service that calls non-existent store
+Task 1: API endpoint that calls non-existent coordinator
+Task 2: Coordinator that calls non-existent provider
+Task 3: Provider that calls non-existent store
 Task 3: Store implementation
 ```
 
@@ -135,7 +137,7 @@ DO verify your implementation:
 - Run `cargo build` - ensure compilation
 - Run `cargo test --lib` - ensure existing tests pass
 - For API endpoints: Test via curl/Swagger after implementation
-- For stores/services: Verify code compiles and existing tests pass
+- For stores/coordinators/providers: Verify code compiles and existing tests pass
 
 Exception: If spec design includes property-based testing requirements, implement those tests.
 

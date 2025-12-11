@@ -2,7 +2,7 @@
 
 ## Overview
 
-Every API endpoint MUST create a `RequestContext` at the beginning of the request using the `create_request_context` helper function. This context flows through all layers (API → Service → Store) carrying request metadata and authentication state.
+Every API endpoint MUST create a `RequestContext` at the beginning of the request using the `create_request_context` helper function. This context flows through all layers (API → Coordinator → Provider → Store) carrying request metadata and authentication state.
 
 **For detailed explanation of concepts and benefits, see `docs/request-context.md`**
 
@@ -48,15 +48,20 @@ Pass `None` for endpoints that don't require authentication:
 
 ### Passing Context Through Layers
 
-The context MUST be passed to service and store layers:
+The context MUST be passed to coordinator, provider, and store layers:
 
 ```rust
 // API layer
 let ctx = self.create_request_context(req, Some(auth)).await;
-self.service.do_something(&ctx, other_params).await
+self.coordinator.do_something(&ctx, other_params).await
 
-// Service layer
+// Coordinator layer
 pub async fn do_something(&self, ctx: &RequestContext, ...) -> Result<...> {
+    self.provider.perform_work(ctx, data).await
+}
+
+// Provider layer
+pub async fn perform_work(&self, ctx: &RequestContext, ...) -> Result<...> {
     self.store.write_data(ctx, data).await
 }
 
@@ -94,7 +99,7 @@ let expires_at = claims.exp;
 
 1. **ALWAYS** create context first in every endpoint
 2. **NEVER** validate JWT manually - use `ctx.authenticated` flag
-3. **ALWAYS** pass context to service and store layers
+3. **ALWAYS** pass context to coordinator, provider, and store layers
 4. **NEVER** call `validate_jwt` again after creating context
 5. **ALWAYS** log at point of action using context
 

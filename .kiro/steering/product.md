@@ -82,6 +82,6 @@ An authentication and identity management service evolving toward a self-hostabl
 - Poem web framework + poem-openapi (auto-generated Swagger)
 - SeaORM + SQLite
 - JWT (HS256), Argon2id password hashing
-- Layer-based architecture (API → Service → Store)
+- Layer-based architecture (API → Coordinator → Provider → Store)
 
 See tech.md and structure.md for detailed conventions.

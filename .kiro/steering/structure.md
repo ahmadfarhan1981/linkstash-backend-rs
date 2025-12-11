@@ -15,7 +15,8 @@ src/
 ├── api/                       # HTTP endpoints layer
 │   ├── mod.rs                 # Public exports
 │   ├── health.rs              # Health check endpoints
-│   └── auth.rs                # Authentication endpoints
+│   ├── auth.rs                # Authentication endpoints
+│   └── admin.rs               # Admin management endpoints
 │
 ├── types/                     # All data structures
 │   ├── mod.rs
@@ -33,18 +34,45 @@ src/
 │       ├── mod.rs
 │       └── auth.rs            # Claims (JWT payload)
 │
-├── services/                  # Business logic layer
+├── coordinators/              # Workflow coordination layer
 │   ├── mod.rs
-│   ├── auth_service.rs        # Auth orchestration (login/refresh flows)
-│   └── token_service.rs       # JWT generation/validation
+│   ├── auth_coordinator.rs    # Auth workflow orchestration (login/refresh flows)
+│   └── admin_coordinator.rs   # Admin workflow orchestration (role management)
+│
+├── providers/                 # Business logic and work provider layer
+│   ├── mod.rs
+│   ├── token_provider.rs      # JWT generation/validation
+│   ├── password_validator_provider.rs  # Password validation and HIBP integration
+│   ├── crypto_provider.rs     # Cryptographic operations
+│   └── audit_logger_provider.rs  # Audit logging operations
 │
 ├── stores/                    # Data access layer (Repository pattern)
 │   ├── mod.rs
-│   └── credential_store.rs    # User credential DB operations
+│   ├── credential_store.rs    # User credential DB operations
+│   ├── audit_store.rs         # Audit log DB operations
+│   ├── system_config_store.rs # System configuration DB operations
+│   ├── common_password_store.rs # Common password validation DB operations
+│   └── hibp_cache_store.rs    # HaveIBeenPwned cache DB operations
+│
+├── config/                    # Configuration management
+│   ├── mod.rs
+│   ├── secret_manager.rs      # Secret management and loading
+│   ├── database.rs            # Database configuration
+│   └── logging.rs             # Logging configuration
+│
+├── cli/                       # Command-line interface
+│   ├── mod.rs
+│   ├── bootstrap.rs           # System bootstrap commands
+│   ├── migrate.rs             # Database migration commands
+│   └── owner.rs               # Owner management commands
 │
 └── errors/                    # Error types
     ├── mod.rs
-    └── auth.rs                # AuthError with ResponseError impl
+    ├── internal.rs            # Internal error types for stores/providers
+    └── api/                   # API-specific error types
+        ├── mod.rs
+        ├── auth.rs            # AuthError with ResponseError impl
+        └── admin.rs           # AdminError with ResponseError impl
 ```
 
 ## Layer Responsibilities
@@ -53,7 +81,8 @@ src/
 - **types/db/** - SeaORM entities representing database schema
 - **types/dto/** - API request/response models with poem-openapi decorators
 - **types/internal/** - Internal data structures not exposed via API or DB
-- **services/** - Business logic, orchestration between stores
+- **coordinators/** - Workflow orchestration, composing provider operations for API endpoints
+- **providers/** - Business logic, work operations, domain-specific calculations and validations
 - **stores/** - Database operations, query encapsulation (Repository pattern)
 - **errors/** - Custom error types implementing ResponseError
 
@@ -69,16 +98,65 @@ src/
 
 ## Naming
 
+### General Conventions
 - Files: `snake_case.rs`
 - Types: `PascalCase` with pattern `{Action}{Resource}{Request|Response}` (e.g., `LoginRequest`, `CreateItemResponse`)
 - Functions/variables: `snake_case`
 - Constants: `SCREAMING_SNAKE_CASE`
 - Endpoints: RESTful (`/auth/login`, `/items/{id}`)
 
+### Architectural Naming Patterns
+
+**Coordinators:**
+- **File**: `{domain}_coordinator.rs`
+- **Struct**: `{Domain}Coordinator`
+- **Example**: `auth_coordinator.rs` → `AuthCoordinator`
+
+**Providers:**
+- **File**: `{name}_provider.rs`
+- **Struct**: `{Name}Provider`
+- **Example**: `token_provider.rs` → `TokenProvider`
+
+**Rationale**: Consistent suffixes make architectural roles immediately apparent and prevent ambiguity about whether code coordinates workflows or provides work.
+
+## Architectural Layers
+
+### Coordinators vs Providers
+
+**Coordinators** (Pure Orchestration):
+- Handle workflow coordination for API endpoints
+- Compose provider operations in specific sequences
+- Contain no business logic - only orchestration
+- One coordinator per API domain (AuthCoordinator, AdminCoordinator)
+- Call providers and stores, never other coordinators
+
+**Providers** (Work Performers):
+- Contain all business logic and domain operations
+- Perform actual work (calculations, validations, database operations)
+- Composable - providers can call other providers when business logic requires it
+- Examples: TokenProvider, PasswordValidatorProvider, CryptoProvider, AuditLoggerProvider
+
+### Dependency Flow Rules
+
+```
+API Layer
+    ↓ (calls)
+Coordinator Layer  
+    ↓ (calls)
+Provider Layer
+    ↓ (calls)
+Store Layer
+```
+
+- APIs call Coordinators (never Providers directly)
+- Coordinators call Providers and Stores
+- Providers call other Providers and Stores
+- No upward calls (Provider cannot call Coordinator)
+
 ## Error Handling
 
 - Custom error enums implement `poem::error::ResponseError`
-- Service functions return `Result<T, CustomError>`
+- Coordinator and provider functions return `Result<T, CustomError>`
 - Consistent JSON format: `{ "error": "message" }`
 - Never log/expose passwords or tokens
 
@@ -111,7 +189,7 @@ let ip = extract_ip_address(req);
 
 // ✅ GOOD - Explaining WHY
 // Always return 200 to avoid leaking token validity information
-let _ = self.auth_service.logout(&ctx, refresh_token).await;
+let _ = self.auth_coordinator.logout(&ctx, refresh_token).await;
 return Ok("Logged out successfully");
 
 // ✅ GOOD - Explaining unusual pattern
