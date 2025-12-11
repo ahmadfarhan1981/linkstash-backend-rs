@@ -1,6 +1,6 @@
 use poem_openapi::{payload::Json, OpenApi, Tags};
 use poem::Request;
-use crate::services::AdminService;
+use crate::coordinators::AdminCoordinator;
 use crate::types::dto::admin::{
     AssignRoleRequest, AssignRoleResponse,
     RemoveRoleRequest, RemoveRoleResponse,
@@ -12,13 +12,13 @@ use std::sync::Arc;
 
 /// Admin role management API endpoints
 pub struct AdminApi {
-    admin_service: Arc<AdminService>,
+    admin_coordinator: Arc<AdminCoordinator>,
 }
 
 impl AdminApi {
-    /// Create a new AdminApi with the given AdminService
-    pub fn new(admin_service: Arc<AdminService>) -> Self {
-        Self { admin_service }
+    /// Create a new AdminApi with the given AdminCoordinator
+    pub fn new(admin_coordinator: Arc<AdminCoordinator>) -> Self {
+        Self { admin_coordinator }
     }
 }
 
@@ -46,7 +46,7 @@ impl AdminApi {
         let ctx = match helpers::create_request_context(
             req,
             Some(auth.0),
-            &self.admin_service.token_service(),
+            &self.admin_coordinator.token_provider(),
         ).await.into_result() {
             Ok(ctx) => ctx,
             Err(auth_error) => {
@@ -65,8 +65,8 @@ impl AdminApi {
             ));
         }
         
-        // Call service layer and convert InternalError to AdminError
-        self.admin_service
+        // Call coordinator layer and convert InternalError to AdminError
+        self.admin_coordinator
             .assign_system_admin(&ctx, &body.target_user_id)
             .await
             .map_err(|internal_error| {
@@ -98,7 +98,7 @@ impl AdminApi {
         let ctx = match helpers::create_request_context(
             req,
             Some(auth.0),
-            &self.admin_service.token_service(),
+            &self.admin_coordinator.token_provider(),
         ).await.into_result() {
             Ok(ctx) => ctx,
             Err(auth_error) => {
@@ -117,8 +117,8 @@ impl AdminApi {
             ));
         }
         
-        // Call service layer and convert InternalError to AdminError
-        self.admin_service
+        // Call coordinator layer and convert InternalError to AdminError
+        self.admin_coordinator
             .remove_system_admin(&ctx, &body.target_user_id)
             .await
             .map_err(|internal_error| {
@@ -150,7 +150,7 @@ impl AdminApi {
         let ctx = match helpers::create_request_context(
             req,
             Some(auth.0),
-            &self.admin_service.token_service(),
+            &self.admin_coordinator.token_provider(),
         ).await.into_result() {
             Ok(ctx) => ctx,
             Err(auth_error) => {
@@ -169,8 +169,8 @@ impl AdminApi {
             ));
         }
         
-        // Call service layer and convert InternalError to AdminError
-        self.admin_service
+        // Call coordinator layer and convert InternalError to AdminError
+        self.admin_coordinator
             .assign_role_admin(&ctx, &body.target_user_id)
             .await
             .map_err(|internal_error| {
@@ -202,7 +202,7 @@ impl AdminApi {
         let ctx = match helpers::create_request_context(
             req,
             Some(auth.0),
-            &self.admin_service.token_service(),
+            &self.admin_coordinator.token_provider(),
         ).await.into_result() {
             Ok(ctx) => ctx,
             Err(auth_error) => {
@@ -221,8 +221,8 @@ impl AdminApi {
             ));
         }
         
-        // Call service layer and convert InternalError to AdminError
-        self.admin_service
+        // Call coordinator layer and convert InternalError to AdminError
+        self.admin_coordinator
             .remove_role_admin(&ctx, &body.target_user_id)
             .await
             .map_err(|internal_error| {
@@ -252,7 +252,7 @@ impl AdminApi {
         let ctx = match helpers::create_request_context(
             req,
             Some(auth.0),
-            &self.admin_service.token_service(),
+            &self.admin_coordinator.token_provider(),
         ).await.into_result() {
             Ok(ctx) => ctx,
             Err(auth_error) => {
@@ -271,8 +271,8 @@ impl AdminApi {
             ));
         }
         
-        // Call service layer and convert InternalError to AdminError
-        self.admin_service
+        // Call coordinator layer and convert InternalError to AdminError
+        self.admin_coordinator
             .deactivate_owner(&ctx)
             .await
             .map_err(|internal_error| {

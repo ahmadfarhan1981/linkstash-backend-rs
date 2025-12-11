@@ -1,7 +1,7 @@
 use poem::Request;
 use poem_openapi::auth::Bearer;
 use crate::types::internal::context::RequestContext;
-use crate::services::TokenService;
+use crate::providers::TokenProvider;
 use crate::errors::AuthError;
 use std::sync::Arc;
 
@@ -55,7 +55,7 @@ pub fn extract_ip_address(req: &Request) -> Option<String> {
 /// # Arguments
 /// * `req` - The HTTP request
 /// * `auth` - Optional Bearer token (None for unauthenticated endpoints)
-/// * `token_service` - TokenService for JWT validation
+/// * `token_provider` - TokenProvider for JWT validation
 /// 
 /// # Returns
 /// * `ContextResult::Ok(ctx)` - Context ready to use
@@ -63,7 +63,7 @@ pub fn extract_ip_address(req: &Request) -> Option<String> {
 pub async fn create_request_context(
     req: &Request,
     auth: Option<Bearer>,
-    token_service: &Arc<TokenService>,
+    token_provider: &Arc<TokenProvider>,
 ) -> ContextResult {
     // Extract IP address
     let ip_address = extract_ip_address(req);
@@ -74,7 +74,7 @@ pub async fn create_request_context(
     
     // If auth is provided, validate JWT and populate claims
     if let Some(bearer) = auth {
-        match token_service.validate_jwt(&bearer.token).await {
+        match token_provider.validate_jwt(&bearer.token).await {
             Ok(claims) => {
                 // JWT is valid, set authenticated and claims
                 // Set actor_id from JWT subject (user_id)
@@ -88,7 +88,7 @@ pub async fn create_request_context(
             }
             Err(_) => {
                 // JWT validation failed (expired, invalid, tampered)
-                // TokenService.validate_jwt already logged the failure
+                // TokenProvider.validate_jwt already logged the failure
                 // Context remains with authenticated=false, claims=None
             }
         }

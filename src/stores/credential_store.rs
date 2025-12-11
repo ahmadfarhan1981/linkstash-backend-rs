@@ -8,7 +8,7 @@ use crate::types::db::refresh_token::{ActiveModel as RefreshTokenActiveModel};
 use crate::errors::InternalError;
 use crate::errors::internal::CredentialError;
 use crate::stores::AuditStore;
-use crate::services::audit_logger;
+use crate::providers::audit_logger_provider;
 use crate::types::internal::auth::AdminFlags;
 use crate::types::internal::context::RequestContext;
 
@@ -50,7 +50,7 @@ impl CredentialStore {
             .map_err(|e| InternalError::transaction("begin_transaction", e))?;
         
         // Log transaction start
-        if let Err(audit_err) = audit_logger::log_transaction_started(
+        if let Err(audit_err) = audit_logger_provider::log_transaction_started(
             &self.audit_store,
             ctx,
             operation_type,
@@ -128,7 +128,7 @@ impl CredentialStore {
             })?;
 
         // Log user creation at point of action
-        if let Err(audit_err) = audit_logger::log_user_created(
+        if let Err(audit_err) = audit_logger_provider::log_user_created(
             &self.audit_store,
             ctx,
             &user_id,
@@ -190,7 +190,7 @@ impl CredentialStore {
             .map_err(|e| InternalError::database("update_privileges", e))?;
 
         // Log privilege change event with before/after state immediately (at point of action)
-        if let Err(audit_err) = audit_logger::log_privileges_changed(
+        if let Err(audit_err) = audit_logger_provider::log_privileges_changed(
             &self.audit_store,
             ctx,
             user_id,
@@ -221,7 +221,7 @@ impl CredentialStore {
     /// * `Err(InternalError)` - DuplicateUsername if username already exists, PasswordValidationFailed if password is invalid, or database error
     pub async fn add_user(
         &self,
-        password_validator: &crate::services::PasswordValidator,
+        password_validator: &crate::providers::PasswordValidatorProvider,
         username: String,
         password: String,
     ) -> Result<String, InternalError> {
@@ -355,7 +355,7 @@ impl CredentialStore {
         match (user_id, verification_result) {
             (Some(uid), Ok(_)) => {
                 // User exists and password is correct
-                if let Err(audit_err) = audit_logger::log_login_success(
+                if let Err(audit_err) = audit_logger_provider::log_login_success(
                     &self.audit_store,
                     ctx,
                     uid.clone(),
@@ -367,7 +367,7 @@ impl CredentialStore {
             (Some(_uid), Err(_)) => {
                 // User exists but password is incorrect
                 // Audit log contains actual reason for forensic analysis
-                if let Err(audit_err) = audit_logger::log_login_failure(
+                if let Err(audit_err) = audit_logger_provider::log_login_failure(
                     &self.audit_store,
                     ctx,
                     "invalid_password".to_string(),
@@ -381,7 +381,7 @@ impl CredentialStore {
             (None, _) => {
                 // User doesn't exist (verification will always fail with dummy hash)
                 // Audit log contains actual reason for forensic analysis
-                if let Err(audit_err) = audit_logger::log_login_failure(
+                if let Err(audit_err) = audit_logger_provider::log_login_failure(
                     &self.audit_store,
                     ctx,
                     "user_not_found".to_string(),
@@ -433,7 +433,7 @@ impl CredentialStore {
             .map_err(|e| InternalError::database("insert_refresh_token", e))?;
         
         // Log refresh token issuance at point of action
-        if let Err(audit_err) = audit_logger::log_refresh_token_issued(
+        if let Err(audit_err) = audit_logger_provider::log_refresh_token_issued(
             &self.audit_store,
             ctx,
             user_id,
@@ -523,7 +523,7 @@ impl CredentialStore {
         let token = match token {
             Some(t) => t,
             None => {
-                if let Err(audit_err) = audit_logger::log_refresh_token_validation_failure(
+                if let Err(audit_err) = audit_logger_provider::log_refresh_token_validation_failure(
                     &self.audit_store,
                     ctx,
                     token_hash.to_string(),
@@ -538,7 +538,7 @@ impl CredentialStore {
         // Check if token is expired
         let now = Utc::now().timestamp();
         if token.expires_at < now {
-            if let Err(audit_err) = audit_logger::log_refresh_token_validation_failure(
+            if let Err(audit_err) = audit_logger_provider::log_refresh_token_validation_failure(
                 &self.audit_store,
                 ctx,
                 token_hash.to_string(),
@@ -589,7 +589,7 @@ impl CredentialStore {
             .map_err(|e| InternalError::database("delete_refresh_token", e))?;
         
         // Log revocation at point of action
-        if let Err(audit_err) = audit_logger::log_refresh_token_revoked(
+        if let Err(audit_err) = audit_logger_provider::log_refresh_token_revoked(
             &self.audit_store,
             ctx,
             user_id.clone(),
@@ -632,7 +632,7 @@ impl CredentialStore {
         match delete_result {
             Ok(_) => {
                 // Log successful token invalidation for audit trail
-                if let Err(audit_err) = crate::services::audit_logger::log_all_refresh_tokens_invalidated(
+                if let Err(audit_err) = crate::providers::audit_logger_provider::log_all_refresh_tokens_invalidated(
                     &self.audit_store,
                     ctx,
                     user_id.to_string(),
@@ -655,7 +655,7 @@ impl CredentialStore {
                 let error_msg = format!("Failed to invalidate tokens: {}", e);
                 
                 // Log failed token invalidation attempt for audit trail
-                if let Err(audit_err) = crate::services::audit_logger::log_token_invalidation_failure(
+                if let Err(audit_err) = crate::providers::audit_logger_provider::log_token_invalidation_failure(
                     &self.audit_store,
                     ctx,
                     user_id.to_string(),
@@ -796,7 +796,7 @@ impl CredentialStore {
             .map_err(|e| InternalError::database("update_password", e))?;
 
         // Log password change at point of action
-        if let Err(audit_err) = audit_logger::log_password_changed(
+        if let Err(audit_err) = audit_logger_provider::log_password_changed(
             &self.audit_store,
             ctx,
             user_id.to_string(),
@@ -888,7 +888,7 @@ impl CredentialStore {
             .map_err(|e| InternalError::database("clear_password_change_required", e))?;
 
         // Log password change requirement cleared at point of action
-        if let Err(audit_err) = audit_logger::log_password_change_requirement_cleared(
+        if let Err(audit_err) = audit_logger_provider::log_password_change_requirement_cleared(
             &self.audit_store,
             ctx,
             user_id.to_string(),
@@ -1066,7 +1066,7 @@ impl CredentialStore {
             })?;
 
         // Log user creation at point of action
-        if let Err(audit_err) = audit_logger::log_user_created(
+        if let Err(audit_err) = audit_logger_provider::log_user_created(
             &self.audit_store,
             ctx,
             &user_id,
@@ -1104,7 +1104,7 @@ impl CredentialStore {
         match result {
             Ok(user_model) => {
                 // Log privilege change event with before/after state immediately (at point of action)
-                if let Err(audit_err) = audit_logger::log_privileges_changed(
+                if let Err(audit_err) = audit_logger_provider::log_privileges_changed(
                     &self.audit_store,
                     ctx,
                     &user_id,
@@ -1126,7 +1126,7 @@ impl CredentialStore {
             }
             Err(e) => {
                 // Log rollback event
-                if let Err(audit_err) = audit_logger::log_operation_rolled_back(
+                if let Err(audit_err) = audit_logger_provider::log_operation_rolled_back(
                     &self.audit_store,
                     ctx,
                     "user_creation_with_privileges",

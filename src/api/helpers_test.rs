@@ -3,7 +3,7 @@ mod tests {
     use crate::api::helpers::*;
     use poem::Request;
     use poem_openapi::auth::Bearer;
-    use crate::test::utils::setup_test_auth_services;
+    use crate::test::utils::setup_test_coordinators;
 
     #[test]
     fn test_extract_ip_from_x_forwarded_for() {
@@ -37,14 +37,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_request_context_with_valid_jwt() {
-        let (_db, _audit_db, _credential_store, _audit_store, _auth_service, token_service) = 
-            setup_test_auth_services().await;
+        let (_db, _audit_db, _credential_store, _audit_store, auth_coordinator, _app_data) = 
+            setup_test_coordinators().await;
+        
+        // Get token provider from coordinator
+        let token_provider = auth_coordinator.token_provider();
         
         // Generate a valid JWT
         let user_id = uuid::Uuid::new_v4();
         let ctx_temp = crate::types::internal::context::RequestContext::new()
             .with_ip_address("127.0.0.1");
-        let (jwt, _jwt_id) = token_service.generate_jwt(
+        let (jwt, _jwt_id) = token_provider.generate_jwt(
             &ctx_temp,
             &user_id,
             false,
@@ -57,7 +60,7 @@ mod tests {
         let req = Request::builder().finish();
         let bearer = Bearer { token: jwt };
         
-        let ctx = create_request_context(&req, Some(bearer), &token_service).await.into_context();
+        let ctx = create_request_context(&req, Some(bearer), &token_provider).await.into_context();
         
         assert!(ctx.authenticated);
         assert!(ctx.claims.is_some());
@@ -66,13 +69,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_request_context_with_invalid_jwt() {
-        let (_db, _audit_db, _credential_store, _audit_store, _auth_service, token_service) = 
-            setup_test_auth_services().await;
+        let (_db, _audit_db, _credential_store, _audit_store, auth_coordinator, _app_data) = 
+            setup_test_coordinators().await;
+        
+        // Get token provider from coordinator
+        let token_provider = auth_coordinator.token_provider();
         
         let req = Request::builder().finish();
         let bearer = Bearer { token: "invalid-jwt-token".to_string() };
         
-        let ctx = create_request_context(&req, Some(bearer), &token_service).await.into_context();
+        let ctx = create_request_context(&req, Some(bearer), &token_provider).await.into_context();
         
         assert!(!ctx.authenticated);
         assert!(ctx.claims.is_none());
@@ -80,12 +86,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_request_context_without_auth() {
-        let (_db, _audit_db, _credential_store, _audit_store, _auth_service, token_service) = 
-            setup_test_auth_services().await;
+        let (_db, _audit_db, _credential_store, _audit_store, auth_coordinator, _app_data) = 
+            setup_test_coordinators().await;
+        
+        // Get token provider from coordinator
+        let token_provider = auth_coordinator.token_provider();
         
         let req = Request::builder().finish();
         
-        let ctx = create_request_context(&req, None, &token_service).await.into_context();
+        let ctx = create_request_context(&req, None, &token_provider).await.into_context();
         
         assert!(!ctx.authenticated);
         assert!(ctx.claims.is_none());

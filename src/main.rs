@@ -4,7 +4,8 @@ mod config;
 mod types;
 mod errors;
 mod stores;
-mod services;
+mod coordinators;
+mod providers;
 mod cli;
 
 use std::sync::Arc;
@@ -14,7 +15,6 @@ use api::{HealthApi, AuthApi, AdminApi};
 use app_data::AppData;
 use config::init_logging;
 use clap::Parser;
-use stores::CredentialStore;
 use errors::InternalError;
 use errors::internal::CredentialError;
 
@@ -24,7 +24,13 @@ use errors::internal::CredentialError;
 /// and password "TestSecure-Pass-12345-UUID" for development and testing purposes.
 #[cfg(debug_assertions)]
 async fn seed_test_user(app_data: &AppData) {
-    match app_data.credential_store.add_user(&app_data.password_validator, "testuser".to_string(), "TestSecure-Pass-12345-UUID".to_string()).await {
+    // Create password validator from AppData stores
+    let password_validator = std::sync::Arc::new(providers::PasswordValidatorProvider::new(
+        app_data.common_password_store.clone(),
+        app_data.hibp_cache_store.clone(),
+    ));
+    
+    match app_data.credential_store.add_user(&password_validator, "testuser".to_string(), "TestSecure-Pass-12345-UUID".to_string()).await {
         Ok(user_id) => {
             tracing::info!("Test user created successfully with ID: {}", user_id);
         }
@@ -110,11 +116,9 @@ async fn main() -> Result<(), std::io::Error> {
     
     // No CLI arguments - run server mode
     
-    // Create auth service from AppData
-    let auth_service = Arc::new(services::AuthService::new(app_data.clone()));
-    
-    // Create admin service from AppData
-    let admin_service = Arc::new(services::AdminService::new(app_data.clone()));
+    // Create coordinators using AppData pattern
+    let auth_coordinator = Arc::new(coordinators::AuthCoordinator::new(app_data.clone()));
+    let admin_coordinator = Arc::new(coordinators::AdminCoordinator::new(app_data.clone()));
     
     // Seed test user in debug mode
     #[cfg(debug_assertions)]
@@ -125,11 +129,11 @@ async fn main() -> Result<(), std::io::Error> {
     let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
     let bind_address = format!("{}:{}", host, port);
     
-    // Create AuthApi with AuthService (uses auth service's internal token service)
-    let auth_api = AuthApi::new(auth_service.clone());
+    // Create AuthApi with AuthCoordinator
+    let auth_api = AuthApi::new(auth_coordinator);
     
-    // Create AdminApi with AdminService
-    let admin_api = AdminApi::new(admin_service);
+    // Create AdminApi with AdminCoordinator
+    let admin_api = AdminApi::new(admin_coordinator);
     
     // Create OpenAPI service with API implementation
     // Use localhost for the server URL since 0.0.0.0 is not accessible from browsers

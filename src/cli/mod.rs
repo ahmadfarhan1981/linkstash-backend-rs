@@ -7,6 +7,7 @@ pub mod migrate;
 pub mod password_management;
 
 use clap::{Parser, Subcommand};
+use std::sync::Arc;
 
 use crate::app_data::AppData;
 
@@ -87,20 +88,32 @@ pub async fn execute_command(
             #[cfg(any(debug_assertions, feature = "test-utils"))]
             {
                 if non_interactive {
+                    // Create password validator from AppData stores
+                    let password_validator = Arc::new(crate::providers::PasswordValidatorProvider::new(
+                        app_data.common_password_store.clone(),
+                        app_data.hibp_cache_store.clone(),
+                    ));
+                    
                     bootstrap::bootstrap_system_non_interactive(
                         &app_data.credential_store,
                         &app_data.system_config_store,
                         &app_data.audit_store,
                         &app_data.secret_manager,
-                        &app_data.password_validator,
+                        &password_validator,
                     ).await?;
                 } else {
+                    // Create password validator from AppData stores
+                    let password_validator = Arc::new(crate::providers::PasswordValidatorProvider::new(
+                        app_data.common_password_store.clone(),
+                        app_data.hibp_cache_store.clone(),
+                    ));
+                    
                     bootstrap::bootstrap_system(
                         &app_data.credential_store,
                         &app_data.system_config_store,
                         &app_data.audit_store,
                         &app_data.secret_manager,
-                        &app_data.password_validator,
+                        &password_validator,
                     ).await?;
                 }
             }

@@ -2,7 +2,7 @@ mod common;
 
 use std::sync::Arc;
 use linkstash_backend::config::{SecretManager, SecretError};
-use linkstash_backend::services::TokenService;
+use linkstash_backend::providers::TokenProvider;
 use uuid::Uuid;
 
 #[test]
@@ -162,22 +162,22 @@ async fn test_token_service_integration_with_secret_manager() {
     // Initialize SecretManager
     let secret_manager = Arc::new(SecretManager::init().unwrap());
     
-    // Create audit store for TokenService
+    // Create audit store for TokenProvider
     let audit_store = common::create_test_audit_store().await;
     
-    // Create TokenService with JWT secret and refresh token secret from SecretManager
-    let token_service = Arc::new(TokenService::new(
+    // Create TokenProvider with JWT secret and refresh token secret from SecretManager
+    let token_service = Arc::new(TokenProvider::new(
         secret_manager.jwt_secret().to_string(),
         secret_manager.refresh_token_secret().to_string(),
         audit_store,
     ));
     
-    // Verify TokenService was created successfully
+    // Verify TokenProvider was created successfully
     let user_id = Uuid::new_v4();
     let ctx = linkstash_backend::types::internal::context::RequestContext::new();
     let jwt_result = token_service.generate_jwt(&ctx, &user_id, false, false, false, vec![], false).await;
     
-    assert!(jwt_result.is_ok(), "TokenService should generate JWT successfully");
+    assert!(jwt_result.is_ok(), "TokenProvider should generate JWT successfully");
 }
 
 #[tokio::test]
@@ -195,11 +195,11 @@ async fn test_jwt_generation_works_with_secrets_from_secret_manager() {
     // Initialize SecretManager
     let secret_manager = Arc::new(SecretManager::init().unwrap());
     
-    // Create audit store for TokenService
+    // Create audit store for TokenProvider
     let audit_store = common::create_test_audit_store().await;
     
-    // Create TokenService with JWT secret and refresh token secret from SecretManager
-    let token_service = Arc::new(TokenService::new(
+    // Create TokenProvider with JWT secret and refresh token secret from SecretManager
+    let token_service = Arc::new(TokenProvider::new(
         secret_manager.jwt_secret().to_string(),
         secret_manager.refresh_token_secret().to_string(),
         audit_store,
@@ -237,11 +237,11 @@ async fn test_jwt_validation_works_with_secrets_from_secret_manager() {
     // Initialize SecretManager
     let secret_manager = Arc::new(SecretManager::init().unwrap());
     
-    // Create audit store for TokenService
+    // Create audit store for TokenProvider
     let audit_store = common::create_test_audit_store().await;
     
-    // Create TokenService with JWT secret and refresh token secret from SecretManager
-    let token_service = Arc::new(TokenService::new(
+    // Create TokenProvider with JWT secret and refresh token secret from SecretManager
+    let token_service = Arc::new(TokenProvider::new(
         secret_manager.jwt_secret().to_string(),
         secret_manager.refresh_token_secret().to_string(),
         audit_store,
@@ -274,17 +274,17 @@ async fn test_multiple_token_services_can_share_secret_manager() {
     // Initialize SecretManager
     let secret_manager = Arc::new(SecretManager::init().unwrap());
     
-    // Create audit stores for TokenServices
+    // Create audit stores for TokenProviders
     let audit_store1 = common::create_test_audit_store().await;
     let audit_store2 = common::create_test_audit_store().await;
     
-    // Create multiple TokenService instances with the same secret
-    let token_service1 = Arc::new(TokenService::new(
+    // Create multiple TokenProvider instances with the same secret
+    let token_service1 = Arc::new(TokenProvider::new(
         secret_manager.jwt_secret().to_string(),
         secret_manager.refresh_token_secret().to_string(),
         audit_store1,
     ));
-    let token_service2 = Arc::new(TokenService::new(
+    let token_service2 = Arc::new(TokenProvider::new(
         secret_manager.jwt_secret().to_string(),
         secret_manager.refresh_token_secret().to_string(),
         audit_store2,

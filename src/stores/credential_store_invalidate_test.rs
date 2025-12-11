@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::test::utils::{setup_test_stores, setup_test_password_validator};
-    use crate::services::TokenService;
+    use crate::providers::TokenProvider;
     use std::sync::Arc;
 
     #[tokio::test]
@@ -10,7 +10,7 @@ mod tests {
         let password_validator = setup_test_password_validator().await;
         
         // Create token service
-        let token_service = Arc::new(TokenService::new(
+        let token_service = Arc::new(TokenProvider::new(
             "test-secret-key-minimum-32-characters-long".to_string(),
             "test-refresh-secret-minimum-32-chars".to_string(),
             audit_store.clone(),
@@ -73,7 +73,7 @@ mod tests {
         let password_validator = setup_test_password_validator().await;
         
         // Create token service
-        let token_service = Arc::new(TokenService::new(
+        let token_service = Arc::new(TokenProvider::new(
             "test-secret-key-minimum-32-characters-long".to_string(),
             "test-refresh-secret-minimum-32-chars".to_string(),
             audit_store.clone(),

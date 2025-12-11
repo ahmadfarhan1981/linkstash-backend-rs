@@ -2,13 +2,12 @@ use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 use crate::config::SecretManager;
 use crate::stores::{AuditStore, CredentialStore, SystemConfigStore, CommonPasswordStore, HibpCacheStore};
-use crate::services::{TokenService, PasswordValidator};
 use crate::errors::InternalError;
 
-/// Centralized application data containing all databases, stores, and stateless services
+/// Centralized application data containing all databases, stores, and configuration
 /// 
 /// AppData follows the main-owned stores pattern where all dependencies are created once
-/// in main.rs and shared across services. This eliminates store duplication and makes
+/// in main.rs and shared across coordinators. This eliminates store duplication and makes
 /// dependencies explicit.
 /// 
 /// # Architecture
@@ -24,18 +23,19 @@ use crate::errors::InternalError;
 ///   ├─ audit_store (Arc<AuditStore>)
 ///   ├─ credential_store (Arc<CredentialStore>)
 ///   ├─ system_config_store (Arc<SystemConfigStore>)
-///   └─ token_service (Arc<TokenService>)
+///   ├─ common_password_store (Arc<CommonPasswordStore>)
+///   └─ hibp_cache_store (Arc<HibpCacheStore>)
 ///   ↓ wrapped in Arc<AppData>
-///   ↓ passed to services
-///   ├─ AuthService::new(app_data) → extracts what it needs
-///   └─ AdminService::new(app_data) → extracts what it needs
+///   ↓ passed to coordinators
+///   ├─ AuthCoordinator::new(app_data) → extracts stores, creates providers
+///   └─ AdminCoordinator::new(app_data) → extracts stores, creates providers
 /// ```
 /// 
 /// # Benefits
 /// 
 /// - Single instance of each store (no duplication)
 /// - Centralized initialization
-/// - Stable service signatures (adding stores doesn't break services)
+/// - Stable coordinator signatures (adding stores doesn't break coordinators)
 /// - Easy to test (mock AppData for testing)
 pub struct AppData {
     /// Main database connection (auth.db)
@@ -61,18 +61,12 @@ pub struct AppData {
     
     /// HIBP cache store for caching HaveIBeenPwned API responses
     pub hibp_cache_store: Arc<HibpCacheStore>,
-    
-    /// Token service for JWT generation and validation
-    pub token_service: Arc<TokenService>,
-    
-    /// Password validator for enforcing password policies
-    pub password_validator: Arc<PasswordValidator>,
 }
 
 impl AppData {
     /// Initialize all application data
     /// 
-    /// Creates stores and stateless services using the provided database connections.
+    /// Creates stores using the provided database connections.
     /// Database connections should be initialized and migrated before calling this.
     /// 
     /// # Arguments
@@ -83,8 +77,7 @@ impl AppData {
     /// # Initialization Order
     /// 
     /// 1. Initialize secret manager (loads JWT secrets, password pepper, etc.)
-    /// 2. Create stores (audit, credential, system_config)
-    /// 3. Create stateless services (token_service)
+    /// 2. Create stores (audit, credential, system_config, common_password, hibp_cache)
     /// 
     /// # Returns
     /// 
@@ -128,22 +121,6 @@ impl AppData {
         
         tracing::debug!("Stores created");
         
-        // 3. Create stateless services
-        tracing::debug!("Creating stateless services...");
-        let token_service = Arc::new(TokenService::new(
-            secret_manager.jwt_secret().to_string(),
-            secret_manager.refresh_token_secret().to_string(),
-            audit_store.clone(),
-        ));
-        
-        // Initialize password validator with common password and HIBP cache stores
-        let password_validator = Arc::new(PasswordValidator::new(
-            common_password_store.clone(),
-            hibp_cache_store.clone(),
-        ));
-        
-        tracing::debug!("Stateless services created");
-        
         tracing::info!("AppData initialization complete");
         
         Ok(Self {
@@ -155,8 +132,6 @@ impl AppData {
             system_config_store,
             common_password_store,
             hibp_cache_store,
-            token_service,
-            password_validator,
         })
     }
 }

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The AppData pattern is a centralized initialization approach where all application dependencies (databases, stores, and stateless services) are created once in `main.rs` and shared across the application. This eliminates duplication, makes dependencies explicit, and provides stable service signatures.
+The AppData pattern is a centralized initialization approach where all application dependencies (databases, stores, and providers) are created once in `main.rs` and shared across the application. This eliminates duplication, makes dependencies explicit, and provides stable coordinator signatures.
 
 ## What is AppData?
 
@@ -40,20 +40,26 @@ AppData::init()
   ├─ audit_store (Arc<AuditStore>)
   ├─ credential_store (Arc<CredentialStore>)
   ├─ system_config_store (Arc<SystemConfigStore>)
-  └─ token_service (Arc<TokenService>)
+  ├─ common_password_store (Arc<CommonPasswordStore>)
+  └─ hibp_cache_store (Arc<HibpCacheStore>)
   ↓ wrapped in Arc<AppData>
-  ↓ passed to services
-  ├─ AuthService::new(app_data) → extracts what it needs
-  └─ AdminService::new(app_data) → extracts what it needs
+  ↓ passed to coordinators
+  ├─ AuthCoordinator::new(app_data) → creates providers internally
+  └─ AdminCoordinator::new(app_data) → creates providers internally
+  ↓ coordinators create providers from AppData
+  ├─ TokenProvider::new(secrets, audit_store)
+  ├─ PasswordValidatorProvider::new(stores)
+  └─ AuditLoggerProvider::new(audit_store)
 ```
 
 ## Benefits
 
-1. **No Duplication**: Single instance of each store shared across all services
-2. **Explicit Dependencies**: Services clearly show what they use via struct fields
-3. **Stable Signatures**: Adding stores doesn't break existing service constructors
+1. **No Duplication**: Single instance of each store shared across all coordinators
+2. **Explicit Dependencies**: Coordinators clearly show what they use via struct fields
+3. **Stable Signatures**: Adding stores doesn't break existing coordinator constructors
 4. **Easy Testing**: Mock AppData for unit tests
 5. **Centralized Initialization**: All setup logic in one place
+6. **Provider Encapsulation**: Coordinators create and manage their own providers internally
 
 ## Usage in main.rs
 
@@ -77,8 +83,9 @@ async fn main() -> Result<(), std::io::Error> {
         std::process::exit(0);
     }
     
-    // Server mode - Create services
-    let auth_service = Arc::new(AuthService::new(app_data.clone()));
+    // Server mode - Create coordinators
+    let auth_coordinator = Arc::new(AuthCoordinator::new(app_data.clone()));
+    let admin_coordinator = Arc::new(AdminCoordinator::new(app_data.clone()));
     
     // Seed test user in debug mode
     #[cfg(debug_assertions)]
@@ -88,41 +95,60 @@ async fn main() -> Result<(), std::io::Error> {
 }
 ```
 
-## Creating Services with AppData
+## Creating Coordinators with AppData
 
 ### Explicit Extraction Pattern
 
-Services should extract only the dependencies they need from AppData:
+Coordinators should extract only the dependencies they need from AppData and create their own providers internally:
 
 ```rust
-pub struct AuthService {
+pub struct AuthCoordinator {
     credential_store: Arc<CredentialStore>,
     system_config_store: Arc<SystemConfigStore>,
-    token_service: Arc<TokenService>,
-    audit_store: Arc<AuditStore>,
+    token_provider: Arc<TokenProvider>,
+    password_validator_provider: Arc<PasswordValidatorProvider>,
+    audit_logger_provider: Arc<AuditLoggerProvider>,
 }
 
-impl AuthService {
-    /// Create AuthService from AppData
+impl AuthCoordinator {
+    /// Create AuthCoordinator from AppData
     /// 
-    /// Extracts only the dependencies needed by AuthService.
+    /// Extracts stores from AppData and creates providers internally.
     pub fn new(app_data: Arc<AppData>) -> Self {
+        // Create providers from AppData components
+        let token_provider = Arc::new(TokenProvider::new(
+            app_data.secret_manager.jwt_secret().to_string(),
+            app_data.secret_manager.refresh_token_secret().to_string(),
+            app_data.audit_store.clone(),
+        ));
+        
+        let password_validator_provider = Arc::new(PasswordValidatorProvider::new(
+            app_data.common_password_store.clone(),
+            app_data.hibp_cache_store.clone(),
+        ));
+        
+        let audit_logger_provider = Arc::new(AuditLoggerProvider::new(
+            app_data.audit_store.clone(),
+        ));
+        
         Self {
             credential_store: app_data.credential_store.clone(),
             system_config_store: app_data.system_config_store.clone(),
-            token_service: app_data.token_service.clone(),
-            audit_store: app_data.audit_store.clone(),
+            token_provider,
+            password_validator_provider,
+            audit_logger_provider,
         }
     }
 }
 ```
 
-**Why extract instead of storing AppData?**
+**Why extract stores and create providers internally?**
 
-- Makes dependencies explicit and visible in struct fields
-- Clear what each service actually uses
-- Easier to understand service boundaries
-- Better for testing (can mock individual stores)
+- Makes store dependencies explicit and visible in struct fields
+- Encapsulates provider creation within coordinators
+- Clear what each coordinator actually uses from AppData
+- Easier to understand coordinator boundaries
+- Better for testing (can mock individual stores or entire AppData)
 
 ## Adding New Stores to AppData
 
@@ -155,17 +181,20 @@ impl AppData {
 }
 ```
 
-3. **Extract in services that need it**:
+3. **Extract in coordinators that need it**:
 ```rust
 pub fn new(app_data: Arc<AppData>) -> Self {
+    // ... create providers ...
+    
     Self {
         // ... existing fields ...
         new_store: app_data.new_store.clone(),
+        // ... providers ...
     }
 }
 ```
 
-**That's it!** No need to update service signatures or CLI command signatures.
+**That's it!** No need to update coordinator signatures or CLI command signatures.
 
 ## CLI Command Pattern
 
@@ -211,13 +240,13 @@ pub async fn bootstrap_system(
 **DO include:**
 - Database connections
 - Stores (data access layer)
-- Stateless services (like TokenService)
 - Configuration managers (like SecretManager)
-- Shared resources needed by multiple services
+- Shared resources needed by multiple coordinators
 
 **DON'T include:**
-- Stateful services (like AuthService) - these are created from AppData
-- API handlers - these depend on services
+- Coordinators - these are created from AppData
+- Providers - these are created by coordinators from AppData components
+- API handlers - these depend on coordinators
 - Request-specific data
 - Temporary or transient state
 
@@ -253,11 +282,11 @@ mod tests {
     }
     
     #[tokio::test]
-    async fn test_auth_service_with_mock_data() {
+    async fn test_auth_coordinator_with_mock_data() {
         let app_data = create_mock_app_data();
-        let auth_service = AuthService::new(app_data);
+        let auth_coordinator = AuthCoordinator::new(app_data);
         
-        // Test auth_service methods...
+        // Test auth_coordinator methods...
     }
 }
 ```
@@ -270,78 +299,72 @@ For more focused tests, mock only the stores you need:
 #[tokio::test]
 async fn test_specific_functionality() {
     let mock_credential_store = Arc::new(MockCredentialStore::new());
-    let mock_token_service = Arc::new(MockTokenService::new());
+    let mock_audit_store = Arc::new(MockAuditStore::new());
     
-    let service = AuthService {
+    // Create minimal AppData with only what's needed
+    let app_data = Arc::new(AppData {
         credential_store: mock_credential_store,
-        token_service: mock_token_service,
-        // ... other fields
-    };
+        audit_store: mock_audit_store,
+        // ... other required fields with mocks
+    });
+    
+    let coordinator = AuthCoordinator::new(app_data);
     
     // Test specific functionality...
 }
 ```
 
-## Migration from Service-Owned Stores
+## AppData Pattern Benefits
 
-### Before (Service-Owned)
-
-```rust
-// main.rs
-let auth_service = AuthService::init(db, audit_db, secret_manager).await?;
-
-// AuthService creates stores internally
-impl AuthService {
-    pub async fn init(
-        db: DatabaseConnection,
-        audit_db: DatabaseConnection,
-        secret_manager: Arc<SecretManager>,
-    ) -> Result<Self, AuthError> {
-        let audit_store = Arc::new(AuditStore::new(audit_db));
-        let credential_store = Arc::new(CredentialStore::new(db, pepper, audit_store));
-        // ...
-    }
-}
-```
-
-**Problem:** Each service creates its own store instances, leading to duplication.
-
-### After (AppData Pattern)
+### Centralized Initialization
 
 ```rust
 // main.rs
 let app_data = Arc::new(AppData::init().await?);
-let auth_service = Arc::new(AuthService::new(app_data.clone()));
+let auth_coordinator = Arc::new(AuthCoordinator::new(app_data.clone()));
+let admin_coordinator = Arc::new(AdminCoordinator::new(app_data.clone()));
 
-// AuthService extracts stores from AppData
-impl AuthService {
+// Coordinators extract stores from AppData and create providers internally
+impl AuthCoordinator {
     pub fn new(app_data: Arc<AppData>) -> Self {
+        // Create providers from AppData components
+        let token_provider = Arc::new(TokenProvider::new(
+            app_data.secret_manager.jwt_secret().to_string(),
+            app_data.secret_manager.refresh_token_secret().to_string(),
+            app_data.audit_store.clone(),
+        ));
+        
         Self {
             credential_store: app_data.credential_store.clone(),
+            token_provider,
             // ...
         }
     }
 }
 ```
 
-**Solution:** Stores created once, shared by all services.
+**Benefits:** 
+- Stores created once, shared by all coordinators
+- Providers created by coordinators from shared AppData components
+- Clean separation between shared resources (stores) and coordinator-specific resources (providers)
 
 ## Common Patterns
 
-### Accessing Stores in Services
+### Accessing Stores and Providers in Coordinators
 
 ```rust
-impl AuthService {
+impl AuthCoordinator {
     pub async fn login(&self, ctx: &RequestContext, username: String, password: String) 
-        -> Result<(String, String), AuthError> 
+        -> Result<(String, String), InternalError> 
     {
         // Use extracted stores directly
-        let user_id = self.credential_store
-            .verify_credentials(&username, &password, ctx.ip_address.clone())
+        let user_id_str = self.credential_store
+            .verify_credentials(ctx, &username, &password)
             .await?;
         
-        let (access_token, jwt_id) = self.token_service
-            .generate_jwt(&user_id, /* ... */)
+        // Use coordinator-owned providers
+        let (access_token, jwt_id) = self.token_provider
+            .generate_jwt(ctx, &user_id, /* ... */)
             .await?;
         
         // ...
@@ -349,24 +372,26 @@ impl AuthService {
 }
 ```
 
-### Sharing Stores Between Services
+### Sharing Stores Between Coordinators
 
 ```rust
-// Both services use the same credential_store instance
-let auth_service = Arc::new(AuthService::new(app_data.clone()));
-let admin_service = Arc::new(AdminService::new(app_data.clone()));
+// Both coordinators use the same credential_store instance from AppData
+let auth_coordinator = Arc::new(AuthCoordinator::new(app_data.clone()));
+let admin_coordinator = Arc::new(AdminCoordinator::new(app_data.clone()));
 
 // They share the same Arc<CredentialStore> from AppData
+// But each creates their own providers internally
 ```
 
 ## Best Practices
 
-1. **Initialize in Order**: Databases → Secrets → Stores → Services
-2. **Extract Explicitly**: Don't store AppData in services, extract what you need
-3. **Document Dependencies**: Service struct fields show what it uses
-4. **Keep Constructors Simple**: No async operations, no internal creation
+1. **Initialize in Order**: Databases → Secrets → Stores → Coordinators
+2. **Extract Explicitly**: Don't store AppData in coordinators, extract stores and create providers
+3. **Document Dependencies**: Coordinator struct fields show what stores they use
+4. **Keep Constructors Simple**: No async operations in coordinator constructors
 5. **Test with Mocks**: Create mock AppData for unit tests
 6. **Add Logging**: Log initialization steps for debugging
+7. **Provider Encapsulation**: Let coordinators create and manage their own providers
 
 ## Troubleshooting
 
@@ -382,9 +407,9 @@ let result = credential_store.get_user().await?;
 let result = self.credential_store.get_user().await?;
 ```
 
-### Service signature changes when adding stores
+### Coordinator signature changes when adding stores
 
-You shouldn't need to change service signatures. If you do, you're not following the pattern:
+You shouldn't need to change coordinator signatures. If you do, you're not following the pattern:
 
 ```rust
 // ❌ Wrong - signature changes when adding stores
@@ -395,20 +420,27 @@ pub fn new(
 
 // ✅ Correct - signature stays stable
 pub fn new(app_data: Arc<AppData>) -> Self {
+    // Create providers from AppData
+    let token_provider = Arc::new(TokenProvider::new(/* ... */));
+    
     Self {
         credential_store: app_data.credential_store.clone(),
         new_store: app_data.new_store.clone(),  // Just extract it
+        token_provider,
     }
 }
 ```
 
 ### Circular dependencies
 
-If you have circular dependencies, your architecture needs refactoring. Stores should not depend on services, only other stores.
+If you have circular dependencies, your architecture needs refactoring. The dependency flow should be:
+- Stores should not depend on coordinators or providers, only other stores
+- Providers should not depend on coordinators, only stores and other providers
+- Coordinators can depend on stores and create providers
 
 ## See Also
 
 - `src/app_data.rs` - AppData implementation
 - `src/main.rs` - AppData usage in main
-- `src/services/auth_service.rs` - Example service using AppData
+- `src/coordinators/auth_coordinator.rs` - Example coordinator using AppData
 - `src/cli/mod.rs` - CLI usage of AppData

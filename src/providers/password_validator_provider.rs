@@ -3,29 +3,30 @@ use std::sync::Arc;
 use sha1::{Sha1, Digest};
 use crate::stores::{CommonPasswordStore, HibpCacheStore};
 
-/// Password validator service that enforces password policies
+/// Password validator provider that enforces password policies
 /// 
+/// Migrated from PasswordValidator as part of service layer refactor.
 /// Implements multiple validation layers:
 /// - Length validation (15-128 characters)
 /// - Username substring check (case-insensitive)
 /// - Common password detection (via database lookup)
 /// - Compromised password detection (via HaveIBeenPwned with k-anonymity)
-pub struct PasswordValidator {
+pub struct PasswordValidatorProvider {
     min_length: usize,
     max_length: usize,
     common_password_store: Arc<CommonPasswordStore>,
     hibp_cache_store: Arc<HibpCacheStore>,
 }
 
-impl PasswordValidator {
-    /// Create a new password validator with common password and HIBP cache stores
+impl PasswordValidatorProvider {
+    /// Create a new password validator provider with common password and HIBP cache stores
     /// 
     /// # Arguments
     /// * `common_password_store` - Store for checking against common password list
     /// * `hibp_cache_store` - Store for caching HaveIBeenPwned API responses
     /// 
     /// # Returns
-    /// PasswordValidator configured with 15-128 character length requirements,
+    /// PasswordValidatorProvider configured with 15-128 character length requirements,
     /// common password detection, and compromised password detection via HIBP
     pub fn new(
         common_password_store: Arc<CommonPasswordStore>,
@@ -191,12 +192,6 @@ impl PasswordValidator {
     }
 }
 
-
-
-#[cfg(test)]
-#[path = "password_validator_test.rs"]
-mod password_validator_test;
-
 /// Errors that can occur during password validation
 #[derive(Debug, thiserror::Error)]
 pub enum PasswordValidationError {
@@ -231,4 +226,89 @@ pub enum PasswordValidationError {
     /// HIBP API error
     #[error("API error: {0}")]
     ApiError(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test::utils::setup_test_stores;
+
+    async fn create_test_password_validator_provider() -> PasswordValidatorProvider {
+        let (db, _audit_db, _credential_store, audit_store) = setup_test_stores().await;
+        let common_password_store = Arc::new(CommonPasswordStore::new(db.clone()));
+        let system_config_store = Arc::new(crate::stores::SystemConfigStore::new(db.clone(), audit_store.clone()));
+        let hibp_cache_store = Arc::new(HibpCacheStore::new(db.clone(), system_config_store));
+        
+        PasswordValidatorProvider::new(common_password_store, hibp_cache_store)
+    }
+
+    #[tokio::test]
+    async fn test_password_too_short() {
+        let validator = create_test_password_validator_provider().await;
+        
+        let result = validator.validate("short", None).await;
+        
+        assert!(matches!(result, Err(PasswordValidationError::TooShort(15))));
+    }
+
+    #[tokio::test]
+    async fn test_password_too_long() {
+        let validator = create_test_password_validator_provider().await;
+        
+        // Create a password longer than 128 characters
+        let long_password = "a".repeat(129);
+        let result = validator.validate(&long_password, None).await;
+        
+        assert!(matches!(result, Err(PasswordValidationError::TooLong(128))));
+    }
+
+    #[tokio::test]
+    async fn test_password_contains_username() {
+        let validator = create_test_password_validator_provider().await;
+        
+        let result = validator.validate("myusernamepassword123", Some("myusername")).await;
+        
+        assert!(matches!(result, Err(PasswordValidationError::ContainsUsername)));
+    }
+
+    #[tokio::test]
+    async fn test_password_contains_username_case_insensitive() {
+        let validator = create_test_password_validator_provider().await;
+        
+        let result = validator.validate("MyUserNamePassword123", Some("myusername")).await;
+        
+        assert!(matches!(result, Err(PasswordValidationError::ContainsUsername)));
+    }
+
+    #[tokio::test]
+    async fn test_generate_secure_password_length() {
+        let validator = create_test_password_validator_provider().await;
+        
+        let password = validator.generate_secure_password();
+        
+        assert_eq!(password.len(), 20);
+    }
+
+    #[tokio::test]
+    async fn test_generate_secure_password_uniqueness() {
+        let validator = create_test_password_validator_provider().await;
+        
+        let password1 = validator.generate_secure_password();
+        let password2 = validator.generate_secure_password();
+        
+        assert_ne!(password1, password2);
+    }
+
+    #[tokio::test]
+    async fn test_generate_secure_password_contains_valid_characters() {
+        let validator = create_test_password_validator_provider().await;
+        
+        let password = validator.generate_secure_password();
+        
+        // Check that all characters are from the expected charset
+        const CHARSET: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+        for ch in password.chars() {
+            assert!(CHARSET.contains(ch), "Password contains invalid character: {}", ch);
+        }
+    }
 }

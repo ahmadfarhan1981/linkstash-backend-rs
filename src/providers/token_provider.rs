@@ -8,11 +8,15 @@ use std::sync::Arc;
 use crate::types::internal::auth::Claims;
 use crate::errors::InternalError;
 use crate::errors::internal::CredentialError;
-use crate::services::{crypto, audit_logger};
+use crate::providers::{crypto_provider, audit_logger_provider};
 use crate::stores::AuditStore;
 
-/// Manages JWT token generation and validation
-pub struct TokenService {
+/// Provides JWT token generation, validation, and refresh token operations
+/// 
+/// Migrated from TokenService as part of service layer refactor.
+/// Contains all business logic for token operations while maintaining
+/// identical functionality and method signatures.
+pub struct TokenProvider {
     jwt_secret: String,
     jwt_expiration_minutes: i64,
     refresh_expiration_days: i64,
@@ -20,8 +24,8 @@ pub struct TokenService {
     audit_store: Arc<AuditStore>,
 }
 
-impl TokenService {
-    /// Create a new TokenService with the given JWT secret, refresh token secret, and audit store
+impl TokenProvider {
+    /// Create a new TokenProvider with the given JWT secret, refresh token secret, and audit store
     pub fn new(jwt_secret: String, refresh_token_secret: String, audit_store: Arc<AuditStore>) -> Self {
         Self {
             jwt_secret,
@@ -87,7 +91,7 @@ impl TokenService {
         .map_err(|e| InternalError::crypto("jwt_generation", format!("Failed to generate JWT: {}", e)))?;
         
         // Log JWT issuance at point of action (expiration_dt already validated above)
-        if let Err(audit_err) = audit_logger::log_jwt_issued(
+        if let Err(audit_err) = audit_logger_provider::log_jwt_issued(
             &self.audit_store,
             ctx,
             user_id.to_string(),
@@ -148,7 +152,7 @@ impl TokenService {
                 
                 // Check if this is a tampering attempt (invalid signature)
                 if matches!(err, InternalError::Credential(CredentialError::InvalidToken { .. })) {
-                    if let Err(audit_err) = audit_logger::log_jwt_tampered(
+                    if let Err(audit_err) = audit_logger_provider::log_jwt_tampered(
                         &self.audit_store,
                         &ctx,
                         token.to_string(),
@@ -158,7 +162,7 @@ impl TokenService {
                     }
                 } else {
                     // Normal validation failure (expired, etc.)
-                    if let Err(audit_err) = audit_logger::log_jwt_validation_failure(
+                    if let Err(audit_err) = audit_logger_provider::log_jwt_validation_failure(
                         &self.audit_store,
                         &ctx,
                         failure_reason.to_string(),
@@ -208,7 +212,7 @@ impl TokenService {
     /// # Returns
     /// * `String` - The hex-encoded HMAC-SHA256 hash
     pub fn hash_refresh_token(&self, token: &str) -> String {
-        crypto::hmac_sha256_token(&self.refresh_token_secret, token)
+        crypto_provider::hmac_sha256_token(&self.refresh_token_secret, token)
     }
     
     /// Get the expiration timestamp for a refresh token (7 days from now)
@@ -221,9 +225,9 @@ impl TokenService {
     }
 }
 
-impl fmt::Debug for TokenService {
+impl fmt::Debug for TokenProvider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TokenService")
+        f.debug_struct("TokenProvider")
             .field("jwt_secret", &"<redacted>")
             .field("jwt_expiration_minutes", &self.jwt_expiration_minutes)
             .field("refresh_expiration_days", &self.refresh_expiration_days)
@@ -233,11 +237,11 @@ impl fmt::Debug for TokenService {
     }
 }
 
-impl fmt::Display for TokenService {
+impl fmt::Display for TokenProvider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "TokenService {{ jwt_expiration: {}min, refresh_expiration: {}days }}",
+            "TokenProvider {{ jwt_expiration: {}min, refresh_expiration: {}days }}",
             self.jwt_expiration_minutes, self.refresh_expiration_days
         )
     }
@@ -249,10 +253,10 @@ mod tests {
     use jsonwebtoken::{decode, Validation, DecodingKey, Algorithm};
     use crate::test::utils::setup_test_stores;
 
-    async fn create_test_token_service() -> TokenService {
+    async fn create_test_token_provider() -> TokenProvider {
         let (_db, _audit_db, _credential_store, audit_store) = setup_test_stores().await;
         
-        TokenService::new(
+        TokenProvider::new(
             "test-secret-key-minimum-32-characters-long".to_string(),
             "test-refresh-secret-minimum-32-chars".to_string(),
             audit_store,
@@ -261,11 +265,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_jwt_expiration_is_15_minutes() {
-        let token_manager = create_test_token_service().await;
+        let token_provider = create_test_token_provider().await;
         let user_id = Uuid::new_v4();
         let ctx = crate::types::internal::context::RequestContext::new();
         
-        let (token, _jwt_id) = token_manager.generate_jwt(&ctx, &user_id, false, false, false, vec![], false).await.unwrap();
+        let (token, _jwt_id) = token_provider.generate_jwt(&ctx, &user_id, false, false, false, vec![], false).await.unwrap();
         
         let mut validation = Validation::new(Algorithm::HS256);
         validation.validate_exp = false;
@@ -282,10 +286,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_refresh_token_creates_unique_tokens() {
-        let token_manager = create_test_token_service().await;
+        let token_provider = create_test_token_provider().await;
         
-        let token1 = token_manager.generate_refresh_token();
-        let token2 = token_manager.generate_refresh_token();
+        let token1 = token_provider.generate_refresh_token();
+        let token2 = token_provider.generate_refresh_token();
         
         assert_ne!(token1, token2);
         assert_eq!(token1.len(), 44); // base64-encoded 32 bytes
@@ -299,20 +303,20 @@ mod tests {
         let (_db1, _audit_db1, _cred1, audit_store1) = setup_test_stores().await;
         let (_db2, _audit_db2, _cred2, audit_store2) = setup_test_stores().await;
         
-        let token_manager1 = TokenService::new(
+        let token_provider1 = TokenProvider::new(
             "test-secret-key-minimum-32-characters-long".to_string(),
             "refresh-secret-one-minimum-32-chars".to_string(),
             audit_store1,
         );
         
-        let token_manager2 = TokenService::new(
+        let token_provider2 = TokenProvider::new(
             "test-secret-key-minimum-32-characters-long".to_string(),
             "refresh-secret-two-minimum-32-chars".to_string(),
             audit_store2,
         );
         
-        let hash1 = token_manager1.hash_refresh_token(token);
-        let hash2 = token_manager2.hash_refresh_token(token);
+        let hash1 = token_provider1.hash_refresh_token(token);
+        let hash2 = token_provider2.hash_refresh_token(token);
         
         // Different secrets should produce different hashes (prevents token minting)
         assert_ne!(hash1, hash2);
@@ -325,20 +329,20 @@ mod tests {
         let (_db1, _audit_db1, _cred1, audit_store1) = setup_test_stores().await;
         let (_db2, _audit_db2, _cred2, audit_store2) = setup_test_stores().await;
         
-        let attacker_token_manager = TokenService::new(
+        let attacker_token_provider = TokenProvider::new(
             "test-secret-key-minimum-32-characters-long".to_string(),
             "attacker-guessed-secret-wrong-value".to_string(),
             audit_store1,
         );
         
-        let legitimate_token_manager = TokenService::new(
+        let legitimate_token_provider = TokenProvider::new(
             "test-secret-key-minimum-32-characters-long".to_string(),
             "correct-refresh-secret-minimum-32-ch".to_string(),
             audit_store2,
         );
         
-        let attacker_hash = attacker_token_manager.hash_refresh_token(token);
-        let legitimate_hash = legitimate_token_manager.hash_refresh_token(token);
+        let attacker_hash = attacker_token_provider.hash_refresh_token(token);
+        let legitimate_hash = legitimate_token_provider.hash_refresh_token(token);
         
         // Attacker's hash won't match legitimate hash (can't mint valid tokens)
         assert_ne!(attacker_hash, legitimate_hash);
@@ -346,9 +350,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_debug_trait_does_not_expose_secrets() {
-        let token_service = create_test_token_service().await;
+        let token_provider = create_test_token_provider().await;
         
-        let debug_output = format!("{:?}", token_service);
+        let debug_output = format!("{:?}", token_provider);
         
         assert!(!debug_output.contains("test-secret-key"));
         assert!(!debug_output.contains("test-refresh-secret"));
@@ -360,9 +364,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_display_trait_does_not_expose_secrets() {
-        let token_service = create_test_token_service().await;
+        let token_provider = create_test_token_provider().await;
         
-        let display_output = format!("{}", token_service);
+        let display_output = format!("{}", token_provider);
         
         assert!(!display_output.contains("test-secret-key"));
         assert!(!display_output.contains("test-refresh-secret"));
@@ -372,11 +376,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_jwt_includes_admin_roles() {
-        let token_manager = create_test_token_service().await;
+        let token_provider = create_test_token_provider().await;
         let user_id = Uuid::new_v4();
         let ctx = crate::types::internal::context::RequestContext::new();
         
-        let (token, _jwt_id) = token_manager.generate_jwt(
+        let (token, _jwt_id) = token_provider.generate_jwt(
             &ctx,
             &user_id,
             true,  // is_owner
@@ -403,11 +407,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_jwt_with_no_admin_roles() {
-        let token_manager = create_test_token_service().await;
+        let token_provider = create_test_token_provider().await;
         let user_id = Uuid::new_v4();
         let ctx = crate::types::internal::context::RequestContext::new();
         
-        let (token, _jwt_id) = token_manager.generate_jwt(
+        let (token, _jwt_id) = token_provider.generate_jwt(
             &ctx,
             &user_id,
             false, // is_owner
@@ -434,12 +438,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_jwt_includes_password_change_required_flag() {
-        let token_manager = create_test_token_service().await;
+        let token_provider = create_test_token_provider().await;
         let user_id = Uuid::new_v4();
         let ctx = crate::types::internal::context::RequestContext::new();
         
         // Test with password_change_required = true
-        let (token_true, _jwt_id) = token_manager.generate_jwt(
+        let (token_true, _jwt_id) = token_provider.generate_jwt(
             &ctx,
             &user_id,
             false,
@@ -461,7 +465,7 @@ mod tests {
         assert_eq!(decoded_true.claims.password_change_required, true);
         
         // Test with password_change_required = false
-        let (token_false, _jwt_id) = token_manager.generate_jwt(
+        let (token_false, _jwt_id) = token_provider.generate_jwt(
             &ctx,
             &user_id,
             false,
@@ -480,4 +484,3 @@ mod tests {
         assert_eq!(decoded_false.claims.password_change_required, false);
     }
 }
-

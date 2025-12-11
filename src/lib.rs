@@ -2,7 +2,8 @@
 
 pub mod app_data;
 pub mod config;
-pub mod services;
+pub mod coordinators;
+pub mod providers;
 pub mod types;
 pub mod errors;
 pub mod stores;

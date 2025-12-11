@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use std::sync::Arc;
 use crate::stores::{CredentialStore, SystemConfigStore, AuditStore};
 use crate::types::internal::context::RequestContext;
-use crate::services::audit_logger;
+use crate::providers::audit_logger_provider;
 
 /// Activate the owner account
 /// 
@@ -28,7 +28,7 @@ pub async fn activate_owner(
     let ctx = RequestContext::for_cli("owner_activate");
 
     // Log CLI session start
-    if let Err(e) = audit_logger::log_cli_session_start(
+    if let Err(e) = audit_logger_provider::log_cli_session_start(
         audit_store,
         &ctx,
         "owner_activate",
@@ -94,7 +94,7 @@ pub async fn activate_owner(
     }
 
     // Log CLI session end
-    if let Err(e) = audit_logger::log_cli_session_end(
+    if let Err(e) = audit_logger_provider::log_cli_session_end(
         audit_store,
         &ctx,
         "owner_activate",
@@ -128,7 +128,7 @@ pub async fn deactivate_owner(
     let ctx = RequestContext::for_cli("owner_deactivate");
 
     // Log CLI session start
-    if let Err(e) = audit_logger::log_cli_session_start(
+    if let Err(e) = audit_logger_provider::log_cli_session_start(
         audit_store,
         &ctx,
         "owner_deactivate",
@@ -195,7 +195,7 @@ pub async fn deactivate_owner(
     }
 
     // Log CLI session end
-    if let Err(e) = audit_logger::log_cli_session_end(
+    if let Err(e) = audit_logger_provider::log_cli_session_end(
         audit_store,
         &ctx,
         "owner_deactivate",
