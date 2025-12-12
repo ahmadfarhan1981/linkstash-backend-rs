@@ -5,6 +5,7 @@ mod m20250123_000002_create_audit_schema;
 mod m20250127_000001_create_common_passwords;
 mod m20250127_000002_create_hibp_cache;
 mod m20250127_000003_add_password_change_required;
+mod m20250127_000004_create_system_settings;
 
 pub struct AuthMigrator;
 
@@ -16,6 +17,7 @@ impl MigratorTrait for AuthMigrator {
             Box::new(m20250127_000001_create_common_passwords::Migration),
             Box::new(m20250127_000002_create_hibp_cache::Migration),
             Box::new(m20250127_000003_add_password_change_required::Migration),
+            Box::new(m20250127_000004_create_system_settings::Migration),
         ]
     }
 }
