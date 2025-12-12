@@ -31,8 +31,7 @@ impl AuthCoordinator {
     pub fn new(app_data: Arc<AppData>) -> Self {
         // Step 1: Create providers from AppData components
         let token_provider = Arc::new(TokenProvider::new(
-            app_data.secret_manager.jwt_secret().to_string(),
-            app_data.secret_manager.refresh_token_secret().to_string(),
+            app_data.secret_manager.clone(),
             app_data.audit_store.clone(),
         ));
         

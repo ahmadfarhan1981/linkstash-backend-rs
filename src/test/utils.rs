@@ -108,10 +108,20 @@ pub async fn setup_test_auth_services() -> (
 ) {
     let (auth_db, audit_db, credential_store, audit_store) = setup_test_stores().await;
     
-    // Create token provider with test secrets
+    // Create mock SecretManager for testing
+    // Set environment variables temporarily for SecretManager::init()
+    unsafe {
+        std::env::set_var("JWT_SECRET", "test-secret-key-minimum-32-characters-long");
+        std::env::set_var("PASSWORD_PEPPER", "test-pepper-for-unit-tests");
+        std::env::set_var("REFRESH_TOKEN_SECRET", "test-refresh-secret-minimum-32-chars");
+    }
+    
+    let secret_manager = Arc::new(crate::config::SecretManager::init()
+        .expect("Failed to initialize test SecretManager"));
+    
+    // Create token provider with SecretManager
     let token_provider = Arc::new(TokenProvider::new(
-        "test-secret-key-minimum-32-characters-long".to_string(),
-        "test-refresh-secret-minimum-32-chars".to_string(),
+        secret_manager,
         audit_store.clone(),
     ));
     
@@ -142,13 +152,13 @@ pub async fn setup_test_auth_services() -> (
     ));
     
     // Create password validator
-    let password_validator = Arc::new(PasswordValidatorProvider::new(
+    let _password_validator = Arc::new(PasswordValidatorProvider::new(
         common_password_store.clone(),
         hibp_cache_store.clone(),
     ));
     
     // Create mock AppData for testing
-    let app_data = Arc::new(AppData {
+    let _app_data = Arc::new(AppData {
         db: auth_db.clone(),
         audit_db: audit_db.clone(),
         secret_manager,

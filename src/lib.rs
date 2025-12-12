@@ -14,5 +14,5 @@ pub use app_data::AppData;
 
 // Test utilities (available for unit and integration tests)
 // Note: Compiled in all builds but only used during testing
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub mod test;

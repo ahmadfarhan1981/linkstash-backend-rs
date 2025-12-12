@@ -165,10 +165,9 @@ async fn test_token_service_integration_with_secret_manager() {
     // Create audit store for TokenProvider
     let audit_store = common::create_test_audit_store().await;
     
-    // Create TokenProvider with JWT secret and refresh token secret from SecretManager
+    // Create TokenProvider with SecretManager reference
     let token_service = Arc::new(TokenProvider::new(
-        secret_manager.jwt_secret().to_string(),
-        secret_manager.refresh_token_secret().to_string(),
+        secret_manager.clone(),
         audit_store,
     ));
     
@@ -198,10 +197,9 @@ async fn test_jwt_generation_works_with_secrets_from_secret_manager() {
     // Create audit store for TokenProvider
     let audit_store = common::create_test_audit_store().await;
     
-    // Create TokenProvider with JWT secret and refresh token secret from SecretManager
+    // Create TokenProvider with SecretManager reference
     let token_service = Arc::new(TokenProvider::new(
-        secret_manager.jwt_secret().to_string(),
-        secret_manager.refresh_token_secret().to_string(),
+        secret_manager.clone(),
         audit_store,
     ));
     
@@ -240,10 +238,9 @@ async fn test_jwt_validation_works_with_secrets_from_secret_manager() {
     // Create audit store for TokenProvider
     let audit_store = common::create_test_audit_store().await;
     
-    // Create TokenProvider with JWT secret and refresh token secret from SecretManager
+    // Create TokenProvider with SecretManager reference
     let token_service = Arc::new(TokenProvider::new(
-        secret_manager.jwt_secret().to_string(),
-        secret_manager.refresh_token_secret().to_string(),
+        secret_manager.clone(),
         audit_store,
     ));
     
@@ -278,15 +275,13 @@ async fn test_multiple_token_services_can_share_secret_manager() {
     let audit_store1 = common::create_test_audit_store().await;
     let audit_store2 = common::create_test_audit_store().await;
     
-    // Create multiple TokenProvider instances with the same secret
+    // Create multiple TokenProvider instances with the same SecretManager
     let token_service1 = Arc::new(TokenProvider::new(
-        secret_manager.jwt_secret().to_string(),
-        secret_manager.refresh_token_secret().to_string(),
+        secret_manager.clone(),
         audit_store1,
     ));
     let token_service2 = Arc::new(TokenProvider::new(
-        secret_manager.jwt_secret().to_string(),
-        secret_manager.refresh_token_secret().to_string(),
+        secret_manager.clone(),
         audit_store2,
     ));
     

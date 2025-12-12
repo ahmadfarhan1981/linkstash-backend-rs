@@ -10,6 +10,7 @@ use crate::errors::InternalError;
 use crate::errors::internal::CredentialError;
 use crate::providers::{crypto_provider, audit_logger_provider};
 use crate::stores::AuditStore;
+use crate::config::SecretManager;
 
 /// Provides JWT token generation, validation, and refresh token operations
 /// 
@@ -17,21 +18,19 @@ use crate::stores::AuditStore;
 /// Contains all business logic for token operations while maintaining
 /// identical functionality and method signatures.
 pub struct TokenProvider {
-    jwt_secret: String,
+    secret_manager: Arc<SecretManager>,
     jwt_expiration_minutes: i64,
     refresh_expiration_days: i64,
-    refresh_token_secret: String,
     audit_store: Arc<AuditStore>,
 }
 
 impl TokenProvider {
-    /// Create a new TokenProvider with the given JWT secret, refresh token secret, and audit store
-    pub fn new(jwt_secret: String, refresh_token_secret: String, audit_store: Arc<AuditStore>) -> Self {
+    /// Create a new TokenProvider with the given SecretManager and audit store
+    pub fn new(secret_manager: Arc<SecretManager>, audit_store: Arc<AuditStore>) -> Self {
         Self {
-            jwt_secret,
+            secret_manager,
             jwt_expiration_minutes: 15, // 15 minutes as per requirements
             refresh_expiration_days: 7, // 7 days as per requirements
-            refresh_token_secret,
             audit_store,
         }
     }
@@ -86,7 +85,7 @@ impl TokenProvider {
         let token = encode(
             &Header::new(Algorithm::HS256),
             &claims,
-            &EncodingKey::from_secret(self.jwt_secret.as_bytes()),
+            &EncodingKey::from_secret(self.secret_manager.jwt_secret().as_bytes()),
         )
         .map_err(|e| InternalError::crypto("jwt_generation", format!("Failed to generate JWT: {}", e)))?;
         
@@ -118,7 +117,7 @@ impl TokenProvider {
         
         let token_data = decode::<Claims>(
             token,
-            &DecodingKey::from_secret(self.jwt_secret.as_bytes()),
+            &DecodingKey::from_secret(self.secret_manager.jwt_secret().as_bytes()),
             &validation,
         )
         .map_err(|e| {
@@ -212,7 +211,7 @@ impl TokenProvider {
     /// # Returns
     /// * `String` - The hex-encoded HMAC-SHA256 hash
     pub fn hash_refresh_token(&self, token: &str) -> String {
-        crypto_provider::hmac_sha256_token(&self.refresh_token_secret, token)
+        crypto_provider::hmac_sha256_token(self.secret_manager.refresh_token_secret(), token)
     }
     
     /// Get the expiration timestamp for a refresh token (7 days from now)
@@ -228,10 +227,9 @@ impl TokenProvider {
 impl fmt::Debug for TokenProvider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TokenProvider")
-            .field("jwt_secret", &"<redacted>")
+            .field("secret_manager", &"<redacted>")
             .field("jwt_expiration_minutes", &self.jwt_expiration_minutes)
             .field("refresh_expiration_days", &self.refresh_expiration_days)
-            .field("refresh_token_secret", &"<redacted>")
             .field("audit_store", &"<audit_store>")
             .finish()
     }
@@ -256,9 +254,19 @@ mod tests {
     async fn create_test_token_provider() -> TokenProvider {
         let (_db, _audit_db, _credential_store, audit_store) = setup_test_stores().await;
         
+        // Create mock SecretManager for testing
+        // Set environment variables temporarily for SecretManager::init()
+        unsafe {
+            std::env::set_var("JWT_SECRET", "test-secret-key-minimum-32-characters-long");
+            std::env::set_var("PASSWORD_PEPPER", "test-pepper-for-unit-tests");
+            std::env::set_var("REFRESH_TOKEN_SECRET", "test-refresh-secret-minimum-32-chars");
+        }
+        
+        let secret_manager = Arc::new(crate::config::SecretManager::init()
+            .expect("Failed to initialize test SecretManager"));
+        
         TokenProvider::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "test-refresh-secret-minimum-32-chars".to_string(),
+            secret_manager,
             audit_store,
         )
     }
@@ -303,15 +311,29 @@ mod tests {
         let (_db1, _audit_db1, _cred1, audit_store1) = setup_test_stores().await;
         let (_db2, _audit_db2, _cred2, audit_store2) = setup_test_stores().await;
         
+        // Create first SecretManager with different refresh token secret
+        unsafe {
+            std::env::set_var("JWT_SECRET", "test-secret-key-minimum-32-characters-long");
+            std::env::set_var("PASSWORD_PEPPER", "test-pepper-for-unit-tests");
+            std::env::set_var("REFRESH_TOKEN_SECRET", "refresh-secret-one-minimum-32-chars");
+        }
+        let secret_manager1 = Arc::new(crate::config::SecretManager::init()
+            .expect("Failed to initialize test SecretManager"));
+        
         let token_provider1 = TokenProvider::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "refresh-secret-one-minimum-32-chars".to_string(),
+            secret_manager1,
             audit_store1,
         );
         
+        // Create second SecretManager with different refresh token secret
+        unsafe {
+            std::env::set_var("REFRESH_TOKEN_SECRET", "refresh-secret-two-minimum-32-chars");
+        }
+        let secret_manager2 = Arc::new(crate::config::SecretManager::init()
+            .expect("Failed to initialize test SecretManager"));
+        
         let token_provider2 = TokenProvider::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "refresh-secret-two-minimum-32-chars".to_string(),
+            secret_manager2,
             audit_store2,
         );
         
@@ -329,15 +351,29 @@ mod tests {
         let (_db1, _audit_db1, _cred1, audit_store1) = setup_test_stores().await;
         let (_db2, _audit_db2, _cred2, audit_store2) = setup_test_stores().await;
         
+        // Create attacker SecretManager with wrong secret
+        unsafe {
+            std::env::set_var("JWT_SECRET", "test-secret-key-minimum-32-characters-long");
+            std::env::set_var("PASSWORD_PEPPER", "test-pepper-for-unit-tests");
+            std::env::set_var("REFRESH_TOKEN_SECRET", "attacker-guessed-secret-wrong-value");
+        }
+        let attacker_secret_manager = Arc::new(crate::config::SecretManager::init()
+            .expect("Failed to initialize test SecretManager"));
+        
         let attacker_token_provider = TokenProvider::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "attacker-guessed-secret-wrong-value".to_string(),
+            attacker_secret_manager,
             audit_store1,
         );
         
+        // Create legitimate SecretManager with correct secret
+        unsafe {
+            std::env::set_var("REFRESH_TOKEN_SECRET", "correct-refresh-secret-minimum-32-ch");
+        }
+        let legitimate_secret_manager = Arc::new(crate::config::SecretManager::init()
+            .expect("Failed to initialize test SecretManager"));
+        
         let legitimate_token_provider = TokenProvider::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "correct-refresh-secret-minimum-32-ch".to_string(),
+            legitimate_secret_manager,
             audit_store2,
         );
         
@@ -359,7 +395,7 @@ mod tests {
         assert!(debug_output.contains("<redacted>"));
         
         let redacted_count = debug_output.matches("<redacted>").count();
-        assert_eq!(redacted_count, 2);
+        assert_eq!(redacted_count, 1); // Only secret_manager field is redacted now
     }
 
     #[tokio::test]

@@ -9,10 +9,19 @@ mod tests {
         let (db, _audit_db, credential_store, audit_store) = setup_test_stores().await;
         let password_validator = setup_test_password_validator().await;
         
+        // Create mock SecretManager for testing
+        unsafe {
+            std::env::set_var("JWT_SECRET", "test-secret-key-minimum-32-characters-long");
+            std::env::set_var("PASSWORD_PEPPER", "test-pepper-for-unit-tests");
+            std::env::set_var("REFRESH_TOKEN_SECRET", "test-refresh-secret-minimum-32-chars");
+        }
+        
+        let secret_manager = Arc::new(crate::config::SecretManager::init()
+            .expect("Failed to initialize test SecretManager"));
+        
         // Create token service
         let token_service = Arc::new(TokenProvider::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "test-refresh-secret-minimum-32-chars".to_string(),
+            secret_manager,
             audit_store.clone(),
         ));
         
@@ -72,10 +81,19 @@ mod tests {
         let (db, _audit_db, credential_store, audit_store) = setup_test_stores().await;
         let password_validator = setup_test_password_validator().await;
         
+        // Create mock SecretManager for testing
+        unsafe {
+            std::env::set_var("JWT_SECRET", "test-secret-key-minimum-32-characters-long");
+            std::env::set_var("PASSWORD_PEPPER", "test-pepper-for-unit-tests");
+            std::env::set_var("REFRESH_TOKEN_SECRET", "test-refresh-secret-minimum-32-chars");
+        }
+        
+        let secret_manager = Arc::new(crate::config::SecretManager::init()
+            .expect("Failed to initialize test SecretManager"));
+        
         // Create token service
         let token_service = Arc::new(TokenProvider::new(
-            "test-secret-key-minimum-32-characters-long".to_string(),
-            "test-refresh-secret-minimum-32-chars".to_string(),
+            secret_manager,
             audit_store.clone(),
         ));
         

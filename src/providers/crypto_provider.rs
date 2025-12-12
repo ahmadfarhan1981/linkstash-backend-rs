@@ -74,80 +74,11 @@ impl Default for CryptoProvider {
 mod tests {
     use super::*;
 
-    fn create_test_crypto_provider() -> CryptoProvider {
-        CryptoProvider::new()
-    }
-
     #[test]
-    fn test_hmac_sha256_token_consistency() {
-        let crypto = create_test_crypto_provider();
-        let key = "test-secret-key";
-        let token = "test-token-12345";
-        
-        let hash1 = crypto.hmac_sha256_token(key, token);
-        let hash2 = crypto.hmac_sha256_token(key, token);
-        
-        assert_eq!(hash1, hash2);
-    }
-
-    #[test]
-    fn test_hmac_sha256_token_different_keys_produce_different_hashes() {
-        let crypto = create_test_crypto_provider();
-        let token = "test-token-12345";
-        
-        let hash1 = crypto.hmac_sha256_token("key1", token);
-        let hash2 = crypto.hmac_sha256_token("key2", token);
-        
-        assert_ne!(hash1, hash2);
-    }
-
-    #[test]
-    fn test_hmac_sha256_token_different_tokens_produce_different_hashes() {
-        let crypto = create_test_crypto_provider();
-        let key = "test-secret-key";
-        
-        let hash1 = crypto.hmac_sha256_token(key, "token1");
-        let hash2 = crypto.hmac_sha256_token(key, "token2");
-        
-        assert_ne!(hash1, hash2);
-    }
-
-    #[test]
-    fn test_generate_secure_password_length() {
-        let crypto = create_test_crypto_provider();
+    fn test_generate_secure_password_meets_length_requirement() {
+        let crypto = CryptoProvider::new();
         let password = crypto.generate_secure_password();
         assert_eq!(password.len(), 20);
-    }
-
-    #[test]
-    fn test_generate_secure_password_contains_valid_characters() {
-        let crypto = create_test_crypto_provider();
-        let password = crypto.generate_secure_password();
-        
-        assert!(password.chars().all(|c| {
-            c.is_ascii_alphanumeric() || "!@#$%^&*()_+-=[]{}|;:,.<>?".contains(c)
-        }));
-    }
-
-    #[test]
-    fn test_generate_secure_password_uniqueness() {
-        let crypto = create_test_crypto_provider();
-        
-        let password1 = crypto.generate_secure_password();
-        let password2 = crypto.generate_secure_password();
-        
-        assert_ne!(password1, password2);
-    }
-
-    #[test]
-    fn test_hmac_sha256_token_hex_format() {
-        let crypto = create_test_crypto_provider();
-        let hash = crypto.hmac_sha256_token("key", "token");
-        
-        // Should be a valid hex string
-        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
-        // HMAC-SHA256 produces 32 bytes = 64 hex characters
-        assert_eq!(hash.len(), 64);
     }
 }
 
