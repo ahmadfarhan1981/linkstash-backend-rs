@@ -33,11 +33,55 @@ Both managers share the same configuration loading patterns but handle their val
 - **SecretManager**: Redacts values, never logs sensitive data
 - **SettingsManager**: Normal logging, can display values for debugging
 
+## Modular Architecture
+
+The settings management system is implemented using a modular architecture for improved maintainability and testability:
+
+### Module Responsibilities
+
+- **`errors.rs`**: Centralized error types for all configuration layers
+- **`config_spec.rs`**: Core configuration abstractions and loading logic
+- **`bootstrap_settings.rs`**: Infrastructure settings (database, server binding)
+- **`application_settings.rs`**: Business logic settings with caching
+- **`settings_manager.rs`**: Coordination layer that orchestrates all components
+
+### Benefits
+
+1. **Single Responsibility**: Each module has a focused, well-defined purpose
+2. **Maintainability**: Easier to understand and modify individual components
+3. **Testability**: Tests are co-located with their respective modules
+4. **Reusability**: Components can be imported and used independently
+5. **Scalability**: Easy to add new settings types or configuration sources
+
+### File Sizes
+
+The modular approach keeps individual files manageable:
+- `errors.rs`: ~100 lines (error types)
+- `config_spec.rs`: ~270 lines (configuration specifications)
+- `bootstrap_settings.rs`: ~370 lines (bootstrap settings + tests)
+- `application_settings.rs`: ~650 lines (application settings + tests)
+- `settings_manager.rs`: ~140 lines (coordination logic only)
+
+This replaces the previous monolithic 1700+ line file with focused, maintainable modules.
+
 ## Components and Interfaces
+
+The settings management system is organized into focused modules for maintainability:
+
+```
+src/config/
+├── mod.rs                    # Public exports and module coordination
+├── errors.rs                 # BootstrapError, ApplicationError, SettingsError
+├── config_spec.rs           # ConfigSpec, ConfigSource, ConfigValue types
+├── bootstrap_settings.rs     # BootstrapSettings struct + tests
+├── application_settings.rs   # ApplicationSettings struct + tests  
+├── settings_manager.rs       # Main SettingsManager coordination
+└── secret_manager.rs        # Existing SecretManager (unchanged)
+```
 
 ### ConfigSource Enum
 
-Defines the single persistent source for configuration values:
+Defines the single persistent source for configuration values (in `config_spec.rs`):
 
 ```rust
 #[derive(Debug, Clone)]
@@ -53,7 +97,7 @@ pub enum ConfigSource {
 
 ### Configuration Value Tracking
 
-Track configuration sources and mutability for runtime management:
+Track configuration sources and mutability for runtime management (in `config_spec.rs`):
 
 ```rust
 #[derive(Debug, Clone)]
@@ -74,7 +118,7 @@ pub enum ConfigValueSource {
 
 ### ConfigSpec Struct
 
-Configuration specification with environment override → single persistent source → default priority:
+Configuration specification with environment override → single persistent source → default priority (in `config_spec.rs`):
 
 ```rust
 pub struct ConfigSpec {
@@ -107,7 +151,7 @@ impl ConfigSpec {
 
 ### SettingsManager
 
-The main settings management component with three distinct layers:
+The main settings management component with three distinct layers (in `settings_manager.rs`):
 
 ```rust
 pub struct SettingsManager {
@@ -147,7 +191,7 @@ impl SettingsManager {
 
 ### BootstrapSettings
 
-Connectivity and infrastructure configuration (always from environment variables):
+Connectivity and infrastructure configuration (always from environment variables) (in `bootstrap_settings.rs`):
 
 ```rust
 pub struct BootstrapSettings {
@@ -176,7 +220,7 @@ impl BootstrapSettings {
 
 ### ApplicationSettings
 
-Business logic configuration with in-memory caching and runtime updates:
+Business logic configuration with in-memory caching and runtime updates (in `application_settings.rs`):
 
 ```rust
 pub struct ApplicationSettings {
@@ -223,7 +267,7 @@ impl ApplicationSettings {
 
 ### Error Types
 
-Separate error types for each configuration layer:
+Separate error types for each configuration layer (in `errors.rs`):
 
 ```rust
 #[derive(Debug)]
@@ -452,9 +496,11 @@ After analyzing the acceptance criteria, several properties emerge that can be v
 
 ### AppData Integration
 
-The `SettingsManager` will be integrated into the existing `AppData` structure:
+The modular `SettingsManager` will be integrated into the existing `AppData` structure:
 
 ```rust
+use crate::config::SettingsManager;  // Import from modular structure
+
 pub struct AppData {
     // Existing fields...
     pub settings_manager: Arc<SettingsManager>,  // New unified manager
