@@ -244,6 +244,22 @@ audit::log_refresh_token_revoked(&audit_store, &ctx, target_user_id, token_id).a
 audit::log_jwt_tampered(&audit_store, &ctx, full_jwt, "invalid_signature").await?;
 ```
 
+**Rationale:** Tampered or malformed JWTs are safe to log in full because:
+- They cannot be used for authentication (invalid signature/format)
+- They provide forensic evidence of tampering attempts
+- They help identify attack patterns and sources
+- No replay attack risk since they're already invalid
+
+**When to log full tokens:**
+- JWT signature validation fails
+- JWT is malformed or unparseable
+- JWT claims are structurally invalid
+
+**When NOT to log full tokens:**
+- JWT is valid but expired (log only jti and expiration)
+- JWT is valid but user is disabled (log only jti and user_id)
+- Any scenario where the token could potentially be reused
+
 ## Layer Responsibilities
 
 ### API Layer (api/*)
