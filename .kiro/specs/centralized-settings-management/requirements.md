@@ -40,15 +40,15 @@ This feature introduces a centralized settings management system to replace the 
 
 ### Requirement 3
 
-**User Story:** As a developer, I want to easily migrate from environment variables to database storage, so that the system can evolve without major code changes.
+**User Story:** As a developer, I want a predictable configuration priority system, so that environment variables can override persistent storage without complex fallback chains.
 
 #### Acceptance Criteria
 
-1. THE SettingsManager SHALL use a ConfigSource abstraction to define where settings are loaded from
-2. WHEN the configuration source changes, THE SettingsManager SHALL continue to provide the same interface
-3. THE SettingsManager SHALL support loading from environment variables
-4. THE SettingsManager SHALL be designed with extensible ConfigSource architecture for future enhancements
-5. THE SettingsManager SHALL validate environment variable values according to their ConfigSpec definitions
+1. THE SettingsManager SHALL use a ConfigSource abstraction to define persistent storage locations
+2. WHEN an environment variable override is set, THE SettingsManager SHALL use that value regardless of persistent source availability
+3. WHEN no environment variable is set, THE SettingsManager SHALL load from the single specified persistent source
+4. THE SettingsManager SHALL NOT attempt fallback chains between multiple persistent sources
+5. THE SettingsManager SHALL validate values from all sources according to their ConfigSpec definitions
 
 ### Requirement 4
 
@@ -109,3 +109,15 @@ This feature introduces a centralized settings management system to replace the 
 3. THE SettingsManager SHALL parse duration values from human-readable formats
 4. THE SettingsManager SHALL validate that duration values are within reasonable ranges
 5. THE SettingsManager SHALL provide sensible default values for timing settings
+
+### Requirement 9
+
+**User Story:** As a system administrator, I want to update configuration settings at runtime, so that I can adjust system behavior without requiring restarts.
+
+#### Acceptance Criteria
+
+1. THE SettingsManager SHALL support runtime updates for settings backed by persistent storage
+2. WHEN a setting is updated via API, THE SettingsManager SHALL immediately update the in-memory cache
+3. THE SettingsManager SHALL prevent updates to settings that are overridden by environment variables
+4. THE SettingsManager SHALL provide information about each setting's source and mutability status
+5. THE SettingsManager SHALL validate new setting values before applying updates

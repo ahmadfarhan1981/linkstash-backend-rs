@@ -37,30 +37,51 @@ Both managers share the same configuration loading patterns but handle their val
 
 ### ConfigSource Enum
 
-Shared between both managers to define configuration sources:
+Defines the single persistent source for configuration values:
 
 ```rust
 #[derive(Debug, Clone)]
 pub enum ConfigSource {
-    /// Load from environment variable
-    EnvVar { name: String },
     /// Load from database key-value table
     Database { key: String },
+    /// Load from configuration file
+    File { path: PathBuf, key: String },
     // Future variants:
-    // File { path: PathBuf },
+    // Vault { path: String },
+}
+```
+
+### Configuration Value Tracking
+
+Track configuration sources and mutability for runtime management:
+
+```rust
+#[derive(Debug, Clone)]
+pub struct ConfigValue {
+    pub value: String,
+    pub source: ConfigValueSource,
+    pub is_mutable: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum ConfigValueSource {
+    EnvironmentVariable { name: String },
+    Database { key: String },
+    File { path: PathBuf, key: String },
+    Default,
 }
 ```
 
 ### ConfigSpec Struct
 
-Shared configuration specification pattern with fallback chain support:
+Configuration specification with environment override → single persistent source → default priority:
 
 ```rust
 pub struct ConfigSpec {
-    /// Environment variable override (highest priority)
+    /// Environment variable override (always highest priority)
     pub env_override: Option<String>,
-    /// Database key (fallback from env var)
-    pub database_key: Option<String>,
+    /// Single persistent source (middle priority)
+    pub persistent_source: Option<ConfigSource>,
     /// Default value (lowest priority)
     pub default_value: Option<String>,
     /// Whether this configuration is required (no default allowed)
@@ -76,7 +97,7 @@ pub struct ConfigSpec {
 impl ConfigSpec {
     pub fn new() -> Self;
     pub fn env_override(mut self, name: &str) -> Self;
-    pub fn database(mut self, key: &str) -> Self;
+    pub fn persistent_source(mut self, source: ConfigSource) -> Self;
     pub fn default_value(mut self, value: &str) -> Self;
     pub fn required(mut self, required: bool) -> Self;
     pub fn min_length(mut self, length: usize) -> Self;
@@ -115,6 +136,12 @@ impl SettingsManager {
     pub fn jwt_secret(&self) -> Result<&str, SettingsError>;
     pub fn jwt_expiration(&self) -> Result<Duration, SettingsError>;
     pub fn refresh_token_expiration(&self) -> Result<Duration, SettingsError>;
+    
+    // Configuration management methods
+    pub fn list_all_settings(&self) -> Vec<(String, ConfigValue)>;
+    pub fn get_setting_info(&self, setting_name: &str) -> Result<ConfigValue, SettingsError>;
+    pub fn can_update_setting(&self, setting_name: &str) -> bool;
+    pub async fn update_setting(&mut self, setting_name: &str, value: String) -> Result<(), SettingsError>;
 }
 ```
 
@@ -149,27 +176,36 @@ impl BootstrapSettings {
 
 ### ApplicationSettings
 
-Business logic configuration (environment variable override → database → defaults):
+Business logic configuration with in-memory caching and runtime updates:
 
 ```rust
 pub struct ApplicationSettings {
-    // Authentication timing
-    jwt_expiration_minutes: u32,
-    refresh_token_expiration_days: u32,
+    // Cached values for fast access (thread-safe)
+    jwt_expiration_minutes: Arc<RwLock<u32>>,
+    refresh_token_expiration_days: Arc<RwLock<u32>>,
+    rate_limiting_enabled: Arc<RwLock<bool>>,
+    audit_retention_days: Arc<RwLock<u32>>,
     
-    // Feature flags (future)
-    rate_limiting_enabled: bool,
-    audit_retention_days: u32,
+    // Database connection for updates
+    db: Arc<Database>,
+    
+    // Configuration specifications for validation and source tracking
+    specs: HashMap<String, ConfigSpec>,
 }
 
 impl ApplicationSettings {
     pub async fn init(bootstrap: &BootstrapSettings) -> Result<Self, SettingsError>;
     
-    // Getters
+    // Fast cached getters
     pub fn jwt_expiration(&self) -> Duration;
     pub fn refresh_token_expiration(&self) -> Duration;
     pub fn rate_limiting_enabled(&self) -> bool;
     pub fn audit_retention_days(&self) -> u32;
+    
+    // Configuration management methods
+    pub fn get_setting_info(&self, setting_name: &str) -> Result<ConfigValue, SettingsError>;
+    pub fn list_all_settings(&self) -> Vec<(String, ConfigValue)>;
+    pub async fn update_setting(&self, setting_name: &str, value: String) -> Result<(), SettingsError>;
     
     // Configuration specifications
     fn jwt_expiration_config() -> ConfigSpec;
@@ -177,8 +213,9 @@ impl ApplicationSettings {
     fn rate_limiting_enabled_config() -> ConfigSpec;
     fn audit_retention_days_config() -> ConfigSpec;
     
-    // Internal loading methods
-    async fn load_setting(spec: &ConfigSpec, db: &Database) -> Result<String, SettingsError>;
+    // Internal methods
+    async fn load_setting_with_source(spec: &ConfigSpec, db: &Database) -> Result<ConfigValue, SettingsError>;
+    fn update_cache(&self, setting_name: &str, value: &str) -> Result<(), SettingsError>;
     fn parse_duration_minutes(value: &str) -> Result<u32, SettingsError>;
     fn parse_duration_days(value: &str) -> Result<u32, SettingsError>;
     fn parse_bool(value: &str) -> Result<bool, SettingsError>;
@@ -209,6 +246,10 @@ pub enum ApplicationError {
     DatabaseConnection(String),
     InvalidSetting { setting_name: String, reason: String },
     ParseError { setting_name: String, error: String },
+    UnknownSetting { name: String },
+    ReadOnlyFromEnvironment { setting_name: String },
+    NoWritableSource { setting_name: String },
+    FileUpdatesNotSupported,
 }
 ```
 
@@ -223,11 +264,11 @@ pub enum ApplicationError {
 - `VAULT_ADDR` (String, optional, future)
 - `REDIS_URL` (String, optional, future)
 
-**Application Settings (Env Override → Database → Default):**
-- `JWT_EXPIRATION_MINUTES` (u32, default: 15)
-- `REFRESH_TOKEN_EXPIRATION_DAYS` (u32, default: 7)
-- `RATE_LIMITING_ENABLED` (bool, default: true, future)
-- `AUDIT_RETENTION_DAYS` (u32, default: 90, future)
+**Application Settings (Env Override → Persistent Source → Default):**
+- `JWT_EXPIRATION_MINUTES` (u32, env: JWT_EXPIRATION_MINUTES, persistent: none, default: 15)
+- `REFRESH_TOKEN_EXPIRATION_DAYS` (u32, env: REFRESH_TOKEN_EXPIRATION_DAYS, persistent: none, default: 7)
+- `RATE_LIMITING_ENABLED` (bool, env: RATE_LIMITING_ENABLED, persistent: Database{rate_limiting_enabled}, default: true, future)
+- `AUDIT_RETENTION_DAYS` (u32, env: AUDIT_RETENTION_DAYS, persistent: Database{audit_retention_days}, default: 90, future)
 
 **Secrets (Always SecretManager):**
 - Handled by existing SecretManager (JWT_SECRET, etc.)
@@ -258,13 +299,38 @@ INSERT INTO system_settings (key, value, description, category) VALUES
 For application settings, the loading priority is:
 
 1. **Environment Variable Override** (highest priority)
-   - `JWT_EXPIRATION_MINUTES=30` overrides database value
+   - `JWT_EXPIRATION_MINUTES=30` always wins if set
    
-2. **Database Value** (middle priority)
-   - `SELECT value FROM system_settings WHERE key = 'jwt_expiration_minutes'`
+2. **Single Persistent Source** (middle priority)
+   - Database: `SELECT value FROM system_settings WHERE key = 'rate_limiting_enabled'`
+   - File: Load from specified file path and key
+   - No cascading fallbacks between persistent sources
    
 3. **Default Value** (lowest priority)
    - Hardcoded in ConfigSpec: `default_value("15")`
+
+**Key Principle**: Each setting has exactly one persistent source, not a fallback chain.
+
+### Caching and Runtime Update Strategy
+
+The system uses an in-memory cache with update-on-write strategy:
+
+**Initialization:**
+- All settings are loaded once during startup and cached in memory
+- Values are stored in thread-safe `Arc<RwLock<T>>` for concurrent access
+- Configuration source information is tracked for each setting
+
+**Runtime Behavior:**
+- **Reads**: Fast access from in-memory cache (no database queries)
+- **Updates**: Write to persistent storage, then update cache immediately
+- **Environment Variables**: Always require restart (read-only at runtime)
+- **Database Settings**: Can be updated at runtime via API
+- **External Changes**: Out-of-band database changes require restart (acceptable limitation)
+
+**Thread Safety:**
+- Multiple concurrent reads supported via `RwLock`
+- Single writer for updates ensures consistency
+- Cache updates are atomic per setting
 
 ### Type Parsing
 
@@ -339,7 +405,7 @@ After analyzing the acceptance criteria, several properties emerge that can be v
 **Validates: Requirements 2.2, 2.3**
 
 **Property 4: Configuration source priority**
-*For any* application setting, when both environment variable and database value are present, the environment variable should take priority, and when only database value is present, it should be used, and when neither is present, the default value should be used
+*For any* application setting, when both environment variable and persistent source are present, the environment variable should take priority, and when only persistent source is present, it should be used, and when neither is present, the default value should be used
 **Validates: Requirements 3.2, 3.3**
 
 **Property 5: Validation rule consistency**
@@ -369,6 +435,18 @@ After analyzing the acceptance criteria, several properties emerge that can be v
 **Property 11: Initialization logging consistency**
 *For any* SettingsManager initialization, the system should log configuration loading progress and completion with appropriate detail levels
 **Validates: Requirements 6.1, 6.3, 6.4**
+
+**Property 12: Runtime update consistency**
+*For any* mutable setting, when updated via API, the new value should be immediately reflected in both persistent storage and in-memory cache, and subsequent reads should return the updated value
+**Validates: Requirements 9.1, 9.2**
+
+**Property 13: Environment variable immutability**
+*For any* setting overridden by an environment variable, runtime update attempts should be rejected with appropriate error messages indicating the setting is read-only
+**Validates: Requirements 9.3**
+
+**Property 14: Configuration source transparency**
+*For any* setting, the system should accurately report its current source (environment variable, database, file, or default) and whether it can be updated at runtime
+**Validates: Requirements 9.4**
 
 ## Integration Points
 
@@ -510,13 +588,59 @@ impl AuthCoordinator {
 }
 ```
 
+### Configuration API Integration
+
+The SettingsManager is designed to support future configuration management APIs:
+
+```rust
+// Example configuration API usage
+#[OpenApi]
+impl ConfigApi {
+    /// List all configuration settings with their sources and mutability
+    #[oai(path = "/config", method = "get")]
+    async fn list_config(&self) -> Result<ConfigListResponse> {
+        let settings = self.settings_manager.list_all_settings();
+        
+        let config_items: Vec<ConfigItem> = settings
+            .into_iter()
+            .map(|(name, config_value)| ConfigItem {
+                name,
+                value: config_value.value,
+                source: format!("{:?}", config_value.source),
+                is_mutable: config_value.is_mutable,
+            })
+            .collect();
+            
+        Ok(ConfigListResponse { items: config_items })
+    }
+    
+    /// Update a configuration setting
+    #[oai(path = "/config/{setting_name}", method = "put")]
+    async fn update_config(
+        &self, 
+        setting_name: Path<String>,
+        request: Json<UpdateConfigRequest>
+    ) -> Result<UpdateConfigResponse> {
+        // Validation and update handled by SettingsManager
+        self.settings_manager
+            .update_setting(&setting_name, request.value.clone())
+            .await?;
+            
+        Ok(UpdateConfigResponse { 
+            message: "Setting updated successfully".to_string() 
+        })
+    }
+}
+```
+
 ### Migration Strategy
 
 The implementation will follow a phased approach:
 
-1. **Phase 1**: Implement SettingsManager with environment variable support
+1. **Phase 1**: Implement SettingsManager with environment variable support and in-memory caching
 2. **Phase 2**: Migrate existing hardcoded configuration to use SettingsManager
 3. **Phase 3**: Add database ConfigSource support for runtime-changeable settings
+4. **Phase 4**: Implement configuration management API endpoints
 
 ## Future Extensions
 
@@ -567,7 +691,6 @@ impl ApplicationSettings {
     fn jwt_expiration_config() -> ConfigSpec {
         ConfigSpec::new()
             .env_override("JWT_EXPIRATION_MINUTES")
-            .database("jwt_expiration_minutes")
             .default_value("15")
             .validator(|value| {
                 let minutes = value.parse::<u32>()
@@ -582,7 +705,6 @@ impl ApplicationSettings {
     fn refresh_token_expiration_config() -> ConfigSpec {
         ConfigSpec::new()
             .env_override("REFRESH_TOKEN_EXPIRATION_DAYS")
-            .database("refresh_token_expiration_days")
             .default_value("7")
             .validator(|value| {
                 let days = value.parse::<u32>()
@@ -597,7 +719,9 @@ impl ApplicationSettings {
     fn rate_limiting_enabled_config() -> ConfigSpec {
         ConfigSpec::new()
             .env_override("RATE_LIMITING_ENABLED")
-            .database("rate_limiting_enabled")
+            .persistent_source(ConfigSource::Database { 
+                key: "rate_limiting_enabled".to_string() 
+            })
             .default_value("true")
             .validator(|value| {
                 match value.to_lowercase().as_str() {
@@ -606,56 +730,179 @@ impl ApplicationSettings {
                 }
             })
     }
+    
+    fn server_config_from_file() -> ConfigSpec {
+        ConfigSpec::new()
+            .env_override("SERVER_PORT")
+            .persistent_source(ConfigSource::File { 
+                path: "/etc/linkstash/server.toml".into(), 
+                key: "port".to_string() 
+            })
+            .default_value("3000")
+    }
 }
 ```
 
-### Database Operations
+### Configuration Loading and Caching Operations
 
 ```rust
 impl ApplicationSettings {
-    async fn load_setting(spec: &ConfigSpec, db: &Database) -> Result<String, SettingsError> {
+    pub async fn init(bootstrap: &BootstrapSettings) -> Result<Self, SettingsError> {
+        let db = Arc::new(connect_database(bootstrap.database_url()).await?);
+        let specs = Self::build_specs();
+        
+        // Load all values once and cache them
+        let jwt_expiration_minutes = Arc::new(RwLock::new(
+            Self::load_jwt_expiration(&db).await?
+        ));
+        let rate_limiting_enabled = Arc::new(RwLock::new(
+            Self::load_rate_limiting_enabled(&db).await?
+        ));
+        // ... load other settings
+        
+        Ok(Self {
+            jwt_expiration_minutes,
+            rate_limiting_enabled,
+            db,
+            specs,
+        })
+    }
+    
+    async fn load_setting_with_source(spec: &ConfigSpec, db: &Database) -> Result<ConfigValue, SettingsError> {
         // 1. Check environment variable override (highest priority)
         if let Some(env_var) = &spec.env_override {
             if let Ok(value) = std::env::var(env_var) {
                 Self::validate_setting(&value, spec)?;
-                return Ok(value);
+                return Ok(ConfigValue {
+                    value,
+                    source: ConfigValueSource::EnvironmentVariable { 
+                        name: env_var.clone() 
+                    },
+                    is_mutable: false, // Environment variables are read-only
+                });
             }
         }
         
-        // 2. Check database value (middle priority)
-        if let Some(db_key) = &spec.database_key {
-            let db_value: Option<String> = sqlx::query_scalar(
-                "SELECT value FROM system_settings WHERE key = ?"
-            )
-            .bind(db_key)
-            .fetch_optional(db)
-            .await
-            .map_err(|e| SettingsError::DatabaseError(e.to_string()))?;
+        // 2. Check single persistent source (middle priority)
+        if let Some(source) = &spec.persistent_source {
+            let value = match source {
+                ConfigSource::Database { key } => {
+                    sqlx::query_scalar("SELECT value FROM system_settings WHERE key = ?")
+                        .bind(key)
+                        .fetch_optional(db)
+                        .await
+                        .map_err(|e| SettingsError::DatabaseError(e.to_string()))?
+                }
+                ConfigSource::File { path, key } => {
+                    // Future implementation: load from file
+                    None
+                }
+            };
             
-            if let Some(value) = db_value {
+            if let Some(value) = value {
                 Self::validate_setting(&value, spec)?;
-                return Ok(value);
+                return Ok(ConfigValue {
+                    value,
+                    source: match source {
+                        ConfigSource::Database { key } => ConfigValueSource::Database { 
+                            key: key.clone() 
+                        },
+                        ConfigSource::File { path, key } => ConfigValueSource::File { 
+                            path: path.clone(), 
+                            key: key.clone() 
+                        },
+                    },
+                    is_mutable: true, // Persistent sources are mutable
+                });
             }
         }
         
         // 3. Use default value (lowest priority)
         if let Some(default) = &spec.default_value {
             Self::validate_setting(default, spec)?;
-            return Ok(default.clone());
+            return Ok(ConfigValue {
+                value: default.clone(),
+                source: ConfigValueSource::Default,
+                is_mutable: spec.persistent_source.is_some(), // Mutable if has persistent source
+            });
         }
         
         // 4. Required setting with no value found
         if spec.required {
             let setting_name = spec.env_override
                 .as_ref()
-                .or(spec.database_key.as_ref())
+                .or_else(|| match &spec.persistent_source {
+                    Some(ConfigSource::Database { key }) => Some(key),
+                    Some(ConfigSource::File { key, .. }) => Some(key),
+                    None => None,
+                })
                 .unwrap_or(&"unknown".to_string());
             return Err(SettingsError::MissingSetting {
                 setting_name: setting_name.clone(),
             });
         }
         
-        Ok(String::new())
+        Ok(ConfigValue {
+            value: String::new(),
+            source: ConfigValueSource::Default,
+            is_mutable: false,
+        })
+    }
+    
+    pub async fn update_setting(&self, setting_name: &str, value: String) -> Result<(), SettingsError> {
+        let spec = self.specs.get(setting_name)
+            .ok_or_else(|| SettingsError::UnknownSetting { name: setting_name.to_string() })?;
+        
+        // Validate the new value
+        Self::validate_setting(&value, spec)?;
+        
+        // Check if setting is mutable (not from env var)
+        let current_info = self.get_setting_info(setting_name)?;
+        if !current_info.is_mutable {
+            return Err(SettingsError::ReadOnlyFromEnvironment { 
+                setting_name: setting_name.to_string() 
+            });
+        }
+        
+        // Update persistent storage
+        match &spec.persistent_source {
+            Some(ConfigSource::Database { key }) => {
+                sqlx::query("INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)")
+                    .bind(key)
+                    .bind(&value)
+                    .execute(&*self.db)
+                    .await?;
+            }
+            Some(ConfigSource::File { .. }) => {
+                return Err(SettingsError::FileUpdatesNotSupported);
+            }
+            None => {
+                return Err(SettingsError::NoWritableSource { 
+                    setting_name: setting_name.to_string() 
+                });
+            }
+        }
+        
+        // Update in-memory cache
+        self.update_cache(setting_name, &value)?;
+        
+        Ok(())
+    }
+    
+    fn update_cache(&self, setting_name: &str, value: &str) -> Result<(), SettingsError> {
+        match setting_name {
+            "jwt_expiration_minutes" => {
+                let parsed = value.parse::<u32>()?;
+                *self.jwt_expiration_minutes.write().unwrap() = parsed;
+            }
+            "rate_limiting_enabled" => {
+                let parsed = Self::parse_bool(value)?;
+                *self.rate_limiting_enabled.write().unwrap() = parsed;
+            }
+            // ... other settings
+            _ => return Err(SettingsError::UnknownSetting { name: setting_name.to_string() }),
+        }
+        Ok(())
     }
     
     fn validate_setting(value: &str, spec: &ConfigSpec) -> Result<(), SettingsError> {
