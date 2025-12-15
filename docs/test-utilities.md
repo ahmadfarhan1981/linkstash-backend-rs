@@ -63,25 +63,29 @@ let (db, audit_db, auth_service, token_service, credential_store) = common::crea
 
 ### Environment Variable Management
 
-#### `EnvGuard`
-RAII guard for managing environment variables in tests. Automatically cleans up variables on creation and when dropped, ensuring test isolation.
+#### `MockEnvironment`
+Test environment provider that allows injecting specific environment variable values without modifying the global environment state. This prevents race conditions in parallel test execution.
 
 ```rust
-let _guard = common::EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER"]);
-unsafe {
-    std::env::set_var("JWT_SECRET", "test-secret");
-}
-// Variables automatically cleaned up when _guard drops
+use crate::config::MockEnvironment;
+use std::collections::HashMap;
+
+// Create test environment with specific variables
+let env_vars = HashMap::from([
+    ("JWT_SECRET".to_string(), "test-secret".to_string()),
+    ("PASSWORD_PEPPER".to_string(), "test-pepper".to_string()),
+]);
+let env_provider = Arc::new(MockEnvironment::new(env_vars));
+
+// Use with ConfigSpec or other configuration components
+let settings = SomeSettings::from_env_provider(env_provider)?;
 ```
 
-#### `ENV_TEST_MUTEX`
-Global mutex for tests that modify environment variables. Since environment variables are process-global, tests that modify them must run serially.
-
-```rust
-let _lock = common::ENV_TEST_MUTEX.lock().unwrap();
-let _guard = common::EnvGuard::new(vec!["JWT_SECRET"]);
-// Test code that modifies environment variables
-```
+**Benefits over global environment modification**:
+- No race conditions between parallel tests
+- No cleanup required (isolated per test)
+- Explicit and readable test setup
+- Cannot accidentally affect other tests
 
 ## Usage Pattern
 
@@ -104,8 +108,8 @@ async fn setup_test_db() -> SystemConfigStore {
 - **DRY Principle** - Database setup code written once, used everywhere
 - **Consistency** - All tests use the same setup patterns
 - **Maintainability** - Changes to test infrastructure happen in one place
-- **Test Isolation** - EnvGuard ensures environment variables don't leak between tests
-- **Thread Safety** - ENV_TEST_MUTEX prevents race conditions in environment variable tests
+- **Test Isolation** - MockEnvironment ensures environment variables don't leak between tests
+- **Thread Safety** - No global state modification eliminates race conditions
 
 ## Additional Refactoring Opportunities
 
@@ -206,7 +210,7 @@ Add utilities to `tests/common/mod.rs` when:
 - The same setup code appears in 3+ test files
 - The pattern is likely to be reused in future tests
 - The utility improves test readability significantly
-- The utility enforces best practices (like EnvGuard for test isolation)
+- The utility enforces best practices (like MockEnvironment for test isolation)
 
 Avoid adding utilities that:
 - Are only used in one test file

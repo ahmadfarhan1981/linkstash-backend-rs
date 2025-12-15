@@ -404,6 +404,7 @@ mod tests {
         let app_data = Arc::new(crate::app_data::AppData {
             db,
             audit_db,
+            env_provider: Arc::new(crate::config::SystemEnvironment),
             secret_manager,
             audit_store,
             credential_store,

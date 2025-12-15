@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use sea_orm::DatabaseConnection;
-use crate::config::SecretManager;
+use crate::config::{SecretManager, EnvironmentProvider, SystemEnvironment};
 use crate::stores::{AuditStore, CredentialStore, SystemConfigStore, CommonPasswordStore, HibpCacheStore};
 use crate::errors::InternalError;
 
@@ -43,6 +43,9 @@ pub struct AppData {
     
     /// Audit database connection (audit.db)
     pub audit_db: DatabaseConnection,
+    
+    /// Environment variable provider for configuration loading
+    pub env_provider: Arc<dyn EnvironmentProvider + Send + Sync>,
     
     /// Secret manager for accessing JWT secrets, password pepper, etc.
     pub secret_manager: Arc<SecretManager>,
@@ -91,13 +94,16 @@ impl AppData {
     pub async fn init(db: DatabaseConnection, audit_db: DatabaseConnection) -> Result<Self, InternalError> {
         tracing::info!("Initializing AppData...");
         
-        // 1. Initialize secrets
+        // 1. Initialize environment provider
+        let env_provider: Arc<dyn EnvironmentProvider + Send + Sync> = Arc::new(SystemEnvironment);
+        
+        // 2. Initialize secrets
         tracing::debug!("Initializing secret manager...");
         let secret_manager = Arc::new(SecretManager::init()
             .map_err(|e| InternalError::parse("secret_manager", format!("Secret manager init failed: {}", e)))?);
         tracing::debug!("Secret manager initialized");
         
-        // 2. Create stores (order matters: audit_store first, then others that depend on it)
+        // 3. Create stores (order matters: audit_store first, then others that depend on it)
         tracing::debug!("Creating stores...");
         let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
         
@@ -126,6 +132,7 @@ impl AppData {
         Ok(Self {
             db,
             audit_db,
+            env_provider,
             secret_manager,
             audit_store,
             credential_store,
