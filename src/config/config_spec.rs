@@ -1,6 +1,8 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use crate::config::errors::ApplicationError;
+use crate::config::EnvironmentProvider;
 
 #[derive(Debug, Clone)]
 pub enum ConfigSource {
@@ -34,10 +36,11 @@ pub struct ConfigSpec {
     pub min_length: Option<usize>,
     pub max_length: Option<usize>,
     pub validator: Option<fn(&str) -> Result<(), String>>,
+    pub env_provider: Arc<dyn EnvironmentProvider + Send + Sync>,
 }
 
 impl ConfigSpec {
-    pub fn new() -> Self {
+    pub fn new(env_provider: Arc<dyn EnvironmentProvider + Send + Sync>) -> Self {
         Self {
             env_override: None,
             persistent_source: None,
@@ -46,6 +49,7 @@ impl ConfigSpec {
             min_length: None,
             max_length: None,
             validator: None,
+            env_provider,
         }
     }
 
@@ -96,7 +100,7 @@ impl ConfigSpec {
         db: Option<&sea_orm::DatabaseConnection>,
     ) -> Result<ConfigValue, ApplicationError> {
         if let Some(env_var) = &self.env_override {
-            if let Ok(value) = std::env::var(env_var) {
+            if let Some(value) = self.env_provider.get_var(env_var) {
                 self.validate_value(&value, env_var)?;
                 
                 return Ok(ConfigValue {
@@ -274,7 +278,8 @@ impl ConfigSpec {
 
 impl Default for ConfigSpec {
     fn default() -> Self {
-        Self::new()
+        use crate::config::SystemEnvironment;
+        Self::new(Arc::new(SystemEnvironment))
     }
 }
 
@@ -713,7 +718,6 @@ impl ConfigSpec {
 mod tests {
     use super::*;
     use std::time::Duration;
-    use std::env;
 
     #[test]
     fn test_parse_duration_minutes() {
@@ -1095,12 +1099,12 @@ mod tests {
 
     #[test]
     fn test_load_setting_with_source_env_override() {
-        // Test that environment variable override works (synchronously)
-        unsafe {
-            env::set_var("TEST_SETTING", "env_value");
-        }
+        use crate::config::MockEnvironment;
         
-        let spec = ConfigSpec::new()
+        let env_provider = Arc::new(MockEnvironment::empty()
+            .with_var("TEST_SETTING", "env_value"));
+        
+        let spec = ConfigSpec::new(env_provider)
             .env_override("TEST_SETTING")
             .default_value("default_value");
         
@@ -1109,20 +1113,15 @@ mod tests {
         assert_eq!(result.value, "env_value");
         assert!(matches!(result.source, ConfigValueSource::EnvironmentVariable { .. }));
         assert!(!result.is_mutable);
-        
-        unsafe {
-            env::remove_var("TEST_SETTING");
-        }
     }
 
     #[test]
     fn test_load_setting_with_source_default() {
-        // Test that default value works when no env var is set
-        unsafe {
-            env::remove_var("TEST_SETTING_DEFAULT");
-        }
+        use crate::config::MockEnvironment;
         
-        let spec = ConfigSpec::new()
+        let env_provider = Arc::new(MockEnvironment::empty()); // Empty environment
+        
+        let spec = ConfigSpec::new(env_provider)
             .env_override("TEST_SETTING_DEFAULT")
             .default_value("default_value");
         
@@ -1135,12 +1134,12 @@ mod tests {
 
     #[test]
     fn test_load_setting_with_source_validation() {
-        // Test that validation works in the synchronous version
-        unsafe {
-            env::set_var("TEST_SETTING_VALIDATION", "short");
-        }
+        use crate::config::MockEnvironment;
         
-        let spec = ConfigSpec::new()
+        let env_provider = Arc::new(MockEnvironment::empty()
+            .with_var("TEST_SETTING_VALIDATION", "short"));
+        
+        let spec = ConfigSpec::new(env_provider)
             .env_override("TEST_SETTING_VALIDATION")
             .min_length(10);
         
@@ -1153,10 +1152,6 @@ mod tests {
                 assert!(reason.contains("at least 10 characters"));
             }
             _ => panic!("Expected InvalidSetting error"),
-        }
-        
-        unsafe {
-            env::remove_var("TEST_SETTING_VALIDATION");
         }
     }
 }

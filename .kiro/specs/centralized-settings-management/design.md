@@ -422,7 +422,7 @@ The testing approach mirrors `SecretManager` with environment variable isolation
 - Test that all valid port numbers parse correctly
 - Test that all valid duration formats parse correctly
 
-The testing framework will use the same `EnvGuard` pattern to ensure test isolation and cleanup.
+The testing framework will use the `MockEnvironment` pattern to ensure test isolation without global state modification.
 
 ## Correctness Properties
 

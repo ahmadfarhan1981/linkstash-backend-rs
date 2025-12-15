@@ -1,37 +1,6 @@
 use std::fmt;
 
-#[derive(Debug)]
-pub enum BootstrapError {
-    MissingDatabaseUrl,
-    InvalidDatabaseUrl(String),
-    MissingRequiredSetting { setting_name: String },
-    InvalidFormat { setting_name: String, expected: String, actual: String },
-}
 
-impl fmt::Display for BootstrapError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingDatabaseUrl => {
-                write!(f, "Required environment variable DATABASE_URL is missing")
-            }
-            Self::InvalidDatabaseUrl(url) => {
-                write!(f, "Invalid database URL format: {}", url)
-            }
-            Self::MissingRequiredSetting { setting_name } => {
-                write!(f, "Required bootstrap setting '{}' is missing", setting_name)
-            }
-            Self::InvalidFormat { setting_name, expected, actual } => {
-                write!(
-                    f,
-                    "Bootstrap setting '{}' has invalid format. Expected: {}, got: {}",
-                    setting_name, expected, actual
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for BootstrapError {}
 
 #[derive(Debug)]
 pub enum ApplicationError {
@@ -84,15 +53,15 @@ impl std::error::Error for ApplicationError {}
 
 #[derive(Debug)]
 pub enum SettingsError {
-    Bootstrap(BootstrapError),
     Application(ApplicationError),
+    Secret(crate::config::secret_manager::SecretError),
 }
 
 impl fmt::Display for SettingsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Bootstrap(err) => write!(f, "Bootstrap error: {}", err),
-            Self::Application(err) => write!(f, "Application settings error: {}", err),
+            Self::Application(err) => write!(f, "Settings error: {}", err),
+            Self::Secret(err) => write!(f, "Secret error: {}", err),
         }
     }
 }
@@ -100,20 +69,56 @@ impl fmt::Display for SettingsError {
 impl std::error::Error for SettingsError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Bootstrap(err) => Some(err),
             Self::Application(err) => Some(err),
+            Self::Secret(err) => Some(err),
         }
-    }
-}
-
-impl From<BootstrapError> for SettingsError {
-    fn from(err: BootstrapError) -> Self {
-        Self::Bootstrap(err)
     }
 }
 
 impl From<ApplicationError> for SettingsError {
     fn from(err: ApplicationError) -> Self {
         Self::Application(err)
+    }
+}
+
+impl From<crate::config::secret_manager::SecretError> for SettingsError {
+    fn from(err: crate::config::secret_manager::SecretError) -> Self {
+        Self::Secret(err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_application_error_display() {
+        let error = ApplicationError::InvalidSetting {
+            setting_name: "test_setting".to_string(),
+            reason: "test reason".to_string(),
+        };
+        assert_eq!(format!("{}", error), "Invalid setting 'test_setting': test reason");
+    }
+
+    #[test]
+    fn test_settings_error_display() {
+        let app_error = ApplicationError::UnknownSetting {
+            name: "unknown_setting".to_string(),
+        };
+        let settings_error = SettingsError::Application(app_error);
+        assert_eq!(format!("{}", settings_error), "Settings error: Unknown setting: unknown_setting");
+    }
+
+    #[test]
+    fn test_settings_error_from_application_error() {
+        let app_error = ApplicationError::DatabaseConnection("test error".to_string());
+        let settings_error: SettingsError = app_error.into();
+        
+        match settings_error {
+            SettingsError::Application(ApplicationError::DatabaseConnection(msg)) => {
+                assert_eq!(msg, "test error");
+            }
+            _ => panic!("Expected Application error"),
+        }
     }
 }

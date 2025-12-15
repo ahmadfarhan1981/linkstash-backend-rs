@@ -161,6 +161,7 @@ pub async fn setup_test_auth_services() -> (
     let _app_data = Arc::new(AppData {
         db: auth_db.clone(),
         audit_db: audit_db.clone(),
+        env_provider: Arc::new(crate::config::SystemEnvironment),
         secret_manager,
         audit_store: audit_store.clone(),
         credential_store: credential_store.clone(),
@@ -218,6 +219,7 @@ pub async fn setup_test_coordinators() -> (
     let app_data = Arc::new(AppData {
         db: auth_db.clone(),
         audit_db: audit_db.clone(),
+        env_provider: Arc::new(crate::config::SystemEnvironment),
         secret_manager,
         audit_store: audit_store.clone(),
         credential_store: credential_store.clone(),
