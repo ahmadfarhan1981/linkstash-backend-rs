@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::time::Duration;
+
 use crate::config::{
     bootstrap_settings::BootstrapSettings,
     settings_registry::SettingsRegistry,
@@ -14,7 +16,7 @@ use crate::config::{
 pub struct SettingsManager {
     pub bootstrap_settings: BootstrapSettings,
     pub secrets: Option<SecretManager>,
-    pub application_settings: Option<SettingsRegistry>,
+    pub settings: Option<Arc<SettingsRegistry>>,
 }
 
 impl SettingsManager {
@@ -32,13 +34,13 @@ impl SettingsManager {
             .map_err(SettingsError::Secret)?);
         
         // Step 3: Load application settings
-        let application_settings = Some(SettingsRegistry::init(&bootstrap_settings).await
+        let settings = Some(SettingsRegistry::init(&bootstrap_settings).await
             .map_err(SettingsError::Application)?);
         
         Ok(Self {
             bootstrap_settings,
             secrets,
-            application_settings,
+            settings,
         })
     }
     
@@ -53,7 +55,7 @@ impl SettingsManager {
         Ok(Self {
             bootstrap_settings,
             secrets: None,
-            application_settings: None,
+            settings: None,
         })
     }
     
@@ -72,11 +74,11 @@ impl SettingsManager {
     /// 
     /// Initializes application settings if not already loaded. Safe to call multiple times.
     pub async fn ensure_application_settings(&mut self) -> Result<&SettingsRegistry, SettingsError> {
-        if self.application_settings.is_none() {
-            self.application_settings = Some(SettingsRegistry::init(&self.bootstrap_settings).await
+        if self.settings.is_none() {
+            self.settings = Some(SettingsRegistry::init(&self.bootstrap_settings).await
                 .map_err(SettingsError::Application)?);
         }
-        Ok(self.application_settings.as_ref().unwrap())
+        Ok(self.settings.as_ref().unwrap())
     }
     
     // Convenience methods that delegate to appropriate layer
@@ -96,41 +98,6 @@ impl SettingsManager {
         self.bootstrap_settings.server_address()
     }
     
-    /// Get JWT secret (requires secrets to be initialized)
-    pub fn jwt_secret(&self) -> Result<&str, SettingsError> {
-        match &self.secrets {
-            Some(secrets) => Ok(secrets.jwt_secret()),
-            None => Err(SettingsError::Application(
-                crate::config::errors::ApplicationError::DatabaseConnection(
-                    "Secrets not initialized. Call ensure_secrets() first.".to_string()
-                )
-            )),
-        }
-    }
-    
-    /// Get JWT expiration duration (requires application settings to be initialized)
-    pub fn jwt_expiration(&self) -> Result<std::time::Duration, SettingsError> {
-        match &self.application_settings {
-            Some(app_settings) => Ok(app_settings.jwt_expiration()),
-            None => Err(SettingsError::Application(
-                crate::config::errors::ApplicationError::DatabaseConnection(
-                    "Application settings not initialized. Call ensure_application_settings() first.".to_string()
-                )
-            )),
-        }
-    }
-    
-    /// Get refresh token expiration duration (requires application settings to be initialized)
-    pub fn refresh_token_expiration(&self) -> Result<std::time::Duration, SettingsError> {
-        match &self.application_settings {
-            Some(app_settings) => Ok(app_settings.refresh_token_expiration()),
-            None => Err(SettingsError::Application(
-                crate::config::errors::ApplicationError::DatabaseConnection(
-                    "Application settings not initialized. Call ensure_application_settings() first.".to_string()
-                )
-            )),
-        }
-    }
     
     // Configuration management methods
     
@@ -167,7 +134,7 @@ impl SettingsManager {
         }));
         
         // Add application settings if initialized
-        if let Some(app_settings) = &self.application_settings {
+        if let Some(app_settings) = &self.settings {
             let app_settings_list = app_settings.list_all_settings().await;
             settings.extend(app_settings_list);
         }
@@ -212,7 +179,7 @@ impl SettingsManager {
             }),
             _ => {
                 // Check application settings if initialized
-                if let Some(app_settings) = &self.application_settings {
+                if let Some(app_settings) = &self.settings {
                     app_settings.get_setting_info(setting_name).await
                         .map_err(SettingsError::Application)
                 } else {
@@ -267,7 +234,7 @@ impl SettingsManager {
         }
         
         // Delegate to application settings if initialized
-        if let Some(app_settings) = &self.application_settings {
+        if let Some(app_settings) = &self.settings {
             app_settings.update_setting(setting_name, value).await
                 .map_err(SettingsError::Application)
         } else {
@@ -332,7 +299,7 @@ mod tests {
         
         // Secrets and application settings should not be initialized
         assert!(settings_manager.secrets.is_none());
-        assert!(settings_manager.application_settings.is_none());
+        assert!(settings_manager.settings.is_none());
     }
 
     #[test]

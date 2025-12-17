@@ -6,7 +6,7 @@ mod database;
 // New modular settings management
 mod errors;
 mod config_spec;
-mod bootstrap_settings;
+mod bootstrap_settings; 
 mod application_settings;
 mod settings_registry;
 mod settings_manager;
@@ -25,6 +25,7 @@ pub use bootstrap_settings::BootstrapSettings;
 
 pub use settings_registry::SettingsRegistry;
 pub use settings_manager::SettingsManager;
+pub use application_settings::ApplicationSettings;
 
 // Export test utilities only in test builds
 #[cfg(test)]
