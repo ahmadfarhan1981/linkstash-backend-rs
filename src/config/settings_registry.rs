@@ -2,6 +2,8 @@ use std::{collections::HashMap, sync::{Arc, RwLock, Weak}};
 
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
+
 use crate::config::application_settings;
 
 use super::{ApplicationError, BootstrapSettings, ConfigSource, ConfigSpec, ConfigValue, ApplicationSettings};
@@ -14,7 +16,7 @@ use super::{ApplicationError, BootstrapSettings, ConfigSource, ConfigSpec, Confi
 /// Values are cached in memory for fast access and updated atomically.
 pub struct SettingsRegistry {
     db: Arc<sea_orm::DatabaseConnection>,
-    application_settings: Arc<ApplicationSettings>,
+    application_settings: Arc<ArcSwap<ApplicationSettings>>,
 }
 
 impl SettingsRegistry {
@@ -33,7 +35,7 @@ impl SettingsRegistry {
        
        
         let registry = Arc::new_cyclic(|weak_registry| {
-            let application_settings = ApplicationSettings::init( weak_registry.clone() ).unwrap();            
+            let application_settings = ApplicationSettings::init( weak_registry.clone(), db.clone() ).await?;            
             Self {
                 db,
                 application_settings: Arc::new( application_settings)
