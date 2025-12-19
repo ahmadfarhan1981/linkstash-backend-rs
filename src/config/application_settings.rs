@@ -1,12 +1,14 @@
 use std::{collections::HashMap, sync::{Arc, RwLock, Weak}};
+use std::time::Duration;
 use sea_orm::DatabaseConnection;
 use tracing_subscriber::registry;
 
-use crate::config::{ApplicationError, ConfigSpec};
+use crate::config::{ApplicationError, ConfigSource, ConfigSpec, ConfigValue};
 
 use super::SettingsRegistry;
 
 pub struct ApplicationSettings{    
+    db: Arc<DatabaseConnection>,
     specs: HashMap<String, ConfigSpec>,
     pub registry : Weak<SettingsRegistry>,
 
@@ -18,7 +20,7 @@ pub struct ApplicationSettings{
 }
 
 impl ApplicationSettings {
-    pub async fn init(registry: Weak<SettingsRegistry>, db:DatabaseConnection) -> Result<Self, ApplicationError> {
+    pub async fn init(registry: Weak<SettingsRegistry>, db:Arc<DatabaseConnection>) -> Result<Self, ApplicationError> {
         
         // Build configuration specifications
         let specs = Self::build_specs();
@@ -34,6 +36,7 @@ impl ApplicationSettings {
         
         Ok(
             Self {
+                db,
                 jwt_expiration_minutes,
                 refresh_token_expiration_days,
                 specs,
@@ -255,9 +258,9 @@ impl ApplicationSettings {
     
 }
 
-impl std::fmt::Debug for SettingsRegistry {
+impl std::fmt::Debug for ApplicationSettings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SettingsRegistry")
+        f.debug_struct("ApplicationSettings")
             .field("jwt_expiration_minutes", &*self.jwt_expiration_minutes.read().unwrap())
             .field("refresh_token_expiration_days", &*self.refresh_token_expiration_days.read().unwrap())
             .field("specs_count", &self.specs.len())
@@ -265,11 +268,11 @@ impl std::fmt::Debug for SettingsRegistry {
     }
 }
 
-impl std::fmt::Display for SettingsRegistry {
+impl std::fmt::Display for ApplicationSettings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f, 
-            "SettingsRegistry {{ jwt_expiration: {}min, refresh_expiration: {}days }}",
+            "ApplicationSettings {{ jwt_expiration: {}min, refresh_expiration: {}days }}",
             *self.jwt_expiration_minutes.read().unwrap(),
             *self.refresh_token_expiration_days.read().unwrap()
         )
@@ -340,7 +343,7 @@ mod tests {
     #[test]
     fn test_settings_registry_config_specs() {
         // Test that configuration specifications are built correctly
-        let specs = SettingsRegistry::build_specs();
+        let specs = ApplicationSettings::build_specs();
         
         assert_eq!(specs.len(), 2);
         assert!(specs.contains_key("jwt_expiration_minutes"));
@@ -349,7 +352,7 @@ mod tests {
 
     #[test]
     fn test_jwt_expiration_config() {
-        let config = SettingsRegistry::jwt_expiration_config();
+        let config = ApplicationSettings::jwt_expiration_config();
         
         assert_eq!(config.env_override, Some("JWT_EXPIRATION_MINUTES".to_string()));
         assert_eq!(config.default_value, Some("15".to_string()));
@@ -366,7 +369,7 @@ mod tests {
 
     #[test]
     fn test_refresh_token_expiration_config() {
-        let config = SettingsRegistry::refresh_token_expiration_config();
+        let config = ApplicationSettings::refresh_token_expiration_config();
         
         assert_eq!(config.env_override, Some("REFRESH_TOKEN_EXPIRATION_DAYS".to_string()));
         assert_eq!(config.default_value, Some("7".to_string()));
@@ -385,10 +388,10 @@ mod tests {
 
     #[test]
     fn test_parse_duration_minutes() {
-        assert_eq!(SettingsRegistry::parse_duration_minutes("15", "test").unwrap(), 15);
-        assert_eq!(SettingsRegistry::parse_duration_minutes("1440", "test").unwrap(), 1440);
+        assert_eq!(ApplicationSettings::parse_duration_minutes("15", "test").unwrap(), 15);
+        assert_eq!(ApplicationSettings::parse_duration_minutes("1440", "test").unwrap(), 1440);
         
-        let result = SettingsRegistry::parse_duration_minutes("not_a_number", "test");
+        let result = ApplicationSettings::parse_duration_minutes("not_a_number", "test");
         assert!(result.is_err());
         match result.unwrap_err() {
             ApplicationError::ParseError { setting_name, error } => {
@@ -401,10 +404,10 @@ mod tests {
 
     #[test]
     fn test_parse_duration_days() {
-        assert_eq!(SettingsRegistry::parse_duration_days("7", "test").unwrap(), 7);
-        assert_eq!(SettingsRegistry::parse_duration_days("365", "test").unwrap(), 365);
+        assert_eq!(ApplicationSettings::parse_duration_days("7", "test").unwrap(), 7);
+        assert_eq!(ApplicationSettings::parse_duration_days("365", "test").unwrap(), 365);
         
-        let result = SettingsRegistry::parse_duration_days("not_a_number", "test");
+        let result = ApplicationSettings::parse_duration_days("not_a_number", "test");
         assert!(result.is_err());
         match result.unwrap_err() {
             ApplicationError::ParseError { setting_name, error } => {
@@ -420,7 +423,7 @@ mod tests {
     #[test]
     fn test_settings_registry_debug_display() {
         // Test that Debug and Display traits work correctly
-        // We can't easily test the full SettingsRegistry without a database,
+        // We can't easily test the full ApplicationSettings without a database,
         // but we can test the format strings don't panic
         
         let jwt_minutes = Arc::new(RwLock::new(15u32));

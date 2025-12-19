@@ -133,6 +133,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arc-swap"
+version = "1.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69f7f8c3906b62b754cd5326047894316021dcfe5a194c8ea52bdd94934a3457"
+
+[[package]]
 name = "argon2"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1530,6 +1536,7 @@ name = "linkstash-backend-rs"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "arc-swap",
  "argon2",
  "base64 0.21.7",
  "chrono",
