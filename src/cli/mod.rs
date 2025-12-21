@@ -79,7 +79,7 @@ pub async fn execute_command(
 ) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Migrate => {
-            migrate::run_migrations().await?;
+            Err("Unexpected cli path".to_string().into())
         }
         Commands::Bootstrap {
             #[cfg(any(debug_assertions, feature = "test-utils"))]
@@ -100,7 +100,7 @@ pub async fn execute_command(
                         &app_data.audit_store,
                         &app_data.secret_manager,
                         &password_validator,
-                    ).await?;
+                    ).await
                 } else {
                     // Create password validator from AppData stores
                     let password_validator = Arc::new(crate::providers::PasswordValidatorProvider::new(
@@ -114,7 +114,7 @@ pub async fn execute_command(
                         &app_data.audit_store,
                         &app_data.secret_manager,
                         &password_validator,
-                    ).await?;
+                    ).await
                 }
             }
             
@@ -126,7 +126,7 @@ pub async fn execute_command(
                     &app_data.audit_store,
                     &app_data.secret_manager,
                     &app_data.password_validator,
-                ).await?;
+                ).await
             }
         }
         Commands::Owner(owner_cmd) => {
@@ -136,27 +136,27 @@ pub async fn execute_command(
                         &app_data.credential_store,
                         &app_data.system_config_store,
                         &app_data.audit_store,
-                    ).await?;
+                    ).await
                 }
                 OwnerCommands::Deactivate => {
                     owner::deactivate_owner(
                         &app_data.credential_store,
                         &app_data.system_config_store,
                         &app_data.audit_store,
-                    ).await?;
+                    ).await
                 }
                 OwnerCommands::Info => {
                     owner::get_owner_info(
                         &app_data.credential_store,
                         &app_data.system_config_store,
-                    ).await?;
+                    ).await
                 }
             }
         }
         Commands::LoadCommonPasswordBlocklist { url } => {
-            password_management::download_and_load_passwords(&url, app_data).await?;
+            password_management::download_and_load_passwords(&url, app_data).await
         }
     }
     
-    Ok(())
+    // Ok(())
 }

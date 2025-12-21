@@ -1,7 +1,7 @@
 mod secret_config;
 mod secret_manager;
 mod logging;
-mod database;
+pub mod database;
 
 // New modular settings management
 mod errors;
@@ -16,7 +16,7 @@ pub use secret_config::{SecretConfig, SecretType};
 pub use secret_manager::SecretManager;
 pub use env_provider::{EnvironmentProvider, SystemEnvironment};
 pub use logging::init_logging;
-pub use database::{init_database, init_audit_database, migrate_auth_database, migrate_audit_database};
+pub use database::{ migrate_auth_database, migrate_audit_database};
 
 // Export new modular settings management
 pub use errors::{ApplicationError, SettingsError};
@@ -26,6 +26,7 @@ pub use bootstrap_settings::BootstrapSettings;
 pub use settings_registry::SettingsRegistry;
 pub use settings_manager::SettingsManager;
 pub use application_settings::ApplicationSettings;
+
 
 // Export test utilities only in test builds
 #[cfg(test)]
