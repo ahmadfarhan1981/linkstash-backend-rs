@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 use crate::config::{EnvironmentProvider, SecretManager, SystemEnvironment};
+use crate::config::database::DatabaseConnections;
 use crate::stores::{AuditStore, CredentialStore, SystemConfigStore, CommonPasswordStore, HibpCacheStore};
 use crate::errors::InternalError;
 
@@ -30,8 +31,7 @@ use crate::errors::InternalError;
 ///   └─ AdminCoordinator::new(app_data) → extracts stores, creates providers
 /// ```
 pub struct AppData {
-    pub db: DatabaseConnection,
-    pub audit_db: DatabaseConnection,
+    pub connections: DatabaseConnections,
     pub env_provider: Arc<dyn EnvironmentProvider + Send + Sync>,
     pub secret_manager: Arc<SecretManager>,
     pub audit_store: Arc<AuditStore>,
@@ -50,46 +50,47 @@ impl AppData {
     /// # Errors
     /// 
     /// Returns `InternalError` when secret manager initialization fails
-    pub async fn init(db: DatabaseConnection, audit_db: DatabaseConnection) -> Result<Self, InternalError> {
+    pub async fn init(connections: DatabaseConnections) -> Result<Self, InternalError> {
         tracing::info!("Initializing AppData...");
-        
+        let db = connections.auth.clone();
+        let audit_db = connections.audit.clone();
+
         let env_provider: Arc<dyn EnvironmentProvider + Send + Sync> = Arc::new(SystemEnvironment);
-        
+
         tracing::debug!("Initializing secret manager...");
         let secret_manager = Arc::new(SecretManager::init()
             .map_err(|e| InternalError::parse("secret_manager", format!("Secret manager init failed: {}", e)))?);
         tracing::debug!("Secret manager initialized");
-        
+
         // Order matters: audit_store first, then others that depend on it
         tracing::debug!("Creating stores...");
         let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
-        
+
         let credential_store = Arc::new(CredentialStore::new(
             db.clone(),
             secret_manager.password_pepper().to_string(),
             audit_store.clone(),
         ));
-        
+
         let system_config_store = Arc::new(SystemConfigStore::new(
             db.clone(),
             audit_store.clone(),
         ));
-        
+
         let common_password_store = Arc::new(CommonPasswordStore::new(db.clone()));
-        
+
         let hibp_cache_store = Arc::new(HibpCacheStore::new(
             db.clone(),
             system_config_store.clone(),
         ));
-        
+
         tracing::debug!("Stores created");
 
         
         tracing::info!("AppData initialization complete");
         
         Ok(Self {
-            db,
-            audit_db,
+            connections,
             env_provider,
             secret_manager,
             audit_store,

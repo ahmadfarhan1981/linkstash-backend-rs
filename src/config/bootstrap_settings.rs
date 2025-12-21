@@ -7,6 +7,7 @@ use crate::config::EnvironmentProvider;
 /// Bootstrap settings for infrastructure configuration
 pub struct BootstrapSettings {
     database_url: String,
+    audit_database_url:String,
     server_host: String,
     server_port: u16,
 }
@@ -24,7 +25,12 @@ impl BootstrapSettings {
             .env_override("DATABASE_URL")
             .default_value("sqlite://auth.db?mode=rwc")
             .min_length(1);
-            
+        
+        let audit_database_url_spec = ConfigSpec::new(env_provider.clone())
+            .env_override("AUDIT_DATABASE_URL")
+            .default_value("sqlite://audit.db?mode=rwc")
+            .min_length(1);
+
         let host_spec = ConfigSpec::new(env_provider.clone())
             .env_override("HOST")
             .default_value("0.0.0.0")
@@ -42,6 +48,10 @@ impl BootstrapSettings {
         let database_url = database_url_spec
             .load_setting_with_source(None)?
             .value;
+        
+        let audit_database_url = audit_database_url_spec
+            .load_setting_with_source(None)?
+            .value;
             
         let server_host = host_spec
             .load_setting_with_source(None)?
@@ -55,6 +65,7 @@ impl BootstrapSettings {
         let server_port = ConfigSpec::parse_port(&port_value, "PORT")?;
 
         Ok(Self {
+            audit_database_url,
             database_url,
             server_host,
             server_port,
@@ -70,7 +81,9 @@ impl BootstrapSettings {
     pub fn database_url(&self) -> &str {
         &self.database_url
     }
-
+    pub fn audit_database_url(&self) -> &str {
+        &self.audit_database_url
+    }
     pub fn server_host(&self) -> &str {
         &self.server_host
     }

@@ -1,0 +1,2 @@
+- bootstrap_settings. ephemeral, used to initialize db's and put it in appdata
+- remove tests from settings manager

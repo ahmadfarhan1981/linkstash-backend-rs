@@ -1,4 +1,5 @@
-use crate::config::{init_database, init_audit_database, migrate_auth_database, migrate_audit_database};
+use crate::app_data::AppData;
+use crate::config::{migrate_auth_database, migrate_audit_database};
 
 /// Run database migrations for auth and audit databases
 /// 

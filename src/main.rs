@@ -9,6 +9,7 @@ mod providers;
 mod cli;
 
 use std::sync::Arc;
+use config::BootstrapSettings;
 use poem::{Route, Server, handler, listener::TcpListener, web::Html};
 use poem_openapi::OpenApiService;
 use api::{HealthApi, AuthApi, AdminApi};
@@ -17,6 +18,7 @@ use config::init_logging;
 use clap::Parser;
 use errors::InternalError;
 use errors::internal::CredentialError;
+use config::database::DatabaseConnections;
 
 /// Seed test user for development
 /// 
@@ -62,23 +64,18 @@ async fn main() -> Result<(), std::io::Error> {
         .unwrap_or(".env");
     dotenv::from_filename(env_file).ok();
     
+    let bootstrap_setting = BootstrapSettings::from_env().expect("Failed to load bootstrap settings");
+
     // Initialize logging
     init_logging().expect("Failed to initialize logging");
-    
-    // Initialize database connections and run migrations
-    tracing::info!("Initializing database connections...");
-    let db = config::init_database().await
-        .expect("Failed to connect to auth database");
-    let audit_db = config::init_audit_database().await
-        .expect("Failed to connect to audit database");
-    
+
+    tracing::info!("connecting to database...");
+    let connections = DatabaseConnections::init(&bootstrap_setting).expect("Failed to connect to database");
     tracing::info!("Running database migrations...");
-    config::migrate_auth_database(&db).await
-        .expect("Failed to run auth database migrations");
-    config::migrate_audit_database(&audit_db).await
-        .expect("Failed to run audit database migrations");
-    tracing::info!("Database migrations completed successfully");
-    
+    connections.migrate().await.expect("Failed to run migrations");
+
+
+
     // If CLI mode, execute command and exit
     if let Some(cli) = cli_parsed {
         
@@ -89,7 +86,7 @@ async fn main() -> Result<(), std::io::Error> {
         
         // For other CLI commands, initialize AppData with the migrated connections
         let app_data = Arc::new(
-            AppData::init(db, audit_db).await
+            AppData::init(connections).await
                 .map_err(|e| format!("Failed to initialize application data: {}", e))
                 .expect("Failed to initialize application data")
         );
@@ -109,7 +106,7 @@ async fn main() -> Result<(), std::io::Error> {
     // No CLI arguments - run server mode
     // Initialize AppData with the migrated connections
     let app_data = Arc::new(
-        AppData::init(db, audit_db).await
+        AppData::init(connections).await
             .map_err(|e| format!("Failed to initialize application data: {}", e))
             .expect("Failed to initialize application data")
     );

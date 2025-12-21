@@ -10,7 +10,6 @@ use super::SettingsRegistry;
 pub struct ApplicationSettings{    
     db: Arc<DatabaseConnection>,
     specs: HashMap<String, ConfigSpec>,
-    pub registry : Weak<SettingsRegistry>,
 
     // In-memory cache to avoid database queries on every access
     jwt_expiration_minutes: Arc<RwLock<u32>>,
@@ -20,18 +19,18 @@ pub struct ApplicationSettings{
 }
 
 impl ApplicationSettings {
-    pub async fn init(registry: Weak<SettingsRegistry>, db:Arc<DatabaseConnection>) -> Result<Self, ApplicationError> {
+    pub fn init( db:Arc<DatabaseConnection>) -> Result<Self, ApplicationError> {
         
         // Build configuration specifications
         let specs = Self::build_specs();
         
         // Load all settings and cache them
         let jwt_expiration_minutes = Arc::new(RwLock::new(
-            Self::load_jwt_expiration(&db, &specs).await?
+            Self::load_jwt_expiration(&db, &specs)?
         ));
         
         let refresh_token_expiration_days = Arc::new(RwLock::new(
-            Self::load_refresh_token_expiration(&db, &specs).await?
+            Self::load_refresh_token_expiration(&db, &specs)?
         ));
         
         Ok(
@@ -39,8 +38,7 @@ impl ApplicationSettings {
                 db,
                 jwt_expiration_minutes,
                 refresh_token_expiration_days,
-                specs,
-                registry: registry.clone()
+                specs
             }
         )
 
@@ -184,7 +182,7 @@ impl ApplicationSettings {
     }
     
     /// Load JWT expiration setting and parse to minutes
-    async fn load_jwt_expiration(
+    fn load_jwt_expiration(
         db: &sea_orm::DatabaseConnection, 
         specs: &HashMap<String, ConfigSpec>
     ) -> Result<u32, ApplicationError> {
@@ -194,7 +192,7 @@ impl ApplicationSettings {
     }
     
     /// Load refresh token expiration setting and parse to days
-    async fn load_refresh_token_expiration(
+    fn load_refresh_token_expiration(
         db: &sea_orm::DatabaseConnection, 
         specs: &HashMap<String, ConfigSpec>
     ) -> Result<u32, ApplicationError> {
