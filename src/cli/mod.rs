@@ -3,7 +3,6 @@
 pub mod bootstrap;
 pub mod owner;
 pub mod credential_export;
-pub mod migrate;
 pub mod password_management;
 
 use clap::{Parser, Subcommand};
