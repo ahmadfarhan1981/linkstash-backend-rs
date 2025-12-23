@@ -2,4 +2,4 @@
 - remove tests from settings manager
 - remove all static funtions from providers
 - move audit_logger out of provider, into a global utility
-- 
+- audit logger takes context 

@@ -1,6 +1,6 @@
 use linkstash_backend::errors::InternalError;
 use crate::types::internal::context::RequestContext;
-use crate::audit::audit_logger_provider::AuditLogger;
+use crate::audit::audit_logger::AuditLogger;
 
 pub struct LoginRequest{}
 pub struct LoginResponse{}

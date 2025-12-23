@@ -18,7 +18,7 @@ pub enum RequestSource {
 /// 
 /// Contains contextual information about the current request that is needed
 /// for logging, auditing, and tracing across API, service, and store layers.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RequestContext {
     /// IP address of the client making the request
     pub ip_address: Option<String>,

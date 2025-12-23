@@ -46,8 +46,8 @@ pub async fn bootstrap_system(
     let ctx = RequestContext::for_cli("bootstrap");
     
     // Log CLI session start
-    use crate::audit::audit_logger_provider;
-    if let Err(audit_err) = audit_logger_provider::log_cli_session_start(
+    use crate::audit::audit_logger;
+    if let Err(audit_err) = audit_logger::log_cli_session_start(
         audit_store,
         &ctx,
         "bootstrap",
@@ -62,7 +62,7 @@ pub async fn bootstrap_system(
     // Log CLI session end based on result
     match &result {
         Ok(_) => {
-            if let Err(audit_err) = audit_logger_provider::log_cli_session_end(
+            if let Err(audit_err) = audit_logger::log_cli_session_end(
                 audit_store,
                 &ctx,
                 "bootstrap",
@@ -73,7 +73,7 @@ pub async fn bootstrap_system(
             }
         }
         Err(e) => {
-            if let Err(audit_err) = audit_logger_provider::log_cli_session_end(
+            if let Err(audit_err) = audit_logger::log_cli_session_end(
                 audit_store,
                 &ctx,
                 "bootstrap",
@@ -97,7 +97,7 @@ async fn bootstrap_system_impl(
     password_validator: &PasswordValidatorProvider,
     ctx: &RequestContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::audit::audit_logger_provider;
+    use crate::audit::audit_logger;
     
     // Check if owner already exists
     let existing_owner = credential_store.get_owner().await
@@ -139,7 +139,7 @@ async fn bootstrap_system_impl(
     ).await?;
     
     // Log bootstrap completion
-    if let Err(audit_err) = audit_logger_provider::log_bootstrap_completed(
+    if let Err(audit_err) = audit_logger::log_bootstrap_completed(
         audit_store,
         "system".to_string(),
         Some("localhost".to_string()),
@@ -488,7 +488,7 @@ pub async fn bootstrap_system_non_interactive(
     secret_manager: &SecretManager,
     _password_validator: &PasswordValidatorProvider,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::audit::audit_logger_provider;
+    use crate::audit::audit_logger;
     
     // Display test-only warning banner
     println!("\n=== Linkstash Bootstrap (TEST MODE) ===\n");
@@ -499,7 +499,7 @@ pub async fn bootstrap_system_non_interactive(
     let ctx = RequestContext::for_cli("bootstrap_test");
     
     // Log CLI session start
-    if let Err(audit_err) = audit_logger_provider::log_cli_session_start(
+    if let Err(audit_err) = audit_logger::log_cli_session_start(
         audit_store,
         &ctx,
         "bootstrap_test",
@@ -540,7 +540,7 @@ pub async fn bootstrap_system_non_interactive(
         println!("⚠️  Never use this command or these credentials in production environments\n");
         
         // Log bootstrap completion (0 system admins, 0 role admins)
-        if let Err(audit_err) = audit_logger_provider::log_bootstrap_completed(
+        if let Err(audit_err) = audit_logger::log_bootstrap_completed(
             audit_store,
             "system".to_string(),
             Some("localhost".to_string()),
@@ -564,7 +564,7 @@ pub async fn bootstrap_system_non_interactive(
     // Log CLI session end based on result
     match &result {
         Ok(_) => {
-            if let Err(audit_err) = audit_logger_provider::log_cli_session_end(
+            if let Err(audit_err) = audit_logger::log_cli_session_end(
                 audit_store,
                 &ctx,
                 "bootstrap_test",
@@ -575,7 +575,7 @@ pub async fn bootstrap_system_non_interactive(
             }
         }
         Err(e) => {
-            if let Err(audit_err) = audit_logger_provider::log_cli_session_end(
+            if let Err(audit_err) = audit_logger::log_cli_session_end(
                 audit_store,
                 &ctx,
                 "bootstrap_test",
@@ -615,7 +615,7 @@ async fn create_admin_user_with_password_change_required(
 ) -> Result<crate::types::db::user::Model, crate::errors::InternalError> {
     use sea_orm::{EntityTrait, ColumnTrait, QueryFilter, ActiveModelTrait, Set};
     use crate::types::db::user::{self, Entity as User, ActiveModel};
-    use crate::audit::audit_logger_provider;
+    use crate::audit::audit_logger;
     use chrono::Utc;
     
     // Start transaction
@@ -669,7 +669,7 @@ async fn create_admin_user_with_password_change_required(
         })?;
     
     // Log user creation at point of action
-    if let Err(audit_err) = audit_logger_provider::log_user_created(
+    if let Err(audit_err) = audit_logger::log_user_created(
         &credential_store.audit_store,
         ctx,
         &user_id,
@@ -679,7 +679,7 @@ async fn create_admin_user_with_password_change_required(
     }
     
     // Log privilege assignment
-    if let Err(audit_err) = audit_logger_provider::log_privileges_changed(
+    if let Err(audit_err) = audit_logger::log_privileges_changed(
         &credential_store.audit_store,
         ctx,
         &user_id,
