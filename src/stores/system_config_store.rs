@@ -5,7 +5,7 @@ use crate::types::db::system_config::{self, Entity as SystemConfig, ActiveModel}
 use crate::errors::InternalError;
 use crate::errors::internal::SystemConfigError;
 use crate::stores::AuditStore;
-use crate::audit::audit_logger_provider;
+use crate::audit::audit_logger;
 
 /// SystemConfigStore manages system-level configuration flags in the database
 pub struct SystemConfigStore {
@@ -124,14 +124,14 @@ impl SystemConfigStore {
         };
 
         let log_result = if active {
-            audit_logger_provider::log_owner_activated(
+            audit_logger::log_owner_activated(
                 &self.audit_store,
                 actor,
                 ip,
                 activation_method,
             ).await
         } else {
-            audit_logger_provider::log_owner_deactivated(
+            audit_logger::log_owner_deactivated(
                 &self.audit_store,
                 actor,
                 ip,

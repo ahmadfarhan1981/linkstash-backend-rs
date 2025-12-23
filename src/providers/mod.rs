@@ -13,4 +13,3 @@ mod authentication_provider;
 // Re-export providers for clean imports
 pub use token_provider::TokenProvider;
 pub use password_validator_provider::PasswordValidatorProvider;
-pub use crate::audit::audit_logger_provider::AuditLogger;

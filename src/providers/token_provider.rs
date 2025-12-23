@@ -5,7 +5,7 @@ use rand::prelude::*;
 use base64::{engine::general_purpose, Engine as _};
 use std::fmt;
 use std::sync::Arc;
-use crate::audit::audit_logger_provider;
+use crate::audit::audit_logger;
 use crate::types::internal::auth::Claims;
 use crate::errors::InternalError;
 use crate::errors::internal::CredentialError;
@@ -91,7 +91,7 @@ impl TokenProvider {
         .map_err(|e| InternalError::crypto("jwt_generation", format!("Failed to generate JWT: {}", e)))?;
         
         // Log JWT issuance at point of action (expiration_dt already validated above)
-        if let Err(audit_err) = audit_logger_provider::log_jwt_issued(
+        if let Err(audit_err) = audit_logger::log_jwt_issued(
             &self.audit_store,
             ctx,
             user_id.to_string(),
@@ -152,7 +152,7 @@ impl TokenProvider {
                 
                 // Check if this is a tampering attempt (invalid signature)
                 if matches!(err, InternalError::Credential(CredentialError::InvalidToken { .. })) {
-                    if let Err(audit_err) = audit_logger_provider::log_jwt_tampered(
+                    if let Err(audit_err) = audit_logger::log_jwt_tampered(
                         &self.audit_store,
                         &ctx,
                         token.to_string(),
@@ -162,7 +162,7 @@ impl TokenProvider {
                     }
                 } else {
                     // Normal validation failure (expired, etc.)
-                    if let Err(audit_err) = audit_logger_provider::log_jwt_validation_failure(
+                    if let Err(audit_err) = audit_logger::log_jwt_validation_failure(
                         &self.audit_store,
                         &ctx,
                         failure_reason.to_string(),

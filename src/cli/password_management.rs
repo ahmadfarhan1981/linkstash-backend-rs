@@ -1,5 +1,5 @@
 use crate::app_data::AppData;
-use crate::audit::audit_logger_provider;
+use crate::audit::audit_logger;
 use crate::types::internal::context::RequestContext;
 
 /// Download and load common password list from URL
@@ -34,7 +34,7 @@ pub async fn download_and_load_passwords(
     
     println!("✓ Successfully loaded {} passwords into database", count);
     
-    audit_logger_provider::log_common_password_list_downloaded(
+    audit_logger::log_common_password_list_downloaded(
         &app_data.audit_store,
         &ctx,
         url,
