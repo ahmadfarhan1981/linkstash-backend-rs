@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::app_data::AppData;
-use crate::providers::{TokenProvider, AuditLoggerProvider};
+use crate::providers::{TokenProvider, AuditLogger};
 use crate::stores::{CredentialStore, SystemConfigStore};
 use crate::errors::InternalError;
 use crate::errors::internal::CredentialError;
@@ -17,7 +17,7 @@ pub struct AdminCoordinator {
     credential_store: Arc<CredentialStore>,
     system_config_store: Arc<SystemConfigStore>,
     token_provider: Arc<TokenProvider>,
-    audit_logger_provider: Arc<AuditLoggerProvider>,
+    audit_logger_provider: Arc<AuditLogger>,
 }
 
 impl AdminCoordinator {
@@ -35,7 +35,7 @@ impl AdminCoordinator {
             app_data.audit_store.clone(),
         ));
         
-        let audit_logger_provider = Arc::new(AuditLoggerProvider::new(
+        let audit_logger_provider = Arc::new(AuditLogger::new(
             app_data.audit_store.clone(),
         ));
         
@@ -370,7 +370,7 @@ mod tests {
     use crate::types::internal::context::RequestContext;
     
     async fn create_test_admin_coordinator() -> AdminCoordinator {
-        let (db, audit_db, credential_store, audit_store) = setup_test_stores().await;
+        let (connections, credential_store, audit_store) = setup_test_stores().await;
         
         // Set environment variables temporarily for SecretManager::init()
         unsafe {
@@ -378,7 +378,8 @@ mod tests {
             std::env::set_var("PASSWORD_PEPPER", "test-pepper-for-unit-tests");
             std::env::set_var("REFRESH_TOKEN_SECRET", "test-refresh-secret-minimum-32-chars");
         }
-        
+
+        let db = connections.auth.clone();
         // Create minimal AppData for testing
         let secret_manager = Arc::new(crate::config::SecretManager::init().unwrap());
         let system_config_store = Arc::new(crate::stores::SystemConfigStore::new(db.clone(), audit_store.clone()));
@@ -386,8 +387,7 @@ mod tests {
         let hibp_cache_store = Arc::new(crate::stores::HibpCacheStore::new(db.clone(), system_config_store.clone()));
         
         let app_data = Arc::new(crate::app_data::AppData {
-            db,
-            audit_db,
+            connections,
             env_provider: Arc::new(crate::config::SystemEnvironment),
             secret_manager,
             audit_store,

@@ -1,2 +1,5 @@
 - bootstrap_settings. ephemeral, used to initialize db's and put it in appdata
 - remove tests from settings manager
+- remove all static funtions from providers
+- move audit_logger out of provider, into a global utility
+- 

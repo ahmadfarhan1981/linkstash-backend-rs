@@ -7,6 +7,7 @@ mod stores;
 mod coordinators;
 mod providers;
 mod cli;
+mod audit;
 
 use std::sync::Arc;
 use config::BootstrapSettings;
@@ -73,7 +74,7 @@ async fn main() -> Result<(), std::io::Error> {
     let connections = DatabaseConnections::init(&bootstrap_setting).expect("Failed to connect to database");
     tracing::info!("Running database migrations...");
     connections.migrate().await.expect("Failed to run migrations");
-
+    tracing::info!("Finished database migrations.");
 
 
     // If CLI mode, execute command and exit

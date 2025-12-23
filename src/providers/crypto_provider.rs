@@ -82,18 +82,3 @@ mod tests {
     }
 }
 
-// Standalone functions for use by other components
-// These create temporary provider instances to maintain compatibility
-// with existing code that expects standalone functions
-
-/// Compute HMAC-SHA256 for refresh tokens and return as hexadecimal string (standalone function)
-pub fn hmac_sha256_token(key: &str, token: &str) -> String {
-    let provider = CryptoProvider::new();
-    provider.hmac_sha256_token(key, token)
-}
-
-/// Generate a cryptographically secure random password (standalone function)
-pub fn generate_secure_password() -> String {
-    let provider = CryptoProvider::new();
-    provider.generate_secure_password()
-}

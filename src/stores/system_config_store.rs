@@ -5,7 +5,7 @@ use crate::types::db::system_config::{self, Entity as SystemConfig, ActiveModel}
 use crate::errors::InternalError;
 use crate::errors::internal::SystemConfigError;
 use crate::stores::AuditStore;
-use crate::providers::audit_logger_provider;
+use crate::audit::audit_logger_provider;
 
 /// SystemConfigStore manages system-level configuration flags in the database
 pub struct SystemConfigStore {

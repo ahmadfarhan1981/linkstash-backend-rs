@@ -5,6 +5,7 @@ use sea_orm::{Database, DatabaseConnection};
 use migration::{AuthMigrator, AuditMigrator, MigratorTrait};
 use crate::{providers::{TokenProvider, PasswordValidatorProvider}, stores::{AuditStore, CredentialStore, SystemConfigStore}, app_data::AppData, coordinators::AuthCoordinator};
 use std::sync::{Arc, Mutex};
+use crate::config::database::DatabaseConnections;
 
 /// Creates a test password validator with in-memory stores
 /// 
@@ -55,8 +56,7 @@ pub async fn setup_test_password_validator() -> Arc<PasswordValidatorProvider> {
 /// let (_db, _audit_db, _credential_store, audit_store) = setup_test_stores().await;
 /// ```
 pub async fn setup_test_stores() -> (
-    DatabaseConnection,
-    DatabaseConnection,
+    DatabaseConnections,
     Arc<CredentialStore>,
     Arc<AuditStore>,
 ) {
@@ -87,7 +87,7 @@ pub async fn setup_test_stores() -> (
         audit_store.clone(),
     ));
     
-    (auth_db, audit_db, credential_store, audit_store)
+    (DatabaseConnections{auth:auth_db, audit:audit_db}, credential_store, audit_store)
 }
 
 /// Creates a full auth test setup with token provider configured
