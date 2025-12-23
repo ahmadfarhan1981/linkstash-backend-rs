@@ -9,7 +9,7 @@ pub mod errors;
 pub mod stores;
 pub mod api;
 pub mod cli;
-
+pub mod audit;
 pub use app_data::AppData;
 
 // Test utilities (available for unit and integration tests)

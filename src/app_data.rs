@@ -4,6 +4,7 @@ use crate::config::{EnvironmentProvider, SecretManager, SystemEnvironment};
 use crate::config::database::DatabaseConnections;
 use crate::stores::{AuditStore, CredentialStore, SystemConfigStore, CommonPasswordStore, HibpCacheStore};
 use crate::errors::InternalError;
+use crate::providers::AuditLogger;
 
 /// Centralized application data following the main-owned stores pattern
 /// 
@@ -32,6 +33,7 @@ use crate::errors::InternalError;
 /// ```
 pub struct AppData {
     pub connections: DatabaseConnections,
+    pub audit_logger: AuditLogger,
     pub env_provider: Arc<dyn EnvironmentProvider + Send + Sync>,
     pub secret_manager: Arc<SecretManager>,
     pub audit_store: Arc<AuditStore>,

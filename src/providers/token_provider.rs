@@ -1,14 +1,15 @@
-use jsonwebtoken::{encode, decode, Header, EncodingKey, DecodingKey, Validation, Algorithm};
-use chrono::{Utc, DateTime};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 use rand::prelude::*;
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 use std::fmt;
 use std::sync::Arc;
+use crate::audit::audit_logger_provider;
 use crate::types::internal::auth::Claims;
 use crate::errors::InternalError;
 use crate::errors::internal::CredentialError;
-use crate::providers::{crypto_provider, audit_logger_provider};
+use crate::providers::crypto_provider;
 use crate::stores::AuditStore;
 use crate::config::SecretManager;
 
@@ -248,7 +249,7 @@ impl fmt::Display for TokenProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jsonwebtoken::{decode, Validation, DecodingKey, Algorithm};
+    use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
     use crate::test::utils::setup_test_stores;
 
     async fn create_test_token_provider() -> TokenProvider {

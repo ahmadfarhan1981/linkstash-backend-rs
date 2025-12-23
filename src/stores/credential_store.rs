@@ -8,11 +8,10 @@ use crate::types::db::refresh_token::{ActiveModel as RefreshTokenActiveModel};
 use crate::errors::InternalError;
 use crate::errors::internal::CredentialError;
 use crate::stores::AuditStore;
-use crate::providers::audit_logger_provider;
+use crate::audit::audit_logger_provider;
 use crate::types::internal::auth::AdminFlags;
 use crate::types::internal::context::RequestContext;
 
-/// CredentialStore manages user credentials and refresh tokens in the database
 pub struct CredentialStore {
     db: DatabaseConnection,
     password_pepper: String,
@@ -20,27 +19,11 @@ pub struct CredentialStore {
 }
 
 impl CredentialStore {
-    /// Create a new CredentialStore with the given database connection and password pepper
-    /// 
-    /// # Arguments
-    /// * `db` - The database connection
-    /// * `password_pepper` - The secret key used for password hashing (from SecretManager)
-    /// * `audit_store` - The audit store for logging security events
     pub fn new(db: DatabaseConnection, password_pepper: String, audit_store: Arc<AuditStore>) -> Self {
         Self { db, password_pepper, audit_store }
     }
     
-    /// Begin a database transaction
-    /// 
-    /// Logs transaction start to audit database.
-    /// 
-    /// # Arguments
-    /// * `ctx` - Request context for audit logging
-    /// * `operation_type` - Type of operation (e.g., "password_change")
-    /// 
-    /// # Returns
-    /// * `Ok(DatabaseTransaction)` - Transaction handle
-    /// * `Err(InternalError)` - Failed to start transaction
+    /// Logs transaction start to audit database for security tracking
     pub async fn begin_transaction(
         &self,
         ctx: &RequestContext,
@@ -61,22 +44,33 @@ impl CredentialStore {
         Ok(txn)
     }
     
-    /// Create a new user with no administrative privileges (primitive operation)
-    /// 
-    /// This is the primitive operation for user creation. All user creation
-    /// paths must ultimately call this method. The user is created with all
-    /// privilege flags (is_owner, is_system_admin, is_role_admin) set to false.
+    /// Logs transaction commit to audit database for security tracking
+    pub async fn commit_transaction(
+        &self,
+        txn: sea_orm::DatabaseTransaction,
+        ctx: &RequestContext,
+        operation_type: &str,
+    ) -> Result<(), InternalError> {
+        txn.commit().await
+            .map_err(|e| InternalError::transaction("commit_transaction", e))?;
+
+
+        // Log transaction commit
+        if let Err(audit_err) = audit_logger_provider::log_transaction_started(
+            &self.audit_store,
+            ctx,
+            operation_type,
+        ).await {
+            tracing::error!("Failed to log transaction commit: {:?}", audit_err);
+        }
+        
+        Ok(())
+    }
+    
+    /// Primitive operation for user creation - all user creation paths must call this.
+    /// User is created with all privilege flags set to false.
     /// 
     /// Audit logging occurs immediately after the database operation (at point of action).
-    /// 
-    /// # Arguments
-    /// * `ctx` - Request context for audit logging
-    /// * `username` - Username for the new user
-    /// * `password_hash` - Pre-hashed password (caller is responsible for hashing)
-    /// 
-    /// # Returns
-    /// * `Ok(user_id)` - User created successfully and audit logged
-    /// * `Err(AuthError)` - Duplicate username, database error, or transaction failed
     pub async fn create_user(
         &self,
         ctx: &RequestContext,
@@ -140,23 +134,10 @@ impl CredentialStore {
         Ok(user_id)
     }
 
-    /// Set privileges for a user (primitive operation)
-    /// 
-    /// This is the primitive operation for privilege assignment. It updates
-    /// all privilege flags atomically and logs the before/after state.
-    /// This design makes it easy to add new privilege flags in the future
-    /// and provides a complete audit trail of privilege changes.
+    /// Primitive operation for privilege assignment - updates all privilege flags atomically.
+    /// Design makes it easy to add new privilege flags in the future and provides complete audit trail.
     /// 
     /// Audit logging occurs immediately after the database operation (at point of action).
-    /// 
-    /// # Arguments
-    /// * `ctx` - Request context for audit logging
-    /// * `user_id` - User ID to modify
-    /// * `new_privileges` - New privilege flags to set
-    /// 
-    /// # Returns
-    /// * `Ok(old_privileges)` - Privileges updated successfully, returns previous state
-    /// * `Err(AuthError)` - User not found or database error
     pub async fn set_privileges(
         &self,
         ctx: &RequestContext,
@@ -207,18 +188,7 @@ impl CredentialStore {
         Ok(old_privileges)
     }
 
-    /// Add a new user to the database
-    /// 
-    /// Validates the password using the provided PasswordValidator before hashing.
-    /// 
-    /// # Arguments
-    /// * `password_validator` - The password validator to use for validation
-    /// * `username` - The username for the new user
-    /// * `password` - The plaintext password to validate, hash, and store
-    /// 
-    /// # Returns
-    /// * `Ok(String)` - The user_id (UUID) of the created user
-    /// * `Err(InternalError)` - DuplicateUsername if username already exists, PasswordValidationFailed if password is invalid, or database error
+    /// Validates password using PasswordValidator before hashing and storing
     pub async fn add_user(
         &self,
         password_validator: &crate::providers::PasswordValidatorProvider,
@@ -296,22 +266,11 @@ impl CredentialStore {
         Ok(user_id)
     }
 
-    /// Verify user credentials and return user_id on success
-    /// 
     /// Implements OWASP timing attack mitigation by always executing Argon2 verification,
     /// even when the user doesn't exist. This prevents attackers from determining valid
     /// usernames by measuring response time differences.
     /// 
     /// Logs authentication attempts (success/failure) to audit database at point of action.
-    /// 
-    /// # Arguments
-    /// * `ctx` - Request context containing actor information for audit logging
-    /// * `username` - The username to verify
-    /// * `password` - The plaintext password to verify
-    /// 
-    /// # Returns
-    /// * `Ok(String)` - The user_id (UUID) if credentials are valid
-    /// * `Err(AuthError)` - InvalidCredentials if username not found or password incorrect
     pub async fn verify_credentials(&self, ctx: &RequestContext, username: &str, password: &str) -> Result<String, InternalError> {
         // Query user by username
         let user = User::find()
@@ -395,21 +354,7 @@ impl CredentialStore {
         }
     }
     
-    /// Store a refresh token in the database (private implementation)
-    /// 
     /// Logs token issuance to audit database at point of action.
-    /// 
-    /// # Arguments
-    /// * `conn` - Database connection or transaction
-    /// * `ctx` - Request context containing actor information
-    /// * `token_hash` - The SHA-256 hash of the refresh token
-    /// * `user_id` - The user_id (UUID string) this token belongs to (token owner)
-    /// * `expires_at` - Unix timestamp when the token expires
-    /// * `jwt_id` - The JWT ID associated with this refresh token
-    /// 
-    /// # Returns
-    /// * `Ok(())` - Token stored successfully
-    /// * `Err(InternalError)` - Database error
     async fn store_refresh_token(
         &self,
         conn: &impl sea_orm::ConnectionTrait,
@@ -446,18 +391,6 @@ impl CredentialStore {
         Ok(())
     }
     
-    /// Store a refresh token without transaction
-    /// 
-    /// # Arguments
-    /// * `ctx` - Request context containing actor information
-    /// * `token_hash` - The SHA-256 hash of the refresh token
-    /// * `user_id` - The user_id (UUID string) this token belongs to
-    /// * `expires_at` - Unix timestamp when the token expires
-    /// * `jwt_id` - The JWT ID associated with this refresh token
-    /// 
-    /// # Returns
-    /// * `Ok(())` - Token stored successfully
-    /// * `Err(InternalError)` - Database error
     pub async fn store_refresh_token_no_txn(
         &self,
         ctx: &crate::types::internal::context::RequestContext,
@@ -469,19 +402,6 @@ impl CredentialStore {
         self.store_refresh_token(&self.db, ctx, token_hash, user_id, expires_at, jwt_id).await
     }
     
-    /// Store a refresh token within a transaction
-    /// 
-    /// # Arguments
-    /// * `txn` - Database transaction
-    /// * `ctx` - Request context containing actor information
-    /// * `token_hash` - The SHA-256 hash of the refresh token
-    /// * `user_id` - The user_id (UUID string) this token belongs to
-    /// * `expires_at` - Unix timestamp when the token expires
-    /// * `jwt_id` - The JWT ID associated with this refresh token
-    /// 
-    /// # Returns
-    /// * `Ok(())` - Token stored successfully
-    /// * `Err(InternalError)` - Database error
     pub async fn store_refresh_token_in_txn(
         &self,
         txn: &sea_orm::DatabaseTransaction,
@@ -494,17 +414,7 @@ impl CredentialStore {
         self.store_refresh_token(txn, ctx, token_hash, user_id, expires_at, jwt_id).await
     }
     
-    /// Validate a refresh token and return the associated user_id
-    /// 
     /// Logs validation attempts (success/failure) to audit database at point of action.
-    /// 
-    /// # Arguments
-    /// * `ctx` - Request context containing actor information
-    /// * `token_hash` - The SHA-256 hash of the refresh token to validate
-    /// 
-    /// # Returns
-    /// * `Ok(String)` - The user_id (UUID) if token is valid and not expired
-    /// * `Err(AuthError)` - InvalidRefreshToken if not found, ExpiredRefreshToken if expired
     pub async fn validate_refresh_token(
         &self,
         ctx: &crate::types::internal::context::RequestContext,
@@ -553,19 +463,8 @@ impl CredentialStore {
         Ok(token.user_id)
     }
     
-    /// Revoke a refresh token by deleting it from the database
-    /// 
     /// Does not verify user ownership - the refresh token itself is the authority.
     /// Logs revocation to audit database at point of action.
-    /// 
-    /// # Arguments
-    /// * `ctx` - Request context containing actor information
-    /// * `token_hash` - SHA-256 hash of the refresh token to revoke
-    /// 
-    /// # Returns
-    /// * `Ok(user_id)` - Token revoked successfully, returns the user_id
-    /// * `Err(AuthError::InvalidRefreshToken)` - Token not found in database
-    /// * `Err(AuthError::InternalError)` - Database error
     pub async fn revoke_refresh_token(
         &self,
         ctx: &crate::types::internal::context::RequestContext,
@@ -601,20 +500,9 @@ impl CredentialStore {
         Ok(user_id)
     }
     
-    /// Invalidate all refresh tokens for a user
-    /// 
-    /// Deletes all refresh tokens associated with a user. This is used when
+    /// Deletes all refresh tokens associated with a user. Used when
     /// admin roles change to force re-authentication with updated JWT claims.
     /// Creates an audit log entry for this security-critical operation.
-    /// 
-    /// # Arguments
-    /// * `ctx` - RequestContext with actor information for audit logging
-    /// * `user_id` - The user_id (UUID string) whose tokens should be invalidated
-    /// * `reason` - Reason for invalidation (e.g., "admin_role_changed")
-    /// 
-    /// # Returns
-    /// * `Ok(())` - All tokens invalidated successfully
-    /// * `Err(AuthError)` - Database error or audit logging failure
     pub async fn invalidate_all_tokens(
         &self, 
         ctx: &crate::types::internal::context::RequestContext,
@@ -632,7 +520,7 @@ impl CredentialStore {
         match delete_result {
             Ok(_) => {
                 // Log successful token invalidation for audit trail
-                if let Err(audit_err) = crate::providers::audit_logger_provider::log_all_refresh_tokens_invalidated(
+                if let Err(audit_err) = crate::audit::audit_logger_provider::log_all_refresh_tokens_invalidated(
                     &self.audit_store,
                     ctx,
                     user_id.to_string(),
@@ -655,7 +543,7 @@ impl CredentialStore {
                 let error_msg = format!("Failed to invalidate tokens: {}", e);
                 
                 // Log failed token invalidation attempt for audit trail
-                if let Err(audit_err) = crate::providers::audit_logger_provider::log_token_invalidation_failure(
+                if let Err(audit_err) = crate::audit::audit_logger_provider::log_token_invalidation_failure(
                     &self.audit_store,
                     ctx,
                     user_id.to_string(),
@@ -671,15 +559,6 @@ impl CredentialStore {
         }
     }
     
-    /// Internal helper to get user by ID from any connection
-    /// 
-    /// # Arguments
-    /// * `conn` - Database connection or transaction
-    /// * `user_id` - The user_id (UUID string) to fetch
-    /// 
-    /// # Returns
-    /// * `Ok(Model)` - The user model
-    /// * `Err(InternalError)` - User not found or database error
     async fn get_user_by_id_internal(
         &self,
         conn: &impl sea_orm::ConnectionTrait,
@@ -693,27 +572,10 @@ impl CredentialStore {
             .ok_or_else(|| InternalError::from(CredentialError::UserNotFound(user_id.to_string())))
     }
 
-    /// Get user by ID
-    /// 
-    /// # Arguments
-    /// * `user_id` - The user_id (UUID string) to fetch
-    /// 
-    /// # Returns
-    /// * `Ok(Model)` - The user model
-    /// * `Err(InternalError)` - User not found or database error
     pub async fn get_user_by_id(&self, user_id: &str) -> Result<user::Model, InternalError> {
         self.get_user_by_id_internal(&self.db, user_id).await
     }
 
-    /// Get user by ID within a transaction
-    /// 
-    /// # Arguments
-    /// * `txn` - Database transaction
-    /// * `user_id` - The user_id (UUID string) to fetch
-    /// 
-    /// # Returns
-    /// * `Ok(Model)` - The user model
-    /// * `Err(InternalError)` - User not found or database error
     pub async fn get_user_by_id_in_txn(
         &self,
         txn: &sea_orm::DatabaseTransaction,
@@ -722,14 +584,7 @@ impl CredentialStore {
         self.get_user_by_id_internal(txn, user_id).await
     }
 
-    /// Get the owner account
-    /// 
     /// Retrieves the user with is_owner=true.
-    /// 
-    /// # Returns
-    /// * `Ok(Some(Model))` - The owner user model if found
-    /// * `Ok(None)` - No owner account exists
-    /// * `Err(AuthError)` - Database error
     pub async fn get_owner(&self) -> Result<Option<user::Model>, InternalError> {
         User::find()
             .filter(user::Column::IsOwner.eq(true))
@@ -738,20 +593,8 @@ impl CredentialStore {
             .map_err(|e| InternalError::database("OPERATION", e))
     }
 
-    /// Update user password (private implementation)
-    /// 
     /// Updates the password for a user in the database. Takes plaintext password,
     /// hashes it internally, and logs the change to audit database at point of action.
-    /// 
-    /// # Arguments
-    /// * `conn` - Database connection or transaction
-    /// * `ctx` - Request context containing actor information for audit logging
-    /// * `user_id` - The user_id (UUID string) whose password to update
-    /// * `new_password` - The new plaintext password (will be hashed internally)
-    /// 
-    /// # Returns
-    /// * `Ok(())` - Password updated successfully and audit logged
-    /// * `Err(InternalError)` - User not found or database error
     async fn update_password(
         &self,
         conn: &impl sea_orm::ConnectionTrait,
@@ -807,16 +650,6 @@ impl CredentialStore {
         Ok(())
     }
     
-    /// Update user password without transaction
-    /// 
-    /// # Arguments
-    /// * `ctx` - Request context containing actor information for audit logging
-    /// * `user_id` - The user_id (UUID string) whose password to update
-    /// * `new_password` - The new plaintext password
-    /// 
-    /// # Returns
-    /// * `Ok(())` - Password updated successfully
-    /// * `Err(InternalError)` - User not found or database error
     pub async fn update_password_no_txn(
         &self,
         ctx: &RequestContext,
@@ -826,17 +659,6 @@ impl CredentialStore {
         self.update_password(&self.db, ctx, user_id, new_password).await
     }
     
-    /// Update user password within a transaction
-    /// 
-    /// # Arguments
-    /// * `txn` - Database transaction
-    /// * `ctx` - Request context containing actor information for audit logging
-    /// * `user_id` - The user_id (UUID string) whose password to update
-    /// * `new_password` - The new plaintext password
-    /// 
-    /// # Returns
-    /// * `Ok(())` - Password updated successfully
-    /// * `Err(InternalError)` - User not found or database error
     pub async fn update_password_in_txn(
         &self,
         txn: &sea_orm::DatabaseTransaction,
@@ -847,19 +669,8 @@ impl CredentialStore {
         self.update_password(txn, ctx, user_id, new_password).await
     }
 
-    /// Clear password change requirement flag (private implementation)
-    /// 
     /// Sets password_change_required to false for a user.
     /// Logs the change to audit database at point of action.
-    /// 
-    /// # Arguments
-    /// * `conn` - Database connection or transaction
-    /// * `ctx` - Request context containing actor information for audit logging
-    /// * `user_id` - The user_id (UUID string) whose flag to clear
-    /// 
-    /// # Returns
-    /// * `Ok(())` - Flag cleared successfully and audit logged
-    /// * `Err(InternalError)` - User not found or database error
     async fn clear_password_change_required(
         &self,
         conn: &impl sea_orm::ConnectionTrait,
@@ -899,15 +710,6 @@ impl CredentialStore {
         Ok(())
     }
     
-    /// Clear password change requirement flag without transaction
-    /// 
-    /// # Arguments
-    /// * `ctx` - Request context containing actor information for audit logging
-    /// * `user_id` - The user_id (UUID string) whose flag to clear
-    /// 
-    /// # Returns
-    /// * `Ok(())` - Flag cleared successfully
-    /// * `Err(InternalError)` - User not found or database error
     pub async fn clear_password_change_required_no_txn(
         &self,
         ctx: &RequestContext,
@@ -916,16 +718,6 @@ impl CredentialStore {
         self.clear_password_change_required(&self.db, ctx, user_id).await
     }
     
-    /// Clear password change requirement flag within a transaction
-    /// 
-    /// # Arguments
-    /// * `txn` - Database transaction
-    /// * `ctx` - Request context containing actor information for audit logging
-    /// * `user_id` - The user_id (UUID string) whose flag to clear
-    /// 
-    /// # Returns
-    /// * `Ok(())` - Flag cleared successfully
-    /// * `Err(InternalError)` - User not found or database error
     pub async fn clear_password_change_required_in_txn(
         &self,
         txn: &sea_orm::DatabaseTransaction,
@@ -935,17 +727,6 @@ impl CredentialStore {
         self.clear_password_change_required(txn, ctx, user_id).await
     }
 
-    /// Revoke all refresh tokens for a user (private implementation)
-    /// 
-    /// Deletes all refresh tokens associated with a user.
-    /// 
-    /// # Arguments
-    /// * `conn` - Database connection or transaction
-    /// * `user_id` - The user_id (UUID string) whose tokens should be revoked
-    /// 
-    /// # Returns
-    /// * `Ok(())` - All tokens revoked successfully
-    /// * `Err(InternalError)` - Database error
     async fn revoke_all_refresh_tokens(
         &self,
         conn: &impl sea_orm::ConnectionTrait,
@@ -962,27 +743,10 @@ impl CredentialStore {
         Ok(())
     }
     
-    /// Revoke all refresh tokens for a user without transaction
-    /// 
-    /// # Arguments
-    /// * `user_id` - The user_id (UUID string) whose tokens should be revoked
-    /// 
-    /// # Returns
-    /// * `Ok(())` - All tokens revoked successfully
-    /// * `Err(InternalError)` - Database error
     pub async fn revoke_all_refresh_tokens_no_txn(&self, user_id: &str) -> Result<(), InternalError> {
         self.revoke_all_refresh_tokens(&self.db, user_id).await
     }
     
-    /// Revoke all refresh tokens for a user within a transaction
-    /// 
-    /// # Arguments
-    /// * `txn` - Database transaction
-    /// * `user_id` - The user_id (UUID string) whose tokens should be revoked
-    /// 
-    /// # Returns
-    /// * `Ok(())` - All tokens revoked successfully
-    /// * `Err(InternalError)` - Database error
     pub async fn revoke_all_refresh_tokens_in_txn(
         &self,
         txn: &sea_orm::DatabaseTransaction,
@@ -991,24 +755,11 @@ impl CredentialStore {
         self.revoke_all_refresh_tokens(txn, user_id).await
     }
 
-    /// Create an admin user with specific admin roles (helper method)
-    /// 
-    /// This is a convenience method that composes the primitive operations
-    /// within a single transaction. The entire operation (user creation +
-    /// privilege assignment) is atomic - if any step fails, everything rolls back.
+    /// Convenience method that composes the primitive operations within a single transaction.
+    /// The entire operation (user creation + privilege assignment) is atomic - if any step fails, everything rolls back.
     /// 
     /// Audit logging occurs at point of action within the transaction. If the
     /// transaction rolls back, a rollback event is logged.
-    /// 
-    /// # Arguments
-    /// * `ctx` - Request context for audit logging
-    /// * `username` - The username for the new admin user
-    /// * `password_hash` - The pre-hashed password (caller is responsible for hashing)
-    /// * `admin_flags` - AdminFlags specifying which admin roles to assign
-    /// 
-    /// # Returns
-    /// * `Ok(Model)` - The created user model with privileges assigned
-    /// * `Err(AuthError)` - DuplicateUsername if username already exists, or InternalError
     pub async fn create_admin_user(
         &self,
         ctx: &RequestContext,

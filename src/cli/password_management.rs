@@ -1,5 +1,5 @@
 use crate::app_data::AppData;
-use crate::providers::audit_logger_provider;
+use crate::audit::audit_logger_provider;
 use crate::types::internal::context::RequestContext;
 
 /// Download and load common password list from URL

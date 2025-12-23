@@ -46,7 +46,7 @@ pub async fn bootstrap_system(
     let ctx = RequestContext::for_cli("bootstrap");
     
     // Log CLI session start
-    use crate::providers::audit_logger_provider;
+    use crate::audit::audit_logger_provider;
     if let Err(audit_err) = audit_logger_provider::log_cli_session_start(
         audit_store,
         &ctx,
@@ -97,7 +97,7 @@ async fn bootstrap_system_impl(
     password_validator: &PasswordValidatorProvider,
     ctx: &RequestContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::providers::audit_logger_provider;
+    use crate::audit::audit_logger_provider;
     
     // Check if owner already exists
     let existing_owner = credential_store.get_owner().await
@@ -488,7 +488,7 @@ pub async fn bootstrap_system_non_interactive(
     secret_manager: &SecretManager,
     _password_validator: &PasswordValidatorProvider,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::providers::audit_logger_provider;
+    use crate::audit::audit_logger_provider;
     
     // Display test-only warning banner
     println!("\n=== Linkstash Bootstrap (TEST MODE) ===\n");
@@ -615,7 +615,7 @@ async fn create_admin_user_with_password_change_required(
 ) -> Result<crate::types::db::user::Model, crate::errors::InternalError> {
     use sea_orm::{EntityTrait, ColumnTrait, QueryFilter, ActiveModelTrait, Set};
     use crate::types::db::user::{self, Entity as User, ActiveModel};
-    use crate::providers::audit_logger_provider;
+    use crate::audit::audit_logger_provider;
     use chrono::Utc;
     
     // Start transaction

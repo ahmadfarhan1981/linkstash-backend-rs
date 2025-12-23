@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use std::sync::Arc;
 use crate::stores::{CredentialStore, SystemConfigStore, AuditStore};
 use crate::types::internal::context::RequestContext;
-use crate::providers::audit_logger_provider;
+use crate::audit::audit_logger_provider;
 
 /// Activate the owner account
 /// 
