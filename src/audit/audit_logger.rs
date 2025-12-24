@@ -3,7 +3,7 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-
+use crate::audit::AuditBuilder;
 use crate::stores::audit_store::AuditStore;
 use crate::types::internal::audit::{AuditEvent, EventType};
 use crate::types::internal::context::RequestContext;
@@ -69,7 +69,7 @@ impl AuditLogger {
         issued_jwt_id: String,
         expiration: DateTime<Utc>,
     ) -> Result<(), InternalError> {
-        let mut event = AuditEvent::new(EventType::JwtIssued);
+        let mut event = AuditEvent::new(EventType::JwtIssued, ctx);
         event.user_id = Some(ctx.actor_id.clone());
         // For JWT issuance, jwt_id field contains the JWT being issued (for easier querying)
         event.jwt_id = Some(issued_jwt_id.clone());
@@ -379,8 +379,8 @@ impl AuditLogger {
     ///
     /// # Arguments
     /// * `event_type` - Event type (can be EventType enum or string for custom events)
-    pub fn builder(&self, event_type: impl Into<EventType>) -> AuditBuilder {
-        AuditBuilder::new(self.audit_store.clone(), event_type)
+    pub fn builder(&self, event_type: impl Into<EventType>, request_context: RequestContext) -> AuditBuilder {
+        AuditBuilder::new(self.audit_store.clone(), event_type, request_context)
     }
 
     // Additional methods continue below...

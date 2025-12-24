@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::types::db::user::Model;
 
 /// JWT Claims structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Claims {
     /// Subject (user_id)
     pub sub: String,

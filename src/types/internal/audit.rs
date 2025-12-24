@@ -95,9 +95,10 @@ pub struct AuditEvent {
 
 impl AuditEvent {
     /// Create a new audit event with the specified event type
-    pub fn new(event_type: EventType) -> Self {
+    pub fn new(event_type: EventType, request_context: &RequestContext) -> Self {
         Self {
             event_type,
+            request_context: request_context.clone(),
             user_id: None,
             ip_address: None,
             jwt_id: None,

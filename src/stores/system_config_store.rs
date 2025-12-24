@@ -5,22 +5,18 @@ use crate::types::db::system_config::{self, Entity as SystemConfig, ActiveModel}
 use crate::errors::InternalError;
 use crate::errors::internal::SystemConfigError;
 use crate::stores::AuditStore;
-use crate::audit::audit_logger;
+use crate::audit::{audit_logger, AuditLogger};
 
 /// SystemConfigStore manages system-level configuration flags in the database
 pub struct SystemConfigStore {
     db: DatabaseConnection,
-    audit_store: Arc<AuditStore>,
+    audit_logger: Arc<AuditLogger>
 }
 
 impl SystemConfigStore {
-    /// Create a new SystemConfigStore with the given database connection
-    /// 
-    /// # Arguments
-    /// * `db` - The database connection
-    /// * `audit_store` - The audit store for logging security events
-    pub fn new(db: DatabaseConnection, audit_store: Arc<AuditStore>) -> Self {
-        Self { db, audit_store }
+
+    pub fn new(db: DatabaseConnection, audit_logger: Arc<AuditLogger>) -> Self {
+        Self { db, audit_logger }
     }
 
     /// Ensure the singleton system_config row exists
@@ -124,15 +120,13 @@ impl SystemConfigStore {
         };
 
         let log_result = if active {
-            audit_logger::log_owner_activated(
-                &self.audit_store,
+            self.audit_logger.log_owner_activated(
                 actor,
                 ip,
                 activation_method,
             ).await
         } else {
-            audit_logger::log_owner_deactivated(
-                &self.audit_store,
+            self.audit_logger.log_owner_deactivated(
                 actor,
                 ip,
                 activation_method,
@@ -180,8 +174,8 @@ mod tests {
     use crate::test::utils::setup_test_stores;
 
     async fn setup_test_db() -> (sea_orm::DatabaseConnection, Arc<SystemConfigStore>) {
-        let (db, _audit_db, _credential_store, audit_store) = setup_test_stores().await;
-        let system_config_store = Arc::new(SystemConfigStore::new(db.clone(), audit_store));
+        let (connections, _audit_db, _credential_store, audit_store) = setup_test_stores().await;
+        let system_config_store = Arc::new(SystemConfigStore::new(connections.auth.clone(), audit_store));
         (db, system_config_store)
     }
 

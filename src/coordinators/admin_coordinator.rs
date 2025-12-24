@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use crate::app_data::AppData;
-use crate::providers::{TokenProvider, AuditLogger};
+use crate::audit::AuditLogger;
+use crate::providers::{TokenProvider};
 use crate::stores::{CredentialStore, SystemConfigStore};
 use crate::errors::InternalError;
 use crate::errors::internal::CredentialError;
@@ -35,9 +36,7 @@ impl AdminCoordinator {
             app_data.audit_store.clone(),
         ));
         
-        let audit_logger_provider = Arc::new(AuditLogger::new(
-            app_data.audit_store.clone(),
-        ));
+        let audit_logger_provider = Arc::clone(&app_data.audit_logger);
         
         // Step 2: Extract stores and assign providers
         Self {
@@ -381,8 +380,9 @@ mod tests {
 
         let db = connections.auth.clone();
         // Create minimal AppData for testing
+        let audit_logger = Arc::new(AuditLogger::new(audit_store));
         let secret_manager = Arc::new(crate::config::SecretManager::init().unwrap());
-        let system_config_store = Arc::new(crate::stores::SystemConfigStore::new(db.clone(), audit_store.clone()));
+        let system_config_store = Arc::new(crate::stores::SystemConfigStore::new(db.clone(), audit_logger.clone()));
         let common_password_store = Arc::new(crate::stores::CommonPasswordStore::new(db.clone()));
         let hibp_cache_store = Arc::new(crate::stores::HibpCacheStore::new(db.clone(), system_config_store.clone()));
         
@@ -390,7 +390,7 @@ mod tests {
             connections,
             env_provider: Arc::new(crate::config::SystemEnvironment),
             secret_manager,
-            audit_store,
+            audit_logger,
             credential_store,
             system_config_store,
             common_password_store,

@@ -5,7 +5,7 @@ use rand::prelude::*;
 use base64::{engine::general_purpose, Engine as _};
 use std::fmt;
 use std::sync::Arc;
-use crate::audit::audit_logger;
+use crate::audit::{audit_logger, AuditLogger};
 use crate::types::internal::auth::Claims;
 use crate::errors::InternalError;
 use crate::errors::internal::CredentialError;
@@ -22,7 +22,7 @@ pub struct TokenProvider {
     secret_manager: Arc<SecretManager>,
     jwt_expiration_minutes: i64,
     refresh_expiration_days: i64,
-    audit_store: Arc<AuditStore>,
+    audit_logger: Arc<AuditLogger>
 }
 
 impl TokenProvider {
