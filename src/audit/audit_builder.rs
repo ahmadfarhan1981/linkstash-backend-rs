@@ -1,14 +1,16 @@
 use std::sync::Arc;
 use serde::Serialize;
 use serde_json::json;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
+use crate::audit::AuditLogger;
 use crate::errors::InternalError;
 use crate::stores::AuditStore;
 use crate::types::internal::audit::{AuditEvent, EventType};
+use crate::types::internal::context::RequestContext;
 
 pub struct AuditBuilder {
     event: AuditEvent,
-    store: Arc<AuditStore>,
+    store: Arc<AuditStore>
 }
 
 impl AuditBuilder {
@@ -17,9 +19,9 @@ impl AuditBuilder {
     /// # Arguments
     /// * `store` - Arc reference to the AuditStore
     /// * `event_type` - Event type (can be EventType enum or string for custom events)
-    pub fn new(store: Arc<AuditStore>, event_type: impl Into<EventType>) -> Self {
+    pub fn new(store: Arc<AuditStore>, event_type: impl Into<EventType>, request_context: RequestContext) -> Self {
         Self {
-            event: AuditEvent::new(event_type.into()),
+            event: AuditEvent::new(event_type.into(), request_context),
             store,
         }
     }
@@ -118,7 +120,7 @@ impl AuditBuilder {
 #[cfg(test)]
 mod tests {
     use linkstash_backend::test::utils::setup_test_stores;
-    use crate::providers::AuditLogger;
+    use crate::audit::AuditLogger;
     use super::*;
     use linkstash_backend::test::utils::setup_test_stores;
     use crate::types::internal::context::RequestContext;

@@ -1,10 +1,11 @@
 use std::sync::Arc;
 use sea_orm::DatabaseConnection;
+use crate::audit::{audit_logger, AuditLogger};
 use crate::config::{EnvironmentProvider, SecretManager, SystemEnvironment};
 use crate::config::database::DatabaseConnections;
 use crate::stores::{AuditStore, CredentialStore, SystemConfigStore, CommonPasswordStore, HibpCacheStore};
 use crate::errors::InternalError;
-use crate::providers::AuditLogger;
+
 
 /// Centralized application data following the main-owned stores pattern
 /// 
@@ -33,10 +34,13 @@ use crate::providers::AuditLogger;
 /// ```
 pub struct AppData {
     pub connections: DatabaseConnections,
-    pub audit_logger: AuditLogger,
+    pub audit_logger: Arc<AuditLogger>,
     pub env_provider: Arc<dyn EnvironmentProvider + Send + Sync>,
     pub secret_manager: Arc<SecretManager>,
-    pub audit_store: Arc<AuditStore>,
+    pub stores: Stores,
+}
+
+pub struct Stores{
     pub credential_store: Arc<CredentialStore>,
     pub system_config_store: Arc<SystemConfigStore>,
     pub common_password_store: Arc<CommonPasswordStore>,
@@ -58,6 +62,7 @@ impl AppData {
         let audit_db = connections.audit.clone();
 
         let env_provider: Arc<dyn EnvironmentProvider + Send + Sync> = Arc::new(SystemEnvironment);
+
 
         tracing::debug!("Initializing secret manager...");
         let secret_manager = Arc::new(SecretManager::init()
@@ -88,18 +93,24 @@ impl AppData {
 
         tracing::debug!("Stores created");
 
-        
-        tracing::info!("AppData initialization complete");
-        
-        Ok(Self {
-            connections,
-            env_provider,
-            secret_manager,
-            audit_store,
+        tracing::debug!("Initializing audit logger...");
+        let audit_logger =Arc::new(AuditLogger::new(audit_store.clone()));
+
+        let stores = Stores{
             credential_store,
             system_config_store,
             common_password_store,
             hibp_cache_store,
+        }
+
+        tracing::info!("AppData initialization complete");
+        
+        Ok(Self {
+            connections,
+            audit_logger,
+            env_provider,
+            secret_manager,
+            stores,
         })
     }
 }
