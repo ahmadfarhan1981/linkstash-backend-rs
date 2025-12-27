@@ -2,6 +2,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::app_data::AppData;
+use crate::audit::AuditLogger;
 use crate::providers::{TokenProvider, PasswordValidatorProvider, AuditLogger};
 use crate::stores::{CredentialStore, SystemConfigStore};
 use crate::errors::InternalError;

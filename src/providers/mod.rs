@@ -8,7 +8,8 @@
 pub mod token_provider;
 pub mod password_validator_provider;
 pub mod crypto_provider;
-mod authentication_provider;
+pub mod authentication_provider;
+pub mod users;
 
 // Re-export providers for clean imports
 pub use token_provider::TokenProvider;

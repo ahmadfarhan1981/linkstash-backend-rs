@@ -9,6 +9,22 @@ use crate::types::internal::audit::{AuditEvent, EventType};
 use crate::types::internal::context::RequestContext;
 use crate::errors::InternalError;
 
+/// Trait for errors that can be converted to audit log data
+/// 
+/// This trait allows each error type to define its own audit representation,
+/// eliminating the need for a large match statement in the audit logger.
+pub trait AuditableError {
+    /// Convert this error to audit event type and data
+    /// 
+    /// Returns a tuple of (EventType, data_map) where:
+    /// - EventType: The type of audit event this error should generate
+    /// - data_map: Error-specific data to include in the audit event
+    /// 
+    /// The audit logger will add common fields (user_id, ip_address, request_id, etc.)
+    /// automatically, so implementations should only include error-specific data.
+    fn to_audit_data(&self) -> (EventType, serde_json::Map<String, serde_json::Value>);
+}
+
 /// Audit logging provider that handles all audit event creation and logging
 /// 
 /// Migrated from audit_logger module as part of service layer refactor.
@@ -654,6 +670,41 @@ impl AuditLogger {
         event.data.insert("password_count".to_string(), json!(password_count));
         event.data.insert("source".to_string(), json!(format!("{:?}", ctx.source)));
         event.data.insert("request_id".to_string(), json!(ctx.request_id));
+        
+        self.audit_store.write_event(event).await
+    }
+
+    /// Log an error event based on the InternalError type
+    ///
+    /// Uses the AuditableError trait to automatically create appropriate audit events
+    /// based on the error type and context. This eliminates the need for specific 
+    /// error logging methods and allows each error type to define its own audit representation.
+    ///
+    /// # Arguments
+    /// * `ctx` - Request context containing actor information
+    /// * `error` - The InternalError that occurred (must implement AuditableError)
+    pub async fn log_error(
+        &self,
+        ctx: &RequestContext,
+        error: &impl AuditableError,
+    ) -> Result<(), InternalError> {
+        // Get error-specific audit data from the trait implementation
+        let (event_type, error_data) = error.to_audit_data();
+        
+        // Create audit event with the specified type
+        let mut event = AuditEvent::new(event_type);
+        
+        // Add common fields from request context
+        event.user_id = Some(ctx.actor_id.clone());
+        event.ip_address = ctx.ip_address.clone();
+        event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
+        
+        // Add standard context fields
+        event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
+        event.data.insert("source".to_string(), json!(format!("{:?}", ctx.source)));
+        
+        // Add error-specific data from the trait implementation
+        event.data.extend(error_data);
         
         self.audit_store.write_event(event).await
     }
