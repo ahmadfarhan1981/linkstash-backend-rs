@@ -3,4 +3,7 @@
 - remove all static funtions from providers
 - move audit_logger out of provider, into a global utility
 - audit logger takes context 
-- no statif functions on auditlogger
+- no static functions on auditlogger
+- credential are now wrapper for orm only, no logic. big changes specifcally to credential store which had a lot of logic
+- logging happens at API level , or at the root level of in CLI,stores providers etc should bubble up internal errors and let api create audit event based on that. that way lower level can stay pure and not have to have audit logger.  A lo of tests needs rewrite
+- 

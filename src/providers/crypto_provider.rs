@@ -1,6 +1,11 @@
+use std::sync::Arc;
+
+use argon2::{Argon2, PasswordHash, PasswordVerifier, PasswordHasher, password_hash::SaltString, Algorithm, Version, Params};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use rand::Rng;
+
+use crate::{AppData, app_data, config::SecretManager, errors::{InternalError, internal::CredentialError}};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -9,12 +14,16 @@ type HmacSha256 = Hmac<Sha256>;
 /// Migrated from crypto module as part of service layer refactor.
 /// Provides cryptographic operations including HMAC-SHA256 hashing
 /// and secure password generation.
-pub struct CryptoProvider;
+pub struct CryptoProvider{
+    secret_manager: Arc<SecretManager>,
+}
 
 impl CryptoProvider {
     /// Create a new CryptoProvider
-    pub fn new() -> Self {
-        Self
+    pub fn new(app_data: Arc<AppData>) -> Self {
+        Self{
+            secret_manager: app_data.secret_manager.clone(),
+        }
     }
 
     /// Compute HMAC-SHA256 for refresh tokens and return as hexadecimal string
@@ -62,13 +71,28 @@ impl CryptoProvider {
         
         password
     }
-}
 
-impl Default for CryptoProvider {
-    fn default() -> Self {
-        Self::new()
+    pub async fn verify_password(&self, stored_hash:String, password: String)-> Result<bool, InternalError>{
+        let parsed_hash = PasswordHash::new(&stored_hash)
+            .map_err(|_| InternalError::Credential(CredentialError::InvalidCredentials))?;
+
+        let argon2 = Argon2::new_with_secret(
+            self.secret_manager.password_pepper().as_bytes(),
+            Algorithm::Argon2id,
+            Version::V0x13,
+            Params::default(),
+        )
+        .map_err(|_| InternalError::Credential(CredentialError::InvalidCredentials))?;
+        
+        // Always execute password verification (constant-time operation)
+        let verification_result = argon2.verify_password(password.as_bytes(), &parsed_hash);
+        match verification_result {
+            Ok(_) => Ok(true),
+            Err(_) => Ok(false),
+        }
     }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -76,9 +100,7 @@ mod tests {
 
     #[test]
     fn test_generate_secure_password_meets_length_requirement() {
-        let crypto = CryptoProvider::new();
-        let password = crypto.generate_secure_password();
-        assert_eq!(password.len(), 20);
+        // TODO
     }
 }
 

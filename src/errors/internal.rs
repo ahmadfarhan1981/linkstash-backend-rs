@@ -22,13 +22,18 @@ pub enum InternalError {
         source: sea_orm::DbErr,
     },
     
-    /// Database transaction failed
-    #[error("Transaction error: {operation} failed: {source}")]
-    Transaction {
-        operation: String,
+    /** Database transactions **/
+    #[error("Starting transaction failed: {source}")]
+    TransactionBegin {
         #[source]
         source: sea_orm::DbErr,
     },
+    #[error("Commiting transaction failed: {source}")]
+    TransactionCommit {
+        #[source]
+        source: sea_orm::DbErr,
+    },
+    
     
     /// Failed to parse a value (UUID, timestamp, JSON, etc.)
     #[error("Parse error: failed to parse {value_type}: {message}")]
@@ -70,13 +75,6 @@ impl InternalError {
         }
     }
     
-    /// Create a transaction error with context
-    pub fn transaction(operation: impl Into<String>, source: sea_orm::DbErr) -> Self {
-        Self::Transaction {
-            operation: operation.into(),
-            source,
-        }
-    }
     
     /// Create a parse error with context
     pub fn parse(value_type: impl Into<String>, message: impl Into<String>) -> Self {

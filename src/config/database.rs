@@ -1,7 +1,8 @@
-use sea_orm::{Database, DatabaseConnection};
+use std::sync::Arc;
+use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DatabaseTransaction, TransactionTrait};
 use migration::{AuthMigrator, AuditMigrator, MigratorTrait};
 use crate::{config::{BootstrapSettings, bootstrap_settings}, errors::InternalError};
-
+use crate::audit::AuditLogger;
 
 pub struct  DatabaseConnections{
     pub auth : DatabaseConnection,
@@ -72,6 +73,30 @@ impl DatabaseConnections{
 
         Ok(audit_db)
     }
+
+
+     pub async fn begin_auth_transaction(&self)->Result<impl ConnectionTrait, InternalError>{
+        Self::begin_transaction(self.auth).await
+     }
+    pub async fn begin_audit_transaction(&self)->Result<impl ConnectionTrait, InternalError>{
+        Self::begin_transaction(self.audit).await
+    }
+    async fn begin_transaction(
+        db: DatabaseConnection,
+    ) -> Result<sea_orm::DatabaseTransaction, InternalError> {
+        let txn = db.begin().await
+            .map_err(|source| InternalError::TransactionBegin{source})?;
+        Ok(txn)
+    }
+    
+    async fn commit_transaction(
+        txn: sea_orm::DatabaseTransaction,
+    ) -> Result<(), InternalError> {
+        txn.commit().await
+            .map_err(|source| InternalError::TransactionCommit{source})?;
+        Ok(())
+    }
+    
 
 
 }
