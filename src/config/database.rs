@@ -1,7 +1,7 @@
 use std::sync::Arc;
-use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DatabaseTransaction, TransactionTrait};
+use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DatabaseTransaction, TransactionError, TransactionTrait};
 use migration::{AuthMigrator, AuditMigrator, MigratorTrait};
-use crate::{config::{BootstrapSettings, bootstrap_settings}, errors::InternalError};
+use crate::{config::{BootstrapSettings, bootstrap_settings}, errors::{InternalError, internal::DatabaseError}};
 use crate::audit::AuditLogger;
 
 pub struct  DatabaseConnections{
@@ -46,7 +46,7 @@ impl DatabaseConnections{
 
         let db = Database::connect(database_url)
             .await
-            .map_err(|e| InternalError::database("connect_database", e))?;
+            .map_err(|e| InternalError::Database(DatabaseError::Operation{operation: "connect database".to_string(), source: e }))?;
 
         tracing::debug!("Connected to auth database: {}", database_url);
 
@@ -67,7 +67,7 @@ impl DatabaseConnections{
 
         let audit_db = Database::connect(audit_database_url)
             .await
-            .map_err(|e| InternalError::database("connect_audit_database", e))?;
+            .map_err(|e| InternalError::Database(DatabaseError::Operation{operation: "connect audit database".to_string(), source: e }))?;
 
         tracing::debug!("Connected to audit database: {}", audit_database_url);
 
@@ -76,16 +76,17 @@ impl DatabaseConnections{
 
 
      pub async fn begin_auth_transaction(&self)->Result<impl ConnectionTrait, InternalError>{
-        Self::begin_transaction(self.auth).await
+        Self::begin_transaction(self.auth.clone()).await
      }
     pub async fn begin_audit_transaction(&self)->Result<impl ConnectionTrait, InternalError>{
-        Self::begin_transaction(self.audit).await
+        Self::begin_transaction(self.audit.clone()).await
     }
     async fn begin_transaction(
         db: DatabaseConnection,
-    ) -> Result<sea_orm::DatabaseTransaction, InternalError> {
+    ) -> Result<impl ConnectionTrait, InternalError> {
         let txn = db.begin().await
-            .map_err(|source| InternalError::TransactionBegin{source})?;
+            .map_err(|source| InternalError::Database(DatabaseError::TransactionBegin { source }))?;
+
         Ok(txn)
     }
     
@@ -93,7 +94,7 @@ impl DatabaseConnections{
         txn: sea_orm::DatabaseTransaction,
     ) -> Result<(), InternalError> {
         txn.commit().await
-            .map_err(|source| InternalError::TransactionCommit{source})?;
+            .map_err(|source| InternalError::Database(DatabaseError::TransactionCommit{source}))?;
         Ok(())
     }
     
@@ -117,7 +118,7 @@ impl DatabaseConnections{
 pub async fn migrate_auth_database(db: &DatabaseConnection) -> Result<(), InternalError> {
     AuthMigrator::up(db, None)
         .await
-        .map_err(|e| InternalError::database("run_migrations", e))?;
+        .map_err(|e| InternalError::Database(DatabaseError::Operation{operation: "run_migration".to_string(), source: e }))?;
     
     tracing::debug!("Auth database migrations completed");
     
@@ -139,7 +140,7 @@ pub async fn migrate_auth_database(db: &DatabaseConnection) -> Result<(), Intern
 pub async fn migrate_audit_database(audit_db: &DatabaseConnection) -> Result<(), InternalError> {
     AuditMigrator::up(audit_db, None)
         .await
-        .map_err(|e| InternalError::database("run_audit_migrations", e))?;
+        .map_err(|e| InternalError::Database(DatabaseError::Operation{operation: "run_audit_migrations".to_string(), source: e }))?;
     
     tracing::debug!("Audit database migrations completed");
     

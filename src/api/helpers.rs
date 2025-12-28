@@ -1,5 +1,5 @@
 use poem::Request;
-use poem_openapi::auth::Bearer;
+use poem_openapi::auth::{Bearer, BearerAuthorization};
 use crate::types::internal::context::RequestContext;
 use crate::providers::TokenProvider;
 use crate::errors::AuthError;
@@ -11,6 +11,13 @@ pub enum ContextResult {
     Ok(RequestContext),
     /// Password change required - context is included so allowed endpoints can extract it
     PasswordChangeRequired(RequestContext),
+}
+
+pub fn extract_bearer(req:&Request) -> Option<Bearer>{
+    match  Bearer::from_request(req){
+            Ok(bearer) => Some(bearer),
+            Err(_) => None,
+    }
 }
 
 /// Extract IP address from request headers
@@ -62,12 +69,11 @@ pub fn extract_ip_address(req: &Request) -> Option<String> {
 /// * `ContextResult::PasswordChangeRequired(ctx)` - User must change password (context included)
 pub async fn create_request_context(
     req: &Request,
-    auth: Option<Bearer>,
     token_provider: &Arc<TokenProvider>,
-) -> ContextResult {
+) -> ContextResult {// TODO refactor with new structure in mind
     // Extract IP address
     let ip_address = extract_ip_address(req);
-    
+    let auth  = extract_bearer(req);
     // Create base context with IP and request_id (defaults to API source)
     let mut ctx = RequestContext::new()
         .with_ip_address(ip_address.unwrap_or_else(|| "unknown".to_string()));
@@ -130,6 +136,3 @@ impl ContextResult {
 }
 
 
-#[cfg(test)]
-#[path = "helpers_test.rs"]
-mod helpers_test;

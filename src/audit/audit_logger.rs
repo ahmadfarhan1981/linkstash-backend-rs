@@ -31,7 +31,7 @@ pub trait AuditableError {
 /// Maintains actor/target separation pattern and provides all audit logging
 /// functionality including AuditBuilder for custom events.
 pub struct AuditLogger {
-    audit_store: Arc<AuditStore>,
+    pub audit_store: Arc<AuditStore>,
 }
 
 impl AuditLogger {
@@ -85,7 +85,7 @@ impl AuditLogger {
         issued_jwt_id: String,
         expiration: DateTime<Utc>,
     ) -> Result<(), InternalError> {
-        let mut event = AuditEvent::new(EventType::JwtIssued, ctx);
+        let mut event = AuditEvent::new(EventType::JwtIssued);
         event.user_id = Some(ctx.actor_id.clone());
         // For JWT issuance, jwt_id field contains the JWT being issued (for easier querying)
         event.jwt_id = Some(issued_jwt_id.clone());
@@ -395,8 +395,8 @@ impl AuditLogger {
     ///
     /// # Arguments
     /// * `event_type` - Event type (can be EventType enum or string for custom events)
-    pub fn builder(&self, event_type: impl Into<EventType>, request_context: RequestContext) -> AuditBuilder {
-        AuditBuilder::new(self.audit_store.clone(), event_type, request_context)
+    pub fn builder(&self, event_type: impl Into<EventType>) -> AuditBuilder {
+        AuditBuilder::new(self.audit_store.clone(), event_type)
     }
 
     // Additional methods continue below...
