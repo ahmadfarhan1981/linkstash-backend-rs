@@ -19,9 +19,9 @@ impl AuditBuilder {
     /// # Arguments
     /// * `store` - Arc reference to the AuditStore
     /// * `event_type` - Event type (can be EventType enum or string for custom events)
-    pub fn new(store: Arc<AuditStore>, event_type: impl Into<EventType>, request_context: RequestContext) -> Self {
+    pub fn new(store: Arc<AuditStore>, event_type: impl Into<EventType>) -> Self {
         Self {
-            event: AuditEvent::new(event_type.into(), request_context),
+            event: AuditEvent::new(event_type.into()),
             store,
         }
     }

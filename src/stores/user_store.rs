@@ -2,7 +2,7 @@ use std::sync::Arc;
 use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter, QuerySelect};
 use crate::AppData;
 use crate::audit::AuditLogger;
-use crate::errors::internal::CredentialError;
+use crate::errors::internal::{CredentialError, DatabaseError};
 use crate::errors::InternalError;
 use crate::types::db;
 use crate::types::db::user;
@@ -20,8 +20,7 @@ impl UserStore {
     }
     pub async fn get_user_from_username_for_auth(
         &self,
-        ctx: &RequestContext,
-        conn: &impl ConnectionTrait,
+        conn: impl ConnectionTrait,
         username: &str,
     )->Result<UserForAuth, InternalError> {
         let user: Option<UserForAuth> = db::user::Entity::find()
@@ -31,9 +30,9 @@ impl UserStore {
             .column(user::Column::Username)
             .column(user::Column::PasswordHash)
             .into_model::<UserForAuth>()
-            .one(conn)
+            .one(&conn)
             .await
-            .map_err(|e| InternalError::Database{ operation: "get_user_from_username_for_auth".to_string(), source: e })?;
+            .map_err(|e| InternalError::Database(DatabaseError::Operation{ operation: "get_user_from_username_for_auth".to_string(), source: e }))?;
 
         match user {
             Some(u) => Ok(u),

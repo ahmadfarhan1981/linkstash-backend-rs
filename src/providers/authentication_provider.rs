@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use linkstash_backend::errors::InternalError;
+use crate::errors::InternalError;
 use crate::stores::user_store::{UserForAuth, UserStore};
 use crate::types::internal::context::RequestContext;
 use crate::audit::audit_logger::AuditLogger;
@@ -30,9 +30,9 @@ pub struct AuthenticationProvider {
 
 }
 impl AuthenticationProvider {
-    async fn verify_credential(&self, ctx: &RequestContext, creds: LoginRequest)->Result<LoginResponse, InternalError>{
+    pub async fn verify_credential(&self, ctx: &RequestContext, creds: LoginRequest)->Result<LoginResponse, InternalError>{
         let txn = self.connections.begin_auth_transaction().await?;
-        let user = self.store.get_user_from_username_for_auth(ctx, txn, &creds.username).await?;
+        let user = self.store.get_user_from_username_for_auth(txn, &creds.username).await?;
         let result = self.crupto_provider.verify_password(user.password_hash, creds.password).await?;
 
             

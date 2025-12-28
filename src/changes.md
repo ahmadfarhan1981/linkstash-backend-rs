@@ -6,4 +6,9 @@
 - no static functions on auditlogger
 - credential are now wrapper for orm only, no logic. big changes specifcally to credential store which had a lot of logic
 - logging happens at API level , or at the root level of in CLI,stores providers etc should bubble up internal errors and let api create audit event based on that. that way lower level can stay pure and not have to have audit logger.  A lo of tests needs rewrite
-- 
+- All coordinator returns Result<ApiResponse, ApplicationError>
+- InternalError -> ApplicationError conversion happens at coordinator.
+- API handles poem/openapi/http related stuff
+- coordinator handles coordination and error handling.
+- Audit logger have a funciton that takes the an InternalError and log it based on conversion that is owned by `InternalError`
+- provider bubbles up error , coordinator handles audit logging, and conversion

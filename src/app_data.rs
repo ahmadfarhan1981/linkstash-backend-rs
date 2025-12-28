@@ -101,7 +101,7 @@ impl AppData {
             system_config_store,
             common_password_store,
             hibp_cache_store,
-        }
+        };
 
         tracing::info!("AppData initialization complete");
         

@@ -14,8 +14,7 @@ impl MigrationTrait for Migration {
                     .if_not_exists()
                     .col(ColumnDef::new(AuditEvents::Id).big_integer().not_null().auto_increment().primary_key())
                     .col(ColumnDef::new(AuditEvents::Timestamp).string().not_null())
-                    .col(ColumnDef::new(AuditEvents::EventType).string().not_null())
-                    .col(ColumnDef::new(AuditEvents::Context).json().not_null()) // RequestContext as JSON
+                    .col(ColumnDef::new(AuditEvents::EventType).string().not_null())    
                     .col(ColumnDef::new(AuditEvents::UserId).string().not_null())
                     .col(ColumnDef::new(AuditEvents::IpAddress).string())
                     .col(ColumnDef::new(AuditEvents::JwtId).string())
@@ -57,7 +56,6 @@ enum AuditEvents {
     Id,
     Timestamp,
     EventType,
-    Context,    // New RequestContext field
     UserId,
     IpAddress,
     JwtId,

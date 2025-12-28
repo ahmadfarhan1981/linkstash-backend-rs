@@ -5,9 +5,10 @@
 // containing business logic themselves.
 
 // Coordinator modules
-pub mod auth_coordinator;
-pub mod admin_coordinator;
-
+// pub mod auth_coordinator;
+// pub mod admin_coordinator;
+pub mod login_coordinator;
 // Re-export coordinators for clean imports
-pub use auth_coordinator::AuthCoordinator;
-pub use admin_coordinator::AdminCoordinator;
+// pub use auth_coordinator::AuthCoordinator;
+// pub use admin_coordinator::AdminCoordinator;
+pub use login_coordinator::LoginCoordinator;

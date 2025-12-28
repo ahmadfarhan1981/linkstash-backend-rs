@@ -22,7 +22,8 @@ pub struct TokenProvider {
     secret_manager: Arc<SecretManager>,
     jwt_expiration_minutes: i64,
     refresh_expiration_days: i64,
-    audit_logger: Arc<AuditLogger>
+    audit_store: Arc<AuditStore>
+    // audit_logger: Arc<AuditLogger>
 }
 
 impl TokenProvider {
