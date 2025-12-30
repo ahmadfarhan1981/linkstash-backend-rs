@@ -162,7 +162,7 @@ async fn main() -> Result<(), std::io::Error> {
     
     // Configure TCP listener
     tracing::info!("Starting server on http://{}", bind_address);
-    tracing::info!("Swagger UI available at http://localhost:{}/swagger", port);
+    tracing::info!("Swagger UI available at http://{}/swagger", bind_address);
 
     // Start Poem server with composed routes
     Server::new(listener)

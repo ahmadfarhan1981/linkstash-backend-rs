@@ -80,7 +80,7 @@ impl CryptoProvider {
 
     pub async fn verify_password(&self, stored_hash:String, password: String)-> Result<bool, InternalError>{
         let parsed_hash = PasswordHash::new(&stored_hash)
-            .map_err(|_| InternalError::Credential(CredentialError::InvalidCredentials))?;
+            .map_err(|_| InternalError::Credential(CredentialError::InvalidCredentials))?; //TODO not invalid credential
 
         let argon2 = Argon2::new_with_secret(
             self.secret_manager.password_pepper().as_bytes(),
@@ -88,7 +88,7 @@ impl CryptoProvider {
             Version::V0x13,
             Params::default(),
         )
-        .map_err(|_| InternalError::Credential(CredentialError::InvalidCredentials))?;
+        .map_err(|_| InternalError::Credential(CredentialError::InvalidCredentials))?;//TODO not invalid credential
         
         // Always execute password verification (constant-time operation)
         let verification_result = argon2.verify_password(password.as_bytes(), &parsed_hash);
