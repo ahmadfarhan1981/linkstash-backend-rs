@@ -22,6 +22,7 @@ impl UserStore {
     )->Result<UserForAuth, InternalError> {
         let user: Option<UserForAuth> = db::user::Entity::find()
             .filter(user::Column::Username.eq(username))
+            .filter(user::Column::IsOwner.eq(false))
             .select_only()
             .column(user::Column::Id)
             .column(user::Column::Username)

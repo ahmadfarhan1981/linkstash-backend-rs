@@ -1,9 +1,9 @@
 // CLI module for administrative operations requiring server access
 
-pub mod bootstrap;
-pub mod owner;
-pub mod credential_export;
-pub mod password_management;
+// pub mod bootstrap;
+// pub mod owner;
+// pub mod credential_export;
+// pub mod password_management;
 
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
@@ -76,6 +76,7 @@ pub async fn execute_command(
     cli: Cli,
     app_data: &AppData,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // let conn = app_data.connections.auth;
     match cli.command {
         Commands::Migrate => {
             Err("Unexpected cli path".to_string().into())
@@ -87,33 +88,38 @@ pub async fn execute_command(
             #[cfg(any(debug_assertions, feature = "test-utils"))]
             {
                 if non_interactive {
+                    tracing::warn!("NOT IMPLEMENTED");
+                    Ok(())
                     // Create password validator from AppData stores
-                    let password_validator = Arc::new(crate::providers::PasswordValidatorProvider::new(
-                        app_data.stores.common_password_store.clone(),
-                        app_data.stores.hibp_cache_store.clone(),
-                    ));
+                    // let password_validator = Arc::new(crate::providers::PasswordValidatorProvider::new(
+                    //     app_data.stores.common_password_store.clone(),
+                    //     app_data.stores.hibp_cache_store.clone(),
+                    // ));
                     
-                    bootstrap::bootstrap_system_non_interactive(
-                        &app_data.stores.credential_store,
-                        &app_data.stores.system_config_store,
-                        &app_data.audit_logger.audit_store,
-                        &app_data.secret_manager,
-                        &password_validator,
-                    ).await
+                    // bootstrap::bootstrap_system_non_interactive(
+                    //     &app_data.stores.credential_store,
+                    //     &app_data.stores.system_config_store,
+                    //     &app_data.audit_logger.audit_store,
+                    //     &app_data.secret_manager,
+                    //     &password_validator,
+                    // ).await
                 } else {
+                    tracing::warn!("NOT IMPLEMENTED");
+                    Ok(())
+
                     // Create password validator from AppData stores
-                    let password_validator = Arc::new(crate::providers::PasswordValidatorProvider::new(
-                        app_data.stores.common_password_store.clone(),
-                        app_data.stores.hibp_cache_store.clone(),
-                    ));
+                    // let password_validator = Arc::new(crate::providers::PasswordValidatorProvider::new(
+                    //     app_data.stores.common_password_store.clone(),
+                    //     app_data.stores.hibp_cache_store.clone(),
+                    // ));
                     
-                    bootstrap::bootstrap_system(
-                        &app_data.stores.credential_store,
-                        &app_data.stores.system_config_store,
-                        &app_data.audit_logger.audit_store,
-                        &app_data.secret_manager,
-                        &password_validator,
-                    ).await
+                    // bootstrap::bootstrap_system(
+                    //     &app_data.stores.credential_store,
+                    //     &app_data.stores.system_config_store,
+                    //     &app_data.audit_logger.audit_store,
+                    //     &app_data.secret_manager,
+                    //     &password_validator,
+                    // ).await
                 }
             }
             
@@ -129,31 +135,35 @@ pub async fn execute_command(
             }
         }
         Commands::Owner(owner_cmd) => {
-            match owner_cmd {
-                OwnerCommands::Activate => {
-                    owner::activate_owner(
-                        &app_data.stores.credential_store,
-                        &app_data.stores.system_config_store,
-                        &app_data.audit_logger.audit_store,
-                    ).await
-                }
-                OwnerCommands::Deactivate => {
-                    owner::deactivate_owner(
-                        &app_data.stores.credential_store,
-                        &app_data.stores.system_config_store,
-                        &app_data.audit_logger.audit_store,
-                    ).await
-                }
-                OwnerCommands::Info => {
-                    owner::get_owner_info(
-                        &app_data.stores.credential_store,
-                        &app_data.stores.system_config_store,
-                    ).await
-                }
-            }
+            tracing::warn!("NOT IMPLEMENTED");
+            Ok(())
+            // match owner_cmd {
+                // OwnerCommands::Activate => {
+                //     owner::activate_owner(
+                //         &app_data.stores.credential_store,
+                //         &app_data.stores.system_config_store,
+                //         &app_data.audit_logger.audit_store,
+                //     ).await
+                // }
+                // OwnerCommands::Deactivate => {
+                //     owner::deactivate_owner(
+                //         &app_data.stores.credential_store,
+                //         &app_data.stores.system_config_store,
+                //         &app_data.audit_logger.audit_store,
+                //     ).await
+                // }
+                // OwnerCommands::Info => {
+                //     owner::get_owner_info(
+                //         &app_data.stores.credential_store,
+                //         &app_data.stores.system_config_store,
+                //     ).await
+                // }
+            // }
         }
         Commands::LoadCommonPasswordBlocklist { url } => {
-            password_management::download_and_load_passwords(&url, app_data).await
+            tracing::warn!("NOT IMPLEMENTED");
+            Ok(())
+            // password_management::download_and_load_passwords(&url, app_data).await
         }
     }
     

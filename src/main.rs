@@ -1,25 +1,13 @@
-mod api;
-mod app_data;
-mod config;
-mod types;
-mod errors;
-mod stores;
-mod coordinators;
-mod providers;
-// mod cli;
-mod audit;
+
 
 use std::sync::Arc;
-use config::BootstrapSettings;
-use poem::{Route, Server, handler, listener::TcpListener, web::Html};
-use poem_openapi::OpenApiService;
-use api::{HealthApi, AuthApi, AdminApi};
-use app_data::AppData;
-use config::init_logging;
+use linkstash_backend::config::BootstrapSettings;
+use linkstash_backend::coordinators::LoginCoordinator;
+use poem::{Server, listener::TcpListener};
+use linkstash_backend::AppData;
+use linkstash_backend::config::init_logging;
 use clap::Parser;
-use errors::InternalError;
-use errors::internal::CredentialError;
-use config::database::DatabaseConnections;
+use linkstash_backend::config::database::DatabaseConnections;
 
 /// Seed test user for development
 /// 
@@ -48,31 +36,14 @@ async fn seed_test_user(app_data: &AppData) {
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
-    // Check if CLI arguments are present
-    let args: Vec<String> = std::env::args().collect();
-    let is_cli_mode = args.len() > 1;
     
-    // Parse CLI once if in CLI mode, otherwise use default env file
-    // let cli_parsed = if is_cli_mode {
-    //     Some(cli::Cli::parse())
-    // } else {
-    //     None
-    // };
+    let bootstrap_settings = linkstash_backend::init_bootstrap_settings().expect("Failed to load bootstrap settings");
     
-    // Load environment variables from specified file
-    // let env_file = cli_parsed.as_ref()
-    //     .map(|c| c.env_file.as_str())
-    //     .unwrap_or(".env");
-    let env_file = ".env";
-    dotenv::from_filename(env_file).ok();
-    
-    let bootstrap_setting = BootstrapSettings::from_env().expect("Failed to load bootstrap settings");
-
     // Initialize logging
     init_logging().expect("Failed to initialize logging");
 
     tracing::info!("connecting to database...");
-    let connections = DatabaseConnections::init(&bootstrap_setting).expect("Failed to connect to database");
+    let connections = DatabaseConnections::init(&bootstrap_settings).expect("Failed to connect to database");
     tracing::info!("Running database migrations...");
     connections.migrate().await.expect("Failed to run migrations");
     tracing::info!("Finished database migrations.");
@@ -118,7 +89,7 @@ async fn main() -> Result<(), std::io::Error> {
     // Create coordinators using AppData pattern
     // let auth_coordinator = Arc::new(coordinators::AuthCoordinator::new(app_data.clone()));
     // let admin_coordinator = Arc::new(coordinators::AdminCoordinator::new(app_data.clone()));
-    let auth_coordinator = Arc::new(coordinators::LoginCoordinator::new(app_data.clone()));
+    let auth_coordinator = Arc::new(LoginCoordinator::new(app_data.clone()));
 
     // Seed test user in debug mode
     #[cfg(debug_assertions)]
@@ -129,34 +100,10 @@ async fn main() -> Result<(), std::io::Error> {
     let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
     let bind_address = format!("{}:{}", host, port);
     
-    // Create AuthApi with AuthCoordinator
-    let auth_api = AuthApi::new(Arc::clone(&app_data));
     
-    
-    // Create AdminApi with AdminCoordinator
-    let admin_api = AdminApi::new();
-    
-    // Create OpenAPI service with API implementation
-    // Use localhost for the server URL since 0.0.0.0 is not accessible from browsers
-    let server_url = format!("http://localhost:{}/api", port);
-    let api_service = OpenApiService::new((HealthApi, auth_api, admin_api), "Linkstash RS auth backend", "1.0.0")
-        .server(server_url);
-    
-    // Generate Swagger UI from OpenAPI service
-    let swaggerui = api_service.swagger_ui();
-    
-    // Handler for root path serving static HTML
-    #[handler]
-    fn index() -> Html<&'static str> {
-        Html(include_str!("../static/index.html"))
-    }
-    
-    // Compose routes: nest API service under /api and Swagger UI under /swagger
-    let app = Route::new()
-        .at("/", poem::get(index))
-        .nest("/api", api_service)
-        .nest("/swagger", swaggerui);
-    
+    let app = linkstash_backend::get_routes(app_data).await?;
+
+
     // Configure TCP listener    
     let listener =  TcpListener::bind(&bind_address);
     
