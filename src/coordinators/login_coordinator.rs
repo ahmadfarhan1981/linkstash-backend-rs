@@ -26,7 +26,7 @@ impl LoginCoordinator{
         password: String,
     ) -> Result<LoginApiResponse, ApplicationError> {
         // self.auth_provider. 
-        self.authentication_provider.verify_credential(ctx, conn, LoginRequest{})
+        // self.authentication_provider.verify_credential(ctx, conn, LoginRequest{})
 
         Ok(LoginApiResponse::Ok(Json(TokenResponse{ access_token: "todo!()".to_string(), refresh_token: "todo!()".to_string(), token_type: format!("{:?}", ctx), expires_in: 0 })))
     }

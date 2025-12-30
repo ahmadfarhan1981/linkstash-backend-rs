@@ -50,13 +50,13 @@ impl AuthApi {
             Err(_) => None,
         };
         
-        self.auth_coordinator.login(ctx, username, password)
-        // LoginApiResponse::Ok(Json(TokenResponse{
-        //     access_token: format!("{:?}", auth),
-        //     refresh_token: "".to_string(),
-        //     token_type: "".to_string(),
-        //     expires_in: 0,
-        // }))
+        // self.auth_coordinator.login(ctx, username, password)
+        LoginApiResponse::Ok(Json(TokenResponse{
+            access_token: format!("{:?}", auth),
+            refresh_token: "".to_string(),
+            token_type: "".to_string(),
+            expires_in: 0,
+        }))
 
     }
     #[oai(path = "/test", method = "post", tag = "AuthTags::Authentication")]
