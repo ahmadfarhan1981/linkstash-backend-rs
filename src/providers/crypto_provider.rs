@@ -20,9 +20,15 @@ pub struct CryptoProvider{
 
 impl CryptoProvider {
     /// Create a new CryptoProvider
-    pub fn new(app_data: Arc<AppData>) -> Self {
+    // pub fn new(app_data: Arc<AppData>) -> Self {
+    //     Self{
+    //         secret_manager: app_data.secret_manager.clone(),
+    //     }
+    // }
+
+    pub fn new(secret_manager: Arc<SecretManager>) -> Self {
         Self{
-            secret_manager: app_data.secret_manager.clone(),
+            secret_manager,
         }
     }
 
