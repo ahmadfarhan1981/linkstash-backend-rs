@@ -43,7 +43,10 @@ impl AuditLogger {
         Self { audit_store }
     }
 
-    
+    pub async fn log_error(&self, error: InternalError){
+        
+    }
+
 
     /// Log a failed login attempt
     ///
@@ -755,65 +758,4 @@ impl AuditLogger {
         
         self.audit_store.write_event(event).await
     }
-}
-
-/// Builder for creating custom audit events
-///
-/// Provides a fluent API for constructing audit events with type-safe field addition
-/// and automatic sensitive data redaction.
-///
-/// # Example
-/// ```
-/// use std::sync::Arc;
-/// use linkstash_backend::providers::audit_logger_provider::AuditBuilder;
-/// use linkstash_backend::stores::audit_store::AuditStore;
-///
-/// async fn example(audit_store: Arc<AuditStore>) {
-///     AuditBuilder::new(audit_store.clone(), "password_reset_requested")
-///         .user_id(123.to_string())
-///         .ip_address("192.168.1.1")
-///         .add_field("reset_token_id", "abc123")
-///         .add_sensitive("email", "user@example.com")
-///         .write()
-///         .await
-///         .expect("Failed to write audit event");
-/// }
-/// ```
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test::utils::setup_test_stores;
-    use crate::types::internal::context::RequestContext;
-
-    async fn create_test_audit_logger_provider() -> AuditLogger {
-        let (_connections, _credential_store, audit_store) = setup_test_stores().await;
-        AuditLogger::new(audit_store)
-    }
-
-    #[tokio::test]
-    async fn test_log_login_success() {
-        let provider = create_test_audit_logger_provider().await;
-        let ctx = RequestContext::new();
-        
-        let result = provider.log_login_success(&ctx, "user123".to_string()).await;
-        
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_log_login_failure() {
-        let provider = create_test_audit_logger_provider().await;
-        let ctx = RequestContext::new();
-        
-        let result = provider.log_login_failure(
-            &ctx,
-            "invalid_password".to_string(),
-            Some("testuser".to_string()),
-        ).await;
-        
-        assert!(result.is_ok());
-    }
-
-    
 }

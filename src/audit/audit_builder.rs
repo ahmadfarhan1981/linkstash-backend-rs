@@ -8,6 +8,30 @@ use crate::stores::AuditStore;
 use crate::types::internal::audit::{AuditEvent, EventType};
 use crate::types::internal::context::RequestContext;
 
+
+/// Builder for creating custom audit events
+///
+/// Provides a fluent API for constructing audit events with type-safe field addition
+/// and automatic sensitive data redaction.
+///
+/// # Example
+/// ```
+/// use std::sync::Arc;
+/// use linkstash_backend::providers::audit_logger_provider::AuditBuilder;
+/// use linkstash_backend::stores::audit_store::AuditStore;
+///
+/// async fn example(audit_store: Arc<AuditStore>) {
+///     AuditBuilder::new(audit_store.clone(), "password_reset_requested")
+///         .user_id(123.to_string())
+///         .ip_address("192.168.1.1")
+///         .add_field("reset_token_id", "abc123")
+///         .add_sensitive("email", "user@example.com")
+///         .write()
+///         .await
+///         .expect("Failed to write audit event");
+/// }
+/// ```
+/// 
 pub struct AuditBuilder {
     event: AuditEvent,
     store: Arc<AuditStore>

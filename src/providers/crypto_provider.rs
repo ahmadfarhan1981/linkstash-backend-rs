@@ -78,7 +78,7 @@ impl CryptoProvider {
         password
     }
 
-    pub async fn verify_password(&self, stored_hash:String, password: String)-> Result<bool, InternalError>{
+    pub async fn verify_password(&self, stored_hash:&str, password: &str)-> Result<bool, InternalError>{
         let parsed_hash = PasswordHash::new(&stored_hash)
             .map_err(|_| InternalError::Credential(CredentialError::InvalidCredentials))?; //TODO not invalid credential
 

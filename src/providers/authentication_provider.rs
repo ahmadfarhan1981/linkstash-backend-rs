@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use clap::builder::Str;
 use sea_orm::ConnectionTrait;
 
 use crate::errors::InternalError;
@@ -10,8 +11,8 @@ use crate::providers::crypto_provider::CryptoProvider;
 
 
 pub struct LoginRequest{
-    username: String,
-    password: String,
+    pub username: String,
+    pub password: String,
 }
 pub enum  LoginResponse{
     Success{ user: UserForAuth},
@@ -39,13 +40,12 @@ impl AuthenticationProvider {
         }
     }
     pub async fn verify_credential(&self, 
-                                    ctx: &RequestContext, 
-                                    conn: impl ConnectionTrait,
+                                    conn: &impl ConnectionTrait,
                                     creds: LoginRequest)->Result<LoginResponse, InternalError>{
-        // let txn = self.connections.begin_auth_transaction().await?;
+
         let user = self.store.get_user_from_username_for_auth(conn, &creds.username).await?;
         let user2 = user.clone();
-        let result = self.crypto_provider.verify_password(user.password_hash, creds.password).await?;
+        let result = self.crypto_provider.verify_password(&user.password_hash, &creds.password).await?;
 
         match result {
             true => Ok(LoginResponse::Success{ user: user2 }),

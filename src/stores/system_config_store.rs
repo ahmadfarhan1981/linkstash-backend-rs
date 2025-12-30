@@ -106,15 +106,15 @@ impl SystemConfigStore {
             .map_err(|e| InternalError::database("update_owner_active", e))?;
 
         // Log at point of action
-        let actor = actor_user_id.unwrap_or_else(|| "system".to_string());
-        let ip = ip_address.clone();
+        // let actor = actor_user_id.unwrap_or_else(|| "system".to_string());
+        // let ip = ip_address.clone();
         
         // Determine activation method based on actor
-        let activation_method = if actor == "cli" || actor == "system" {
-            "cli".to_string()
-        } else {
-            "api".to_string()
-        };
+        // let activation_method = if actor == "cli" || actor == "system" {
+        //     "cli".to_string()
+        // } else {
+        //     "api".to_string()
+        // };
 
         // let log_result = if active {
         //     self.audit_logger.log_owner_activated(
@@ -130,9 +130,9 @@ impl SystemConfigStore {
         //     ).await
         // };
 
-        if let Err(audit_err) = log_result {
-            tracing::error!("Failed to log owner activation change: {:?}", audit_err);
-        }
+        // if let Err(audit_err) = log_result {
+        //     tracing::error!("Failed to log owner activation change: {:?}", audit_err);
+        // }
 
         Ok(())
     }
