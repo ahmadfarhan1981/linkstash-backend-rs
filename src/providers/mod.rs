@@ -13,4 +13,5 @@ pub mod authentication_provider;
 
 // Re-export providers for clean imports
 pub use token_provider::TokenProvider;
+pub use crypto_provider::CryptoProvider;
 // pub use password_validator_provider::PasswordValidatorProvider;

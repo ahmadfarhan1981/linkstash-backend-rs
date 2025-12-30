@@ -6,7 +6,7 @@ mod errors;
 mod stores;
 mod coordinators;
 mod providers;
-mod cli;
+// mod cli;
 mod audit;
 
 use std::sync::Arc;
@@ -28,22 +28,22 @@ use config::database::DatabaseConnections;
 #[cfg(debug_assertions)]
 async fn seed_test_user(app_data: &AppData) {
     // Create password validator from AppData stores
-    let password_validator = std::sync::Arc::new(providers::PasswordValidatorProvider::new(
-        app_data.common_password_store.clone(),
-        app_data.hibp_cache_store.clone(),
-    ));
+    // let password_validator = std::sync::Arc::new(providers::PasswordValidatorProvider::new(
+    //     app_data.common_password_store.clone(),
+    //     app_data.hibp_cache_store.clone(),
+    // ));
     
-    match app_data.credential_store.add_user(&password_validator, "testuser".to_string(), "TestSecure-Pass-12345-UUID".to_string()).await {
-        Ok(user_id) => {
-            tracing::info!("Test user created successfully with ID: {}", user_id);
-        }
-        Err(InternalError::Credential(CredentialError::DuplicateUsername(_))) => {
-            tracing::debug!("Test user already exists, skipping creation");
-        }
-        Err(e) => {
-            tracing::error!("Failed to create test user: {:?}", e);
-        }
-    }
+    // match app_data.credential_store.add_user(&password_validator, "testuser".to_string(), "TestSecure-Pass-12345-UUID".to_string()).await {
+    //     Ok(user_id) => {
+    //         tracing::info!("Test user created successfully with ID: {}", user_id);
+    //     }
+    //     Err(InternalError::Credential(CredentialError::DuplicateUsername(_))) => {
+    //         tracing::debug!("Test user already exists, skipping creation");
+    //     }
+    //     Err(e) => {
+    //         tracing::error!("Failed to create test user: {:?}", e);
+    //     }
+    // }
 }
 
 #[tokio::main]
@@ -53,16 +53,17 @@ async fn main() -> Result<(), std::io::Error> {
     let is_cli_mode = args.len() > 1;
     
     // Parse CLI once if in CLI mode, otherwise use default env file
-    let cli_parsed = if is_cli_mode {
-        Some(cli::Cli::parse())
-    } else {
-        None
-    };
+    // let cli_parsed = if is_cli_mode {
+    //     Some(cli::Cli::parse())
+    // } else {
+    //     None
+    // };
     
     // Load environment variables from specified file
-    let env_file = cli_parsed.as_ref()
-        .map(|c| c.env_file.as_str())
-        .unwrap_or(".env");
+    // let env_file = cli_parsed.as_ref()
+    //     .map(|c| c.env_file.as_str())
+    //     .unwrap_or(".env");
+    let env_file = ".env";
     dotenv::from_filename(env_file).ok();
     
     let bootstrap_setting = BootstrapSettings::from_env().expect("Failed to load bootstrap settings");
@@ -78,31 +79,31 @@ async fn main() -> Result<(), std::io::Error> {
 
 
     // If CLI mode, execute command and exit
-    if let Some(cli) = cli_parsed {
+    // if let Some(cli) = cli_parsed {
         
-        // Check if this is the migrate command - exit successfully since migrations are done
-        if matches!(cli.command, cli::Commands::Migrate) {
-            std::process::exit(0);
-        }
+    //     // Check if this is the migrate command - exit successfully since migrations are done
+    //     if matches!(cli.command, cli::Commands::Migrate) {
+    //         std::process::exit(0);
+    //     }
         
-        // For other CLI commands, initialize AppData with the migrated connections
-        let app_data = Arc::new(
-            AppData::init(connections).await
-                .map_err(|e| format!("Failed to initialize application data: {}", e))
-                .expect("Failed to initialize application data")
-        );
+    //     // For other CLI commands, initialize AppData with the migrated connections
+    //     let app_data = Arc::new(
+    //         AppData::init(connections).await
+    //             .map_err(|e| format!("Failed to initialize application data: {}", e))
+    //             .expect("Failed to initialize application data")
+    //     );
         
-        // Execute CLI command
-        match cli::execute_command(cli, &app_data).await {
-            Ok(()) => {
-                std::process::exit(0);
-            }
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
-            }
-        }
-    }
+    //     // Execute CLI command
+    //     match cli::execute_command(cli, &app_data).await {
+    //         Ok(()) => {
+    //             std::process::exit(0);
+    //         }
+    //         Err(e) => {
+    //             eprintln!("Error: {}", e);
+    //             std::process::exit(1);
+    //         }
+    //     }
+    // }
     
     // No CLI arguments - run server mode
     // Initialize AppData with the migrated connections
@@ -115,9 +116,10 @@ async fn main() -> Result<(), std::io::Error> {
     // No CLI arguments - run server mode
     
     // Create coordinators using AppData pattern
-    let auth_coordinator = Arc::new(coordinators::AuthCoordinator::new(app_data.clone()));
-    let admin_coordinator = Arc::new(coordinators::AdminCoordinator::new(app_data.clone()));
-    
+    // let auth_coordinator = Arc::new(coordinators::AuthCoordinator::new(app_data.clone()));
+    // let admin_coordinator = Arc::new(coordinators::AdminCoordinator::new(app_data.clone()));
+    let auth_coordinator = Arc::new(coordinators::LoginCoordinator::new(app_data.clone()));
+
     // Seed test user in debug mode
     #[cfg(debug_assertions)]
     seed_test_user(&app_data).await;
@@ -128,10 +130,11 @@ async fn main() -> Result<(), std::io::Error> {
     let bind_address = format!("{}:{}", host, port);
     
     // Create AuthApi with AuthCoordinator
-    let auth_api = AuthApi::new(auth_coordinator);
+    let auth_api = AuthApi::new(Arc::clone(&app_data));
+    
     
     // Create AdminApi with AdminCoordinator
-    let admin_api = AdminApi::new(admin_coordinator);
+    let admin_api = AdminApi::new();
     
     // Create OpenAPI service with API implementation
     // Use localhost for the server URL since 0.0.0.0 is not accessible from browsers

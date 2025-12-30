@@ -30,12 +30,12 @@ pub async fn download_and_load_passwords(
     
     println!("Downloaded {} passwords", passwords.len());
     
-    let count = app_data.common_password_store.load_passwords(passwords).await?;
+    let count = app_data.stores.common_password_store.load_passwords(passwords).await?;
     
     println!("✓ Successfully loaded {} passwords into database", count);
     
     audit_logger::log_common_password_list_downloaded(
-        &app_data.audit_store,
+        &app_data.audit_logger.audit_store,
         &ctx,
         url,
         count,

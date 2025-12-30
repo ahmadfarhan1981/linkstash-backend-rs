@@ -6,7 +6,7 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Create audit_events table with new RequestContext field
+        // Create audit_events table
         manager
             .create_table(
                 Table::create()
@@ -18,22 +18,38 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(AuditEvents::UserId).string().not_null())
                     .col(ColumnDef::new(AuditEvents::IpAddress).string())
                     .col(ColumnDef::new(AuditEvents::JwtId).string())
-                    .col(ColumnDef::new(AuditEvents::Data).string().not_null()) // JSON string
-                    .index(
-                        Index::create()
-                            .name("idx_audit_events_user_id")
-                            .col(AuditEvents::UserId)
-                    )
-                    .index(
-                        Index::create()
-                            .name("idx_audit_events_event_type")
-                            .col(AuditEvents::EventType)
-                    )
-                    .index(
-                        Index::create()
-                            .name("idx_audit_events_timestamp")
-                            .col(AuditEvents::Timestamp)
-                    )
+                    .col(ColumnDef::new(AuditEvents::Data).string().not_null()) 
+                    .to_owned(),
+            )
+            .await?;
+
+        // Create indexes separately
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_audit_events_user_id")
+                    .table(AuditEvents::Table)
+                    .col(AuditEvents::UserId)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_audit_events_event_type")
+                    .table(AuditEvents::Table)
+                    .col(AuditEvents::EventType)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_audit_events_timestamp")
+                    .table(AuditEvents::Table)
+                    .col(AuditEvents::Timestamp)
                     .to_owned(),
             )
             .await?;

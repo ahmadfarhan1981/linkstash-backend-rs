@@ -28,14 +28,14 @@ pub async fn activate_owner(
     let ctx = RequestContext::for_cli("owner_activate");
 
     // Log CLI session start
-    if let Err(e) = audit_logger::log_cli_session_start(
-        audit_store,
-        &ctx,
-        "owner_activate",
-        vec![],
-    ).await {
-        tracing::error!("Failed to log CLI session start: {:?}", e);
-    }
+    // if let Err(e) = audit_logger::log_cli_session_start(
+    //     audit_store,
+    //     &ctx,
+    //     "owner_activate",
+    //     vec![],
+    // ).await {
+    //     tracing::error!("Failed to log CLI session start: {:?}", e);
+    // }
 
     // Track success for session end logging
     let mut success = false;
@@ -94,15 +94,15 @@ pub async fn activate_owner(
     }
 
     // Log CLI session end
-    if let Err(e) = audit_logger::log_cli_session_end(
-        audit_store,
-        &ctx,
-        "owner_activate",
-        success,
-        error_message,
-    ).await {
-        tracing::error!("Failed to log CLI session end: {:?}", e);
-    }
+    // if let Err(e) = audit_logger::log_cli_session_end(
+    //     audit_store,
+    //     &ctx,
+    //     "owner_activate",
+    //     success,
+    //     error_message,
+    // ).await {
+    //     tracing::error!("Failed to log CLI session end: {:?}", e);
+    // }
 
     result
 }
@@ -128,14 +128,14 @@ pub async fn deactivate_owner(
     let ctx = RequestContext::for_cli("owner_deactivate");
 
     // Log CLI session start
-    if let Err(e) = audit_logger::log_cli_session_start(
-        audit_store,
-        &ctx,
-        "owner_deactivate",
-        vec![],
-    ).await {
-        tracing::error!("Failed to log CLI session start: {:?}", e);
-    }
+    // if let Err(e) = audit_logger::log_cli_session_start(
+    //     audit_store,
+    //     &ctx,
+    //     "owner_deactivate",
+    //     vec![],
+    // ).await {
+    //     tracing::error!("Failed to log CLI session start: {:?}", e);
+    // }
 
     // Track success for session end logging
     let mut success = false;
@@ -195,15 +195,15 @@ pub async fn deactivate_owner(
     }
 
     // Log CLI session end
-    if let Err(e) = audit_logger::log_cli_session_end(
-        audit_store,
-        &ctx,
-        "owner_deactivate",
-        success,
-        error_message,
-    ).await {
-        tracing::error!("Failed to log CLI session end: {:?}", e);
-    }
+    // if let Err(e) = audit_logger::log_cli_session_end(
+    //     audit_store,
+    //     &ctx,
+    //     "owner_deactivate",
+    //     success,
+    //     error_message,
+    // ).await {
+    //     tracing::error!("Failed to log CLI session end: {:?}", e);
+    // }
 
     result
 }

@@ -1,11 +1,13 @@
 use std::sync::Arc;
+use sea_orm::ConnectionTrait;
+
 use crate::errors::InternalError;
 use crate::stores::user_store::{UserForAuth, UserStore};
 use crate::types::internal::context::RequestContext;
 use crate::audit::audit_logger::AuditLogger;
 use crate::config::database::DatabaseConnections;
 use crate::providers::crypto_provider::CryptoProvider;
-use crate::stores::CredentialStore;
+
 
 pub struct LoginRequest{
     username: String,
@@ -25,19 +27,28 @@ pub struct LogoutRequest{}
 pub struct LogoutResponse{}
 pub struct AuthenticationProvider {
     store: Arc<UserStore>,
-    connections : DatabaseConnections,
-    crupto_provider: Arc<CryptoProvider>,
+    crypto_provider: Arc<CryptoProvider>,
 
 }
-impl AuthenticationProvider {
-    pub async fn verify_credential(&self, ctx: &RequestContext, creds: LoginRequest)->Result<LoginResponse, InternalError>{
-        let txn = self.connections.begin_auth_transaction().await?;
-        let user = self.store.get_user_from_username_for_auth(txn, &creds.username).await?;
-        let result = self.crupto_provider.verify_password(user.password_hash, creds.password).await?;
 
-            
+impl AuthenticationProvider {
+    pub fn new(store: Arc<UserStore>, crypto_provider: Arc<CryptoProvider>) -> Self {
+        Self{
+            store,
+            crypto_provider,
+        }
+    }
+    pub async fn verify_credential(&self, 
+                                    ctx: &RequestContext, 
+                                    conn: impl ConnectionTrait,
+                                    creds: LoginRequest)->Result<LoginResponse, InternalError>{
+        // let txn = self.connections.begin_auth_transaction().await?;
+        let user = self.store.get_user_from_username_for_auth(conn, &creds.username).await?;
+        let user2 = user.clone();
+        let result = self.crypto_provider.verify_password(user.password_hash, creds.password).await?;
+
         match result {
-            true => Ok(LoginResponse::Success{ user }),
+            true => Ok(LoginResponse::Success{ user: user2 }),
             false => Ok(LoginResponse::InvalidCredentials)
         }
     }

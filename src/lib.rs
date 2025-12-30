@@ -8,7 +8,7 @@ pub mod types;
 pub mod errors;
 pub mod stores;
 pub mod api;
-pub mod cli;
+// pub mod cli;
 pub mod audit;
 pub use app_data::AppData;
 

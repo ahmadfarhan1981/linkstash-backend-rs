@@ -9,13 +9,10 @@ use crate::types::db::user;
 use crate::types::internal::context::RequestContext;
 
 pub struct UserStore {
-    audit_logger : Arc<AuditLogger>
-
 }
 impl UserStore {
-    pub fn new(app_data: Arc<AppData>) -> Self {
-        Self{
-            audit_logger: Arc::clone(&app_data.audit_logger),
+    pub fn new() -> Self {
+        Self{           
         }
     }
     pub async fn get_user_from_username_for_auth(
@@ -42,7 +39,7 @@ impl UserStore {
     }
 }
 
-#[derive(FromQueryResult)]
+#[derive(FromQueryResult, Clone)]
 pub struct UserForAuth{
     pub id: String,
     pub username: String,

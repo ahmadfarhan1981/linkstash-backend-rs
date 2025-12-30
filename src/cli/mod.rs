@@ -89,28 +89,28 @@ pub async fn execute_command(
                 if non_interactive {
                     // Create password validator from AppData stores
                     let password_validator = Arc::new(crate::providers::PasswordValidatorProvider::new(
-                        app_data.common_password_store.clone(),
-                        app_data.hibp_cache_store.clone(),
+                        app_data.stores.common_password_store.clone(),
+                        app_data.stores.hibp_cache_store.clone(),
                     ));
                     
                     bootstrap::bootstrap_system_non_interactive(
-                        &app_data.credential_store,
-                        &app_data.system_config_store,
-                        &app_data.audit_store,
+                        &app_data.stores.credential_store,
+                        &app_data.stores.system_config_store,
+                        &app_data.audit_logger.audit_store,
                         &app_data.secret_manager,
                         &password_validator,
                     ).await
                 } else {
                     // Create password validator from AppData stores
                     let password_validator = Arc::new(crate::providers::PasswordValidatorProvider::new(
-                        app_data.common_password_store.clone(),
-                        app_data.hibp_cache_store.clone(),
+                        app_data.stores.common_password_store.clone(),
+                        app_data.stores.hibp_cache_store.clone(),
                     ));
                     
                     bootstrap::bootstrap_system(
-                        &app_data.credential_store,
-                        &app_data.system_config_store,
-                        &app_data.audit_store,
+                        &app_data.stores.credential_store,
+                        &app_data.stores.system_config_store,
+                        &app_data.audit_logger.audit_store,
                         &app_data.secret_manager,
                         &password_validator,
                     ).await
@@ -132,22 +132,22 @@ pub async fn execute_command(
             match owner_cmd {
                 OwnerCommands::Activate => {
                     owner::activate_owner(
-                        &app_data.credential_store,
-                        &app_data.system_config_store,
-                        &app_data.audit_store,
+                        &app_data.stores.credential_store,
+                        &app_data.stores.system_config_store,
+                        &app_data.audit_logger.audit_store,
                     ).await
                 }
                 OwnerCommands::Deactivate => {
                     owner::deactivate_owner(
-                        &app_data.credential_store,
-                        &app_data.system_config_store,
-                        &app_data.audit_store,
+                        &app_data.stores.credential_store,
+                        &app_data.stores.system_config_store,
+                        &app_data.audit_logger.audit_store,
                     ).await
                 }
                 OwnerCommands::Info => {
                     owner::get_owner_info(
-                        &app_data.credential_store,
-                        &app_data.system_config_store,
+                        &app_data.stores.credential_store,
+                        &app_data.stores.system_config_store,
                     ).await
                 }
             }

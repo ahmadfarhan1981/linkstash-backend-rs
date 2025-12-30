@@ -174,14 +174,14 @@ impl AuthError {
     pub fn from_internal_error(err: InternalError) -> Self {
         match &err {
             // Infrastructure errors - always log and return generic error
-            InternalError::Database { operation, .. } => {
-                tracing::error!("Database error in {}: {}", operation, err);
-                Self::internal_server_error()
-            }
-            InternalError::Transaction { operation, .. } => {
-                tracing::error!("Transaction error in {}: {}", operation, err);
-                Self::internal_server_error()
-            }
+            // InternalError::Database { operation, .. } => {
+            //     tracing::error!("Database error in {}: {}", operation, err);
+            //     Self::internal_server_error()
+            // }
+            // InternalError::Transaction { operation, .. } => {
+            //     tracing::error!("Transaction error in {}: {}", operation, err);
+            //     Self::internal_server_error()
+            // }
             InternalError::Parse { value_type, .. } => {
                 tracing::error!("Parse error for {}: {}", value_type, err);
                 Self::internal_server_error()

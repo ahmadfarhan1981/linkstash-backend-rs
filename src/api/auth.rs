@@ -1,30 +1,31 @@
 use poem_openapi::auth::BearerAuthorization;
 use poem_openapi::{payload::Json, OpenApi, Tags, SecurityScheme, auth::Bearer};
 use poem::Request;
-use crate::coordinators::AuthCoordinator;
+use crate::AppData;
+use crate::coordinators::LoginCoordinator;
 use crate::types::dto::auth::{
-    LoginRequest, LoginApiResponse, ErrorResponse
+    ErrorResponse, LoginApiResponse, LoginRequest, TokenResponse
 };
 use std::sync::Arc;
 
 /// Authentication API endpoints
 pub struct AuthApi {
-    auth_coordinator: Arc<AuthCoordinator>
+    auth_coordinator: LoginCoordinator
 }
 
 impl AuthApi {
     /// Create a new AuthApi with the given AuthCoordinator
     pub fn new(
-        auth_coordinator: Arc<AuthCoordinator>,
+        app_data: Arc<AppData>,
     ) -> Self {
         Self { 
-            auth_coordinator
+            auth_coordinator: LoginCoordinator::new(app_data),
         }
     }
 }
 
 /// JWT Bearer token authentication
-#[derive(SecurityScheme)]
+#[derive(SecurityScheme, Debug)]
 #[oai(
     ty = "bearer",
     key_name = "Authorization",
@@ -42,14 +43,29 @@ enum AuthTags {
 
 #[OpenApi(prefix_path = "/auth")]
 impl AuthApi {
-    #[oai(path = "/login2", method = "post", tag = "AuthTags::Authentication")]
-    async fn login2(&self, req: &Request, body: Json<LoginRequest>) -> LoginApiResponse {
+    #[oai(path = "/login", method = "post", tag = "AuthTags::Authentication")]
+    async fn login(&self, req: &Request, body: Json<LoginRequest>) -> LoginApiResponse {
         let auth = match  Bearer::from_request(req){
             Ok(bearer) => Some(bearer),
             Err(_) => None,
         };
+        
+        self.auth_coordinator.login(ctx, username, password)
+        // LoginApiResponse::Ok(Json(TokenResponse{
+        //     access_token: format!("{:?}", auth),
+        //     refresh_token: "".to_string(),
+        //     token_type: "".to_string(),
+        //     expires_in: 0,
+        // }))
 
-        LoginApiResponse::Unauthorized(Json(ErrorResponse { error: "Unauthrorizd".to_string() }))
-
+    }
+    #[oai(path = "/test", method = "post", tag = "AuthTags::Authentication")]
+    async fn test(&self, req: &Request, body: Json<LoginRequest>, auth: BearerAuth) -> LoginApiResponse {
+        LoginApiResponse::Ok(Json(TokenResponse{
+            access_token: format!("{:?}", auth),
+            refresh_token: "".to_string(),
+            token_type: "".to_string(),
+            expires_in: 0,
+        }))
     }
 }
