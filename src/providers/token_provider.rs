@@ -9,8 +9,8 @@ use crate::types::internal::auth::Claims;
 use crate::errors::InternalError;
 use crate::errors::internal::CredentialError;
 use crate::providers::CryptoProvider;
-use crate::stores::AuditStore;
 use crate::config::SecretManager;
+use crate::stores::user_store::UserForJWT;
 
 /// Provides JWT token generation, validation, and refresh token operations
 /// 
@@ -21,20 +21,29 @@ pub struct TokenProvider {
     secret_manager: Arc<SecretManager>,
     jwt_expiration_minutes: i64,
     refresh_expiration_days: i64,
-    audit_store: Arc<AuditStore>,
-    crypto_provider: Arc<CryptoProvider>,
+    // audit_store: Arc<AuditStore>,
+    // crypto_provider: Arc<CryptoProvider>,
     // audit_logger: Arc<AuditLogger>
 }
+pub struct GeneratedJWT{
+    pub jwt: String,
+    pub jti: String,
+}
 
+pub struct GeneratedRT{
+    pub token: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+}
 impl TokenProvider {
     /// Create a new TokenProvider with the given SecretManager and audit store
-    pub fn new(secret_manager: Arc<SecretManager>, audit_store: Arc<AuditStore>, crypto_provider: Arc<CryptoProvider>) -> Self {
+    pub fn new(secret_manager: Arc<SecretManager>) -> Self {
         Self {
             secret_manager,
             jwt_expiration_minutes: 15, // 15 minutes as per requirements
             refresh_expiration_days: 7, // 7 days as per requirements
-            audit_store,
-            crypto_provider,
+            // audit_store,
+            // crypto_provider,
         }
     }
     
@@ -55,14 +64,9 @@ impl TokenProvider {
     /// * `Result<(String, String), InternalError>` - Tuple of (encoded JWT, JWT ID) or an error
     pub async fn generate_jwt(
         &self,
-        ctx: &crate::types::internal::context::RequestContext,
-        user_id: &Uuid,
-        is_owner: bool,
-        is_system_admin: bool,
-        is_role_admin: bool,
-        app_roles: Vec<String>,
-        password_change_required: bool,
-    ) -> Result<(String, String), InternalError> {
+        // ctx: &crate::types::internal::context::RequestContext,
+        user: &UserForJWT,
+    ) -> Result<GeneratedJWT, InternalError> {
         let now = Utc::now().timestamp();
         let expiration = now + (self.jwt_expiration_minutes * 60);
         
@@ -75,20 +79,25 @@ impl TokenProvider {
         
         // Generate unique JWT ID
         let jti = Uuid::new_v4().to_string();
-        
+        let UserForJWT{id, is_owner,
+            is_system_admin,
+            is_role_admin,
+            app_roles,
+            password_change_required, ..
+        } = user.clone();
         let claims = Claims {
-            sub: user_id.to_string(),
+            sub: id,
             exp: expiration,
             iat: now,
             jti: jti.clone(),
             is_owner,
             is_system_admin,
             is_role_admin,
-            app_roles,
+            app_roles: serde_json::from_str::<Vec<String>>(&app_roles).unwrap_or_else(|_| vec![]),
             password_change_required,
         };
         
-        let token = encode(
+        let jwt = encode(
             &Header::new(Algorithm::HS256),
             &claims,
             &EncodingKey::from_secret(self.secret_manager.jwt_secret().as_bytes()),
@@ -106,9 +115,9 @@ impl TokenProvider {
         //     tracing::error!("Failed to log JWT issuance: {:?}", audit_err);
         // }
         
-        Ok((token, jti))
+        Ok(GeneratedJWT{jwt, jti})
     }
-    
+
     /// Validate a JWT and return the claims
     /// 
     /// Logs validation failures to audit database at point of action.
@@ -203,10 +212,18 @@ impl TokenProvider {
     /// 
     /// # Returns
     /// * `String` - A base64-encoded random token (32 bytes)
-    pub fn generate_refresh_token(&self) -> String {
+    pub fn generate_refresh_token(&self) -> GeneratedRT {
         let mut rng = rand::rng();
         let random_bytes: [u8; 32] = rng.random();
-        general_purpose::STANDARD.encode(random_bytes)
+        let token = general_purpose::STANDARD.encode(random_bytes);
+        let created_at = Utc::now().timestamp();
+        let expires_at = self.get_refresh_expiration(created_at);
+
+        GeneratedRT{
+            token,
+            created_at,
+            expires_at,
+        }
     }
     
     /// Hash a refresh token using HMAC-SHA256
@@ -216,17 +233,16 @@ impl TokenProvider {
     /// 
     /// # Returns
     /// * `String` - The hex-encoded HMAC-SHA256 hash
-    pub fn hash_refresh_token(&self, token: &str) -> String {
-        self.crypto_provider.hmac_sha256_token(self.secret_manager.refresh_token_secret(), token)
-    }
+    // pub fn hash_refresh_token(&self, token: &str) -> String {
+    //     self.crypto_provider.hmac_sha256_token(self.secret_manager.refresh_token_secret(), token)
+    // }
     
     /// Get the expiration timestamp for a refresh token (7 days from now)
     /// 
     /// # Returns
-    /// * `i64` - Unix timestamp for 7 days from now
-    pub fn get_refresh_expiration(&self) -> i64 {
-        let now = Utc::now().timestamp();
-        now + (self.refresh_expiration_days * 24 * 60 * 60)
+    /// * `i64` - Unix timestamp for `refresh_expiration_days` days from now
+    pub fn get_refresh_expiration(&self, created: i64) -> i64 {
+        created + (self.refresh_expiration_days * 24 * 60 * 60)
     }
 }
 

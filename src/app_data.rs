@@ -2,7 +2,7 @@ use crate::audit::{AuditLogger, audit_logger};
 use crate::config::database::DatabaseConnections;
 use crate::config::{EnvironmentProvider, SecretManager, SystemEnvironment};
 use crate::errors::InternalError;
-use crate::providers::CryptoProvider;
+use crate::providers::{CryptoProvider, TokenProvider, token_provider};
 use crate::providers::authentication_provider::AuthenticationProvider;
 use crate::stores::user_store::UserStore;
 use crate::stores::{AuditStore, user_store};
@@ -113,12 +113,14 @@ impl AppData {
 
         tracing::debug!("Initializing audit logger...");
         let audit_logger = Arc::new(AuditLogger::new(audit_store.clone()));
-
+        
         tracing::debug!("Initializing providers...");
         let crypto_provider = Arc::new(CryptoProvider::new(Arc::clone(&secret_manager)));
+        let token_provider= Arc::new(TokenProvider::new(Arc::clone(&secret_manager)));
         let authentication_provider = Arc::new(AuthenticationProvider::new(
             Arc::clone(&user_store),
-            Arc::clone(&crypto_provider),            
+            Arc::clone(&crypto_provider),     
+            Arc::clone(&token_provider),
         ));
         let providers = Providers{
             crypto_provider,

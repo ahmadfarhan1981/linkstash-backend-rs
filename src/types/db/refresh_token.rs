@@ -4,10 +4,10 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "refresh_tokens")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    pub id: i32,
-    #[sea_orm(unique)]
     pub token_hash: String,
+    #[sea_orm(indexed)]
     pub user_id: String,
+    #[sea_orm(indexed)]
     pub expires_at: i64,
     pub created_at: i64,
 }

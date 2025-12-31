@@ -1,11 +1,13 @@
 use std::sync::Arc;
-use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter, QuerySelect};
+use chrono::Utc;
+use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter, QuerySelect, Set, ActiveModelTrait};
 use crate::AppData;
 use crate::audit::AuditLogger;
 use crate::errors::internal::{CredentialError, DatabaseError};
 use crate::errors::InternalError;
 use crate::types::db;
 use crate::types::db::user;
+use crate::types::db::refresh_token;
 use crate::types::internal::context::RequestContext;
 
 pub struct UserStore {
@@ -20,7 +22,7 @@ impl UserStore {
         conn: &impl ConnectionTrait,
         username: &str,
     )->Result<UserForAuth, InternalError> {
-        let user: Option<UserForAuth> = db::user::Entity::find()
+        let user = db::user::Entity::find()
             .filter(user::Column::Username.eq(username))
             .filter(user::Column::IsOwner.eq(false))
             .select_only()
@@ -38,6 +40,56 @@ impl UserStore {
         }
 
     }
+
+    pub async fn get_user_roles_for_jwt( &self,
+                                         conn: &impl ConnectionTrait,
+                                         username: &str)->Result<UserForJWT,InternalError>{
+        let user= db::user::Entity::find()
+            .filter(user::Column::Username.eq(username))
+            .select_only()
+            .column(user::Column::Id)
+            .column(user::Column::Username)
+            .column(user::Column::IsOwner)
+            .column(user::Column::IsSystemAdmin)
+            .column(user::Column::IsRoleAdmin)
+            .column(user::Column::AppRoles)
+            .column(user::Column::PasswordChangeRequired)
+            .into_model::<UserForJWT>()
+            .one(conn)
+            .await
+            .map_err(|e| InternalError::Database(DatabaseError::Operation{ operation: "get_user_from_username_for_jwt".to_string(), source: e }))?;
+
+        match user {
+            Some(u) => Ok(u),
+            None => Err(InternalError::Credential(CredentialError::UserNotFound(username.to_string())))
+        }
+    }
+
+    pub async fn save_refresh_token_for_user(&self, conn: &impl ConnectionTrait, user: &UserForAuth, generated_rt: &str, created_at: i64, expires_at: i64)->Result<(), InternalError> {
+        let new_token = db::refresh_token::ActiveModel {
+            token_hash: Set(generated_rt.to_string()),
+            user_id: Set(user.id.clone()),
+            expires_at: Set(expires_at),
+            created_at: Set(created_at),
+        };
+
+        new_token.insert(conn).await
+            .map_err(|e| InternalError::database("insert_refresh_token", e))?;
+
+        // // Log refresh token issuance at point of action
+        // if let Err(audit_err) = audit_logger::log_refresh_token_issued(
+        //     &self.audit_store,
+        //     ctx,
+        //     user_id,
+        //     jwt_id,
+        //     token_hash,
+        // ).await {
+        //     tracing::error!("Failed to log refresh token issuance: {:?}", audit_err);
+        // }
+
+
+        Ok(())
+    }
 }
 
 #[derive(FromQueryResult, Clone)]
@@ -47,13 +99,15 @@ pub struct UserForAuth{
     pub password_hash: String,
 
 }
-impl From<user::Model> for UserForAuth {
-    fn from(u: user::Model) -> Self {
-        Self{
-            id:u.id,
-            password_hash:u.password_hash,
-            username: u.username,
-        }
+#[derive(FromQueryResult, Clone)]
+pub struct UserForJWT{
+    pub id: String,
+    pub username: String,
+    pub is_owner: bool,
+    pub is_system_admin: bool,
+    pub is_role_admin: bool,
+    /// json strings array
+    pub app_roles: String,
+    pub password_change_required: bool,
 
-    }
 }
