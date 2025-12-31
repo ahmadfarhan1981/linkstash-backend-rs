@@ -12,3 +12,4 @@
 - coordinator handles coordination and error handling.
 - Audit logger have a funciton that takes the an InternalError and log it based on conversion that is owned by `InternalError`
 - provider bubbles up error , coordinator handles audit logging, and conversion
+- audit logging using ActionOutcome

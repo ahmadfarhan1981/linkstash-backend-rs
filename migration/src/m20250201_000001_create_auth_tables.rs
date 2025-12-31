@@ -32,8 +32,7 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(RefreshTokens::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(RefreshTokens::Id).integer().not_null().auto_increment().primary_key())
-                    .col(ColumnDef::new(RefreshTokens::TokenHash).string().not_null().unique_key())
+                    .col(ColumnDef::new(RefreshTokens::TokenHash).string().not_null().primary_key())
                     .col(ColumnDef::new(RefreshTokens::UserId).string().not_null())
                     .col(ColumnDef::new(RefreshTokens::ExpiresAt).big_integer().not_null())
                     .col(ColumnDef::new(RefreshTokens::CreatedAt).big_integer().not_null())
@@ -44,6 +43,27 @@ impl MigrationTrait for Migration {
                             .to(Users::Table, Users::Id)
                             .on_delete(ForeignKeyAction::Cascade)
                     )
+                    .to_owned(),
+            )
+            .await?;
+
+        // Create indexes for refresh_tokens table
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_refresh_tokens_user_id")
+                    .table(RefreshTokens::Table)
+                    .col(RefreshTokens::UserId)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_refresh_tokens_expires_at")
+                    .table(RefreshTokens::Table)
+                    .col(RefreshTokens::ExpiresAt)
                     .to_owned(),
             )
             .await?;
@@ -146,7 +166,6 @@ enum Users {
 #[derive(DeriveIden)]
 enum RefreshTokens {
     Table,
-    Id,
     TokenHash,
     UserId,
     ExpiresAt,
