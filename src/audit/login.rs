@@ -3,7 +3,8 @@ use crate::errors::InternalError;
 use crate::types::internal::audit::{AuditEvent, EventType};
 use crate::types::internal::context::RequestContext;
 use super::AuditLogger;
-impl AuditLogger{
+
+impl AuditLogger {
     /// Log a successful login event
     ///
     /// # Arguments
@@ -15,9 +16,11 @@ impl AuditLogger{
         target_user_id: String,
     ) -> Result<(), InternalError> {
         let mut event = AuditEvent::new(EventType::LoginSuccess);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.ip_address = ctx.ip_address.clone();
-        event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
+        event.user_id = ctx.actor_id.clone();
+        event.ip_address = ctx.ip_address.clone().unwrap_or_else(|| "unknown".to_string());
+        event.jwt_id = ctx.claims.as_ref()
+            .map(|c| c.jti.clone())
+            .unwrap_or_else(|| "none".to_string());
         event.data.insert("target_user_id".to_string(), json!(target_user_id));
         event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
 

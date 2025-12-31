@@ -5,11 +5,10 @@ use rand::prelude::*;
 use base64::{engine::general_purpose, Engine as _};
 use std::fmt;
 use std::sync::Arc;
-use crate::audit::{audit_logger, AuditLogger};
 use crate::types::internal::auth::Claims;
 use crate::errors::InternalError;
 use crate::errors::internal::CredentialError;
-use crate::providers::{CryptoProvider, crypto_provider, token_provider};
+use crate::providers::CryptoProvider;
 use crate::stores::AuditStore;
 use crate::config::SecretManager;
 
@@ -81,7 +80,7 @@ impl TokenProvider {
             sub: user_id.to_string(),
             exp: expiration,
             iat: now,
-            jti: Some(jti.clone()),
+            jti: jti.clone(),
             is_owner,
             is_system_admin,
             is_role_admin,

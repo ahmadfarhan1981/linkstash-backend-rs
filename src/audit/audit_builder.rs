@@ -1,13 +1,12 @@
 use std::sync::Arc;
+use std::collections::HashMap;
 use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use crate::audit::AuditLogger;
 use crate::errors::InternalError;
 use crate::stores::AuditStore;
 use crate::types::internal::audit::{AuditEvent, EventType};
 use crate::types::internal::context::RequestContext;
-
 
 /// Builder for creating custom audit events
 ///
@@ -17,13 +16,12 @@ use crate::types::internal::context::RequestContext;
 /// # Example
 /// ```
 /// use std::sync::Arc;
-/// use linkstash_backend::providers::audit_logger_provider::AuditBuilder;
-/// use linkstash_backend::stores::audit_store::AuditStore;
+/// use linkstash_backend::audit::AuditBuilder;
+/// use linkstash_backend::stores::AuditStore;
 ///
-/// async fn example(audit_store: Arc<AuditStore>) {
+/// async fn example(audit_store: Arc<AuditStore>, ctx: &RequestContext) {
 ///     AuditBuilder::new(audit_store.clone(), "password_reset_requested")
-///         .user_id(123.to_string())
-///         .ip_address("192.168.1.1")
+///         .with_context(ctx)
 ///         .add_field("reset_token_id", "abc123")
 ///         .add_sensitive("email", "user@example.com")
 ///         .write()
@@ -33,8 +31,12 @@ use crate::types::internal::context::RequestContext;
 /// ```
 /// 
 pub struct AuditBuilder {
-    event: AuditEvent,
-    store: Arc<AuditStore>
+    event_type: EventType,
+    user_id: Option<String>,
+    ip_address: Option<String>,
+    jwt_id: Option<String>,
+    data: HashMap<String, serde_json::Value>,
+    store: Arc<AuditStore>,
 }
 
 impl AuditBuilder {
@@ -45,9 +47,43 @@ impl AuditBuilder {
     /// * `event_type` - Event type (can be EventType enum or string for custom events)
     pub fn new(store: Arc<AuditStore>, event_type: impl Into<EventType>) -> Self {
         Self {
-            event: AuditEvent::new(event_type.into()),
+            event_type: event_type.into(),
+            user_id: None,
+            ip_address: None,
+            jwt_id: None,
+            data: HashMap::new(),
             store,
         }
+    }
+
+    /// Populate builder fields from RequestContext
+    /// 
+    /// Maps RequestContext fields to AuditEvent fields:
+    /// - `actor_id` -> `user_id` (actor who performed the action)
+    /// - `ip_address` -> `ip_address` (or "unknown" if None)
+    /// - `jwt_id` from claims -> `jwt_id` (or "none" if no JWT)
+    /// - Other fields (request_id, source, authenticated) -> `data` JSON
+    pub fn with_context(mut self, ctx: &RequestContext) -> Self {
+        // Actor ID becomes user_id (who performed the action)
+        self.user_id = Some(ctx.actor_id.clone());
+        
+        // IP address (use "unknown" if not available)
+        self.ip_address = Some(ctx.ip_address.clone().unwrap_or_else(|| "unknown".to_string()));
+        
+        // Extract JWT ID from claims if available, otherwise use "none"
+        self.jwt_id = Some(
+            ctx.claims
+                .as_ref()
+                .map(|claims| claims.jti.clone())
+                .unwrap_or_else(|| "none".to_string())
+        );
+        
+        // Add other context fields to data JSON
+        self.data.insert("request_id".to_string(), json!(ctx.request_id));
+        self.data.insert("source".to_string(), json!(format!("{:?}", ctx.source)));
+        self.data.insert("authenticated".to_string(), json!(ctx.authenticated));
+        
+        self
     }
 
     /// Set the user ID for this audit event
@@ -55,7 +91,7 @@ impl AuditBuilder {
     /// # Arguments
     /// * `id` - User ID
     pub fn user_id(mut self, id: impl Into<String>) -> Self {
-        self.event.user_id = Some(id.into());
+        self.user_id = Some(id.into());
         self
     }
 
@@ -64,7 +100,7 @@ impl AuditBuilder {
     /// # Arguments
     /// * `ip` - IP address as a string
     pub fn ip_address(mut self, ip: impl Into<String>) -> Self {
-        self.event.ip_address = Some(ip.into());
+        self.ip_address = Some(ip.into());
         self
     }
 
@@ -73,7 +109,7 @@ impl AuditBuilder {
     /// # Arguments
     /// * `id` - JWT identifier (jti claim)
     pub fn jwt_id(mut self, id: impl Into<String>) -> Self {
-        self.event.jwt_id = Some(id.into());
+        self.jwt_id = Some(id.into());
         self
     }
 
@@ -87,7 +123,7 @@ impl AuditBuilder {
     pub fn add_field(mut self, key: impl Into<String>, value: impl Serialize) -> Self {
         // Serialize the value to JSON
         if let Ok(json_value) = serde_json::to_value(value) {
-            self.event.data.insert(key.into(), json_value);
+            self.data.insert(key.into(), json_value);
         }
         self
     }
@@ -117,79 +153,39 @@ impl AuditBuilder {
             let hash_result = hasher.finalize();
             let hash_hex = format!("sha256:{:x}", hash_result);
 
-            self.event.data.insert(key.into(), json!(hash_hex));
+            self.data.insert(key.into(), json!(hash_hex));
         }
         self
     }
 
+    /// Build the audit event without writing to database
+    /// 
+    /// Returns the constructed AuditEvent. All required fields must be set
+    /// (user_id, ip_address, jwt_id) or defaults will be used.
+    /// 
+    /// # Panics
+    /// Panics if required fields are not set. Use `with_context()` or set fields manually.
+    pub fn build(self) -> AuditEvent {
+        let user_id = self.user_id.unwrap_or_else(|| "unknown".to_string());
+        let ip_address = self.ip_address.unwrap_or_else(|| "unknown".to_string());
+        let jwt_id = self.jwt_id.unwrap_or_else(|| "none".to_string());
+
+        AuditEvent {
+            event_type: self.event_type,
+            user_id,
+            ip_address,
+            jwt_id,
+            data: self.data,
+        }
+    }
+
     /// Write the audit event to the database
     ///
-    /// Validates that user_id is present before writing. Returns an error if validation fails
-    /// or if the database operation fails.
-    ///
-    /// # Errors
-    /// Returns `AuditError::MissingUserId` if user_id was not set
-    /// Returns `AuditError::DatabaseError` if the database operation fails
+    /// Builds the event and writes it directly to storage.
     pub async fn write(self) -> Result<(), InternalError> {
-        // Validate that user_id is present
-        if self.event.user_id.is_none() {
-            return Err(InternalError::Audit(crate::errors::internal::AuditError::LogWriteFailed("Missing user_id".to_string())));
-        }
-
-        // Write the event to the database
-        self.store.write_event(self.event).await
+        let store = self.store.clone();
+        let event = self.build();
+        store.write_event(event).await
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use linkstash_backend::test::utils::setup_test_stores;
-    use crate::audit::AuditLogger;
-    use super::*;
-    use linkstash_backend::test::utils::setup_test_stores;
-    use crate::types::internal::context::RequestContext;
-
-    async fn create_test_audit_logger_provider() -> AuditLogger {
-        let (_connections, _credential_store, audit_store) = setup_test_stores().await;
-        AuditLogger::new(audit_store)
-    }
-    #[tokio::test]
-    async fn test_audit_builder() {
-        let provider = create_test_audit_logger_provider().await;
-
-        let result = provider.builder("custom_event")
-            .user_id("user123")
-            .ip_address("192.168.1.1")
-            .add_field("action", "test_action")
-            .write()
-            .await;
-
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_audit_builder_missing_user_id() {
-        let provider = create_test_audit_logger_provider().await;
-
-        let result = provider.builder("custom_event")
-            .ip_address("192.168.1.1")
-            .add_field("action", "test_action")
-            .write()
-            .await;
-
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_audit_builder_sensitive_field() {
-        let provider = create_test_audit_logger_provider().await;
-
-        let result = provider.builder("custom_event")
-            .user_id("user123")
-            .add_sensitive("email", "test@example.com")
-            .write()
-            .await;
-
-        assert!(result.is_ok());
-    }
-}

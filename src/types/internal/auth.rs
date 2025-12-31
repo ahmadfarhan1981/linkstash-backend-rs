@@ -15,8 +15,7 @@ pub struct Claims {
     pub iat: i64,
     
     /// JWT ID (unique identifier for this token)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub jti: Option<String>,
+    pub jti: String,
     
     /// Owner role flag
     pub is_owner: bool,

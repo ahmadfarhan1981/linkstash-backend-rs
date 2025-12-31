@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::fmt;
-use crate::types::internal::context::RequestContext;
 
 /// Event types for audit logging
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,20 +85,20 @@ impl<T: Into<String>> From<T> for EventType {
 #[derive(Debug, Clone)]
 pub struct AuditEvent {
     pub event_type: EventType,
-    pub user_id: Option<String>,
-    pub ip_address: Option<String>,
-    pub jwt_id: Option<String>,
+    pub user_id: String,
+    pub ip_address: String,
+    pub jwt_id: String,
     pub data: HashMap<String, serde_json::Value>,
 }
 
 impl AuditEvent {
-    /// Create a new audit event with the specified event type
+    /// Create a new audit event with the specified event type and required fields
     pub fn new(event_type: EventType) -> Self {
         Self {
             event_type,
-            user_id: None,
-            ip_address: None,
-            jwt_id: None,
+            user_id: String::new(),
+            ip_address: String::new(),
+            jwt_id: String::new(),
             data: HashMap::new(),
         }
     }
