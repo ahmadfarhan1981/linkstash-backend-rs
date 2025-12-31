@@ -1,5 +1,4 @@
 use sea_orm::entity::prelude::*;
-use crate::types::internal::context::RequestContext;
 
 /// SeaORM entity for audit_events table
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
@@ -10,8 +9,8 @@ pub struct Model {
     pub timestamp: String,
     pub event_type: String,
     pub user_id: String,
-    pub ip_address: Option<String>,
-    pub jwt_id: Option<String>,
+    pub ip_address: String,
+    pub jwt_id: String,
     pub data: String,
 }
 

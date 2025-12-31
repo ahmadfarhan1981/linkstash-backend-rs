@@ -1,7 +1,4 @@
-use chrono::{DateTime, Utc};
-use serde::Serialize;
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use crate::audit::AuditBuilder;
 use crate::stores::audit_store::AuditStore;
@@ -43,356 +40,9 @@ impl AuditLogger {
         Self { audit_store }
     }
 
-    pub async fn log_error(&self, error: InternalError){
-        
-    }
 
 
-    /// Log a failed login attempt
-    ///
-    /// # Arguments
-    /// * `ctx` - Request context containing actor information
-    /// * `failure_reason` - Reason for the login failure
-    /// * `attempted_username` - Optional username that was attempted (for forensic analysis)
-    pub async fn log_login_failure(
-        &self,
-        ctx: &RequestContext,
-        failure_reason: String,
-        attempted_username: Option<String>,
-    ) -> Result<(), InternalError> {
-        let mut event = AuditEvent::new(EventType::LoginFailure);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.ip_address = ctx.ip_address.clone();
-        event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
-        event.data.insert("failure_reason".to_string(), json!(failure_reason));
-        event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
-        
-        if let Some(username) = attempted_username {
-            event.data.insert("attempted_username".to_string(), json!(username));
-        }
-        
-        self.audit_store.write_event(event).await
-    }
 
-    /// Log JWT issuance
-    ///
-    /// # Arguments
-    /// * `ctx` - Request context containing actor information
-    /// * `target_user_id` - ID of the user for whom the JWT was issued (JWT subject)
-    /// * `issued_jwt_id` - JWT identifier (jti claim) of the JWT being issued
-    /// * `expiration` - Expiration timestamp of the JWT
-    pub async fn log_jwt_issued(
-        &self,
-        ctx: &RequestContext,
-        target_user_id: String,
-        issued_jwt_id: String,
-        expiration: DateTime<Utc>,
-    ) -> Result<(), InternalError> {
-        let mut event = AuditEvent::new(EventType::JwtIssued);
-        event.user_id = Some(ctx.actor_id.clone());
-        // For JWT issuance, jwt_id field contains the JWT being issued (for easier querying)
-        event.jwt_id = Some(issued_jwt_id.clone());
-        event.ip_address = ctx.ip_address.clone();
-        event.data.insert("target_user_id".to_string(), json!(target_user_id));
-        event.data.insert("expiration".to_string(), json!(expiration.to_rfc3339()));
-        event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
-        // Also store actor's JWT ID if authenticated (for tracing who requested the issuance)
-        if let Some(actor_jwt_id) = ctx.claims.as_ref().and_then(|c| c.jti.clone()) {
-            event.data.insert("actor_jwt_id".to_string(), json!(actor_jwt_id));
-        }
-        
-        self.audit_store.write_event(event).await
-    }
-
-    /// Log JWT validation failure
-    ///
-    /// # Arguments
-    /// * `ctx` - Request context containing actor information (from JWT claims)
-    /// * `failure_reason` - Reason for the validation failure
-    pub async fn log_jwt_validation_failure(
-        &self,
-        ctx: &RequestContext,
-        failure_reason: String,
-    ) -> Result<(), InternalError> {
-        let mut event = AuditEvent::new(EventType::JwtValidationFailure);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
-        event.ip_address = ctx.ip_address.clone();
-        event.data.insert("failure_reason".to_string(), json!(failure_reason));
-        event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
-        
-        self.audit_store.write_event(event).await
-    }
-
-    /// Log JWT tampering detection
-    ///
-    /// # Arguments
-    /// * `ctx` - Request context containing actor information (from unverified JWT claims)
-    /// * `full_jwt` - Full JWT string for forensic analysis
-    /// * `failure_reason` - Reason for the tampering detection
-    pub async fn log_jwt_tampered(
-        &self,
-        ctx: &RequestContext,
-        full_jwt: String,
-        failure_reason: String,
-    ) -> Result<(), InternalError> {
-        let mut event = AuditEvent::new(EventType::JwtTampered);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
-        event.ip_address = ctx.ip_address.clone();
-        event.data.insert("full_jwt".to_string(), json!(full_jwt));
-        event.data.insert("failure_reason".to_string(), json!(failure_reason));
-        event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
-        
-        self.audit_store.write_event(event).await
-    }
-
-    /// Log refresh token issuance
-    ///
-    /// # Arguments
-    /// * `ctx` - Request context containing actor information
-    /// * `target_user_id` - ID of the user for whom the refresh token was issued (token owner)
-    /// * `jwt_id` - JWT identifier associated with this refresh token
-    /// * `token_id` - Unique identifier for the refresh token
-    pub async fn log_refresh_token_issued(
-        &self,
-        ctx: &RequestContext,
-        target_user_id: String,
-        jwt_id: String,
-        token_id: String,
-    ) -> Result<(), InternalError> {
-        let mut event = AuditEvent::new(EventType::RefreshTokenIssued);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.jwt_id = Some(jwt_id);
-        event.ip_address = ctx.ip_address.clone();
-        event.data.insert("target_user_id".to_string(), json!(target_user_id));
-        event.data.insert("token_id".to_string(), json!(token_id));
-        event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
-        // Store actor's JWT ID if authenticated (for tracing who requested the issuance)
-        if let Some(actor_jwt_id) = ctx.claims.as_ref().and_then(|c| c.jti.clone()) {
-            event.data.insert("actor_jwt_id".to_string(), json!(actor_jwt_id));
-        }
-        
-        self.audit_store.write_event(event).await
-    }
-
-    /// Log refresh token revocation
-    ///
-    /// # Arguments
-    /// * `ctx` - Request context containing actor information
-    /// * `target_user_id` - ID of the user whose refresh token was revoked (token owner)
-    /// * `token_id` - Unique identifier for the refresh token
-    pub async fn log_refresh_token_revoked(
-        &self,
-        ctx: &RequestContext,
-        target_user_id: String,
-        token_id: String,
-    ) -> Result<(), InternalError> {
-        let mut event = AuditEvent::new(EventType::RefreshTokenRevoked);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
-        event.ip_address = ctx.ip_address.clone();
-        event.data.insert("target_user_id".to_string(), json!(target_user_id));
-        event.data.insert("token_id".to_string(), json!(token_id));
-        event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
-        
-        self.audit_store.write_event(event).await
-    }
-
-    /// Log all refresh tokens invalidated event
-    ///
-    /// Used when admin roles change and all tokens for a user need to be invalidated
-    /// to force re-authentication with updated JWT claims.
-    ///
-    /// # Arguments
-    /// * `ctx` - Request context with actor information for audit logging
-    /// * `user_id` - The user whose tokens were invalidated
-    /// * `reason` - Reason for invalidation (e.g., "admin_role_changed")
-    pub async fn log_all_refresh_tokens_invalidated(
-        &self,
-        ctx: &RequestContext,
-        user_id: String,
-        reason: String,
-    ) -> Result<(), InternalError> {
-        let mut event = AuditEvent::new(EventType::RefreshTokenRevoked);
-        event.user_id = Some(user_id);
-        event.ip_address = ctx.ip_address.clone();
-        // Extract JWT ID from claims if authenticated
-        event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
-        event.data.insert("action".to_string(), json!("all_tokens_invalidated"));
-        event.data.insert("reason".to_string(), json!(reason));
-        event.data.insert("actor_id".to_string(), json!(ctx.actor_id));
-        event.data.insert("request_id".to_string(), json!(ctx.request_id));
-        
-        self.audit_store.write_event(event).await
-    }
-
-    /// Log token invalidation failure
-    ///
-    /// Used when an attempt to invalidate all tokens for a user fails due to
-    /// database errors or other issues.
-    ///
-    /// # Arguments
-    /// * `ctx` - Request context with actor information for audit logging
-    /// * `user_id` - The user whose tokens were being invalidated
-    /// * `reason` - Original reason for invalidation attempt
-    /// * `error_message` - Error message describing why invalidation failed
-    pub async fn log_token_invalidation_failure(
-        &self,
-        ctx: &RequestContext,
-        user_id: String,
-        reason: String,
-        error_message: String,
-    ) -> Result<(), InternalError> {
-        let mut event = AuditEvent::new(EventType::RefreshTokenRevoked);
-        event.user_id = Some(user_id);
-        event.ip_address = ctx.ip_address.clone();
-        // Extract JWT ID from claims if authenticated
-        event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
-        event.data.insert("action".to_string(), json!("all_tokens_invalidation_failed"));
-        event.data.insert("reason".to_string(), json!(reason));
-        event.data.insert("error_message".to_string(), json!(error_message));
-        event.data.insert("actor_id".to_string(), json!(ctx.actor_id));
-        event.data.insert("request_id".to_string(), json!(ctx.request_id));
-        
-        self.audit_store.write_event(event).await
-    }
-
-    /// Log refresh token validation failure
-    ///
-    /// # Arguments
-    /// * `ctx` - Request context containing actor information
-    /// * `token_hash` - Hash of the refresh token that failed validation
-    /// * `failure_reason` - Reason for the validation failure (not_found, expired)
-    pub async fn log_refresh_token_validation_failure(
-        &self,
-        ctx: &RequestContext,
-        token_hash: String,
-        failure_reason: String,
-    ) -> Result<(), InternalError> {
-        let mut event = AuditEvent::new(EventType::RefreshTokenValidationFailure);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
-        event.ip_address = ctx.ip_address.clone();
-        event.data.insert("token_hash".to_string(), json!(token_hash));
-        event.data.insert("failure_reason".to_string(), json!(failure_reason));
-        event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
-        
-        self.audit_store.write_event(event).await
-    }
-
-    /// Log bootstrap completion
-    ///
-    /// # Arguments
-    /// * `actor_user_id` - ID of the user who performed the bootstrap (typically "system")
-    /// * `ip_address` - Optional IP address of the client
-    /// * `owner_username` - Username of the created owner account
-    /// * `system_admin_count` - Number of System Admin accounts created
-    /// * `role_admin_count` - Number of Role Admin accounts created
-    pub async fn log_bootstrap_completed(
-        &self,
-        actor_user_id: String,
-        ip_address: Option<String>,
-        owner_username: String,
-        system_admin_count: u32,
-        role_admin_count: u32,
-    ) -> Result<(), InternalError> {
-        let mut event = AuditEvent::new(EventType::BootstrapCompleted);
-        event.user_id = Some(actor_user_id);
-        event.ip_address = ip_address;
-        event.data.insert("activation_method".to_string(), json!("cli"));
-        event.data.insert("owner_username".to_string(), json!(owner_username));
-        event.data.insert("system_admin_count".to_string(), json!(system_admin_count));
-        event.data.insert("role_admin_count".to_string(), json!(role_admin_count));
-        
-        self.audit_store.write_event(event).await
-    }
-
-    /// Log owner activation
-    ///
-    /// # Arguments
-    /// * `actor_user_id` - ID of the user who performed the activation
-    /// * `ip_address` - Optional IP address of the client
-    /// * `activation_method` - Method used for activation ("cli" or "api")
-    pub async fn log_owner_activated(
-        &self,
-        actor_user_id: String,
-        ip_address: Option<String>,
-        activation_method: String,
-    ) -> Result<(), InternalError> {
-        let mut event = AuditEvent::new(EventType::OwnerActivated);
-        event.user_id = Some(actor_user_id);
-        event.ip_address = ip_address;
-        event.data.insert("activation_method".to_string(), json!(activation_method));
-        
-        self.audit_store.write_event(event).await
-    }
-
-    /// Log owner deactivation
-    ///
-    /// # Arguments
-    /// * `actor_user_id` - ID of the user who performed the deactivation
-    /// * `ip_address` - Optional IP address of the client
-    /// * `activation_method` - Method used for deactivation ("cli" or "api")
-    pub async fn log_owner_deactivated(
-        &self,
-        actor_user_id: String,
-        ip_address: Option<String>,
-        activation_method: String,
-    ) -> Result<(), InternalError> {
-        let mut event = AuditEvent::new(EventType::OwnerDeactivated);
-        event.user_id = Some(actor_user_id);
-        event.ip_address = ip_address;
-        event.data.insert("activation_method".to_string(), json!(activation_method));
-        
-        self.audit_store.write_event(event).await
-    }
-
-    /// Log admin role assignment
-    ///
-    /// # Arguments
-    /// * `actor_user_id` - ID of the user who performed the assignment
-    /// * `target_user_id` - ID of the user who received the role
-    /// * `role_type` - Type of role assigned ("system_admin" or "role_admin")
-    /// * `ip_address` - Optional IP address of the client
-    pub async fn log_admin_role_assigned(
-        &self,
-        actor_user_id: String,
-        target_user_id: String,
-        role_type: String,
-        ip_address: Option<String>,
-    ) -> Result<(), InternalError> {
-        let mut event = AuditEvent::new(EventType::AdminRoleAssigned);
-        event.user_id = Some(actor_user_id);
-        event.ip_address = ip_address;
-        event.data.insert("target_user_id".to_string(), json!(target_user_id));
-        event.data.insert("role_type".to_string(), json!(role_type));
-        
-        self.audit_store.write_event(event).await
-    }
-
-    /// Log admin role removal
-    ///
-    /// # Arguments
-    /// * `actor_user_id` - ID of the user who performed the removal
-    /// * `target_user_id` - ID of the user who lost the role
-    /// * `role_type` - Type of role removed ("system_admin" or "role_admin")
-    /// * `ip_address` - Optional IP address of the client
-    pub async fn log_admin_role_removed(
-        &self,
-        actor_user_id: String,
-        target_user_id: String,
-        role_type: String,
-        ip_address: Option<String>,
-    ) -> Result<(), InternalError> {
-        let mut event = AuditEvent::new(EventType::AdminRoleRemoved);
-        event.user_id = Some(actor_user_id);
-        event.ip_address = ip_address;
-        event.data.insert("target_user_id".to_string(), json!(target_user_id));
-        event.data.insert("role_type".to_string(), json!(role_type));
-        
-        self.audit_store.write_event(event).await
-    }
 
     /// Create an AuditBuilder for custom audit events
     ///
@@ -416,8 +66,11 @@ impl AuditLogger {
         args: Vec<String>,
     ) -> Result<(), InternalError> {
         let mut event = AuditEvent::new(EventType::CliSessionStart);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.ip_address = ctx.ip_address.clone();
+        event.user_id = ctx.actor_id.clone();
+        event.ip_address = ctx.ip_address.clone().unwrap_or_else(|| "unknown".to_string());
+        event.jwt_id = ctx.claims.as_ref()
+            .map(|c| c.jti.clone())
+            .unwrap_or_else(|| "none".to_string());
         event.data.insert("command_name".to_string(), json!(command_name));
         event.data.insert("args".to_string(), json!(args));
         event.data.insert("source".to_string(), json!("CLI"));
@@ -441,8 +94,11 @@ impl AuditLogger {
         error_message: Option<String>,
     ) -> Result<(), InternalError> {
         let mut event = AuditEvent::new(EventType::CliSessionEnd);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.ip_address = ctx.ip_address.clone();
+        event.user_id = ctx.actor_id.clone();
+        event.ip_address = ctx.ip_address.clone().unwrap_or_else(|| "unknown".to_string());
+        event.jwt_id = ctx.claims.as_ref()
+            .map(|c| c.jti.clone())
+            .unwrap_or_else(|| "none".to_string());
         event.data.insert("command_name".to_string(), json!(command_name));
         event.data.insert("success".to_string(), json!(success));
         event.data.insert("source".to_string(), json!("CLI"));
@@ -468,8 +124,11 @@ impl AuditLogger {
         username: &str,
     ) -> Result<(), InternalError> {
         let mut event = AuditEvent::new(EventType::UserCreated);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.ip_address = ctx.ip_address.clone();
+        event.user_id = ctx.actor_id.clone();
+        event.ip_address = ctx.ip_address.clone().unwrap_or_else(|| "unknown".to_string());
+        event.jwt_id = ctx.claims.as_ref()
+            .map(|c| c.jti.clone())
+            .unwrap_or_else(|| "none".to_string());
         event.data.insert("target_user_id".to_string(), json!(user_id));
         event.data.insert("username".to_string(), json!(username));
         event.data.insert("source".to_string(), json!(format!("{:?}", ctx.source)));
@@ -504,8 +163,11 @@ impl AuditLogger {
         new_is_role_admin: bool,
     ) -> Result<(), InternalError> {
         let mut event = AuditEvent::new(EventType::PrivilegesChanged);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.ip_address = ctx.ip_address.clone();
+        event.user_id = ctx.actor_id.clone();
+        event.ip_address = ctx.ip_address.clone().unwrap_or_else(|| "unknown".to_string());
+        event.jwt_id = ctx.claims.as_ref()
+            .map(|c| c.jti.clone())
+            .unwrap_or_else(|| "none".to_string());
         event.data.insert("target_user_id".to_string(), json!(target_user_id));
         event.data.insert("old_is_owner".to_string(), json!(old_is_owner));
         event.data.insert("new_is_owner".to_string(), json!(new_is_owner));
@@ -534,8 +196,11 @@ impl AuditLogger {
         affected_user_id: Option<&str>,
     ) -> Result<(), InternalError> {
         let mut event = AuditEvent::new(EventType::OperationRolledBack);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.ip_address = ctx.ip_address.clone();
+        event.user_id = ctx.actor_id.clone();
+        event.ip_address = ctx.ip_address.clone().unwrap_or_else(|| "unknown".to_string());
+        event.jwt_id = ctx.claims.as_ref()
+            .map(|c| c.jti.clone())
+            .unwrap_or_else(|| "none".to_string());
         event.data.insert("operation_type".to_string(), json!(operation_type));
         event.data.insert("reason".to_string(), json!(reason));
         event.data.insert("source".to_string(), json!(format!("{:?}", ctx.source)));
@@ -559,9 +224,11 @@ impl AuditLogger {
         target_user_id: String,
     ) -> Result<(), InternalError> {
         let mut event = AuditEvent::new(EventType::PasswordChanged);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.ip_address = ctx.ip_address.clone();
-        event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
+        event.user_id = ctx.actor_id.clone();
+        event.ip_address = ctx.ip_address.clone().unwrap_or_else(|| "unknown".to_string());
+        event.jwt_id = ctx.claims.as_ref()
+            .map(|c| c.jti.clone())
+            .unwrap_or_else(|| "none".to_string());
         event.data.insert("target_user_id".to_string(), json!(target_user_id));
         event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
         
@@ -579,9 +246,11 @@ impl AuditLogger {
         reason: String,
     ) -> Result<(), InternalError> {
         let mut event = AuditEvent::new(EventType::PasswordChangeFailed);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.ip_address = ctx.ip_address.clone();
-        event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
+        event.user_id = ctx.actor_id.clone();
+        event.ip_address = ctx.ip_address.clone().unwrap_or_else(|| "unknown".to_string());
+        event.jwt_id = ctx.claims.as_ref()
+            .map(|c| c.jti.clone())
+            .unwrap_or_else(|| "none".to_string());
         event.data.insert("reason".to_string(), json!(reason));
         event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
         
@@ -599,8 +268,11 @@ impl AuditLogger {
         operation_type: &str,
     ) -> Result<(), InternalError> {
         let mut event = AuditEvent::new(EventType::TransactionStarted);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.ip_address = ctx.ip_address.clone();
+        event.user_id = ctx.actor_id.clone();
+        event.ip_address = ctx.ip_address.clone().unwrap_or_else(|| "unknown".to_string());
+        event.jwt_id = ctx.claims.as_ref()
+            .map(|c| c.jti.clone())
+            .unwrap_or_else(|| "none".to_string());
         event.data.insert("operation_type".to_string(), json!(operation_type));
         event.data.insert("source".to_string(), json!(format!("{:?}", ctx.source)));
         event.data.insert("request_id".to_string(), json!(ctx.request_id));
@@ -619,8 +291,11 @@ impl AuditLogger {
         operation_type: &str,
     ) -> Result<(), InternalError> {
         let mut event = AuditEvent::new(EventType::TransactionCommitted);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.ip_address = ctx.ip_address.clone();
+        event.user_id = ctx.actor_id.clone();
+        event.ip_address = ctx.ip_address.clone().unwrap_or_else(|| "unknown".to_string());
+        event.jwt_id = ctx.claims.as_ref()
+            .map(|c| c.jti.clone())
+            .unwrap_or_else(|| "none".to_string());
         event.data.insert("operation_type".to_string(), json!(operation_type));
         event.data.insert("source".to_string(), json!(format!("{:?}", ctx.source)));
         event.data.insert("request_id".to_string(), json!(ctx.request_id));
@@ -641,8 +316,11 @@ impl AuditLogger {
         reason: &str,
     ) -> Result<(), InternalError> {
         let mut event = AuditEvent::new(EventType::TransactionRolledBack);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.ip_address = ctx.ip_address.clone();
+        event.user_id = ctx.actor_id.clone();
+        event.ip_address = ctx.ip_address.clone().unwrap_or_else(|| "unknown".to_string());
+        event.jwt_id = ctx.claims.as_ref()
+            .map(|c| c.jti.clone())
+            .unwrap_or_else(|| "none".to_string());
         event.data.insert("operation_type".to_string(), json!(operation_type));
         event.data.insert("reason".to_string(), json!(reason));
         event.data.insert("source".to_string(), json!(format!("{:?}", ctx.source)));
@@ -667,8 +345,11 @@ impl AuditLogger {
         password_count: usize,
     ) -> Result<(), InternalError> {
         let mut event = AuditEvent::new(EventType::CommonPasswordListDownloaded);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.ip_address = ctx.ip_address.clone();
+        event.user_id = ctx.actor_id.clone();
+        event.ip_address = ctx.ip_address.clone().unwrap_or_else(|| "unknown".to_string());
+        event.jwt_id = ctx.claims.as_ref()
+            .map(|c| c.jti.clone())
+            .unwrap_or_else(|| "none".to_string());
         event.data.insert("url".to_string(), json!(url));
         event.data.insert("password_count".to_string(), json!(password_count));
         event.data.insert("source".to_string(), json!(format!("{:?}", ctx.source)));
@@ -698,9 +379,11 @@ impl AuditLogger {
         let mut event = AuditEvent::new(event_type);
         
         // Add common fields from request context
-        event.user_id = Some(ctx.actor_id.clone());
-        event.ip_address = ctx.ip_address.clone();
-        event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
+        event.user_id = ctx.actor_id.clone();
+        event.ip_address = ctx.ip_address.clone().unwrap_or_else(|| "unknown".to_string());
+        event.jwt_id = ctx.claims.as_ref()
+            .map(|c| c.jti.clone())
+            .unwrap_or_else(|| "none".to_string());
         
         // Add standard context fields
         event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
@@ -726,9 +409,11 @@ impl AuditLogger {
         validation_reason: String,
     ) -> Result<(), InternalError> {
         let mut event = AuditEvent::new(EventType::PasswordChangeFailed);
-        event.user_id = Some(ctx.actor_id.clone());
-        event.ip_address = ctx.ip_address.clone();
-        event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
+        event.user_id = ctx.actor_id.clone();
+        event.ip_address = ctx.ip_address.clone().unwrap_or_else(|| "unknown".to_string());
+        event.jwt_id = ctx.claims.as_ref()
+            .map(|c| c.jti.clone())
+            .unwrap_or_else(|| "none".to_string());
         event.data.insert("reason".to_string(), json!("validation_failed"));
         event.data.insert("validation_reason".to_string(), json!(validation_reason));
         event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
@@ -750,9 +435,11 @@ impl AuditLogger {
         target_user_id: String,
     ) -> Result<(), InternalError> {
         let mut event = AuditEvent::new(EventType::Custom("password_change_requirement_cleared".to_string()));
-        event.user_id = Some(ctx.actor_id.clone());
-        event.ip_address = ctx.ip_address.clone();
-        event.jwt_id = ctx.claims.as_ref().and_then(|c| c.jti.clone());
+        event.user_id = ctx.actor_id.clone();
+        event.ip_address = ctx.ip_address.clone().unwrap_or_else(|| "unknown".to_string());
+        event.jwt_id = ctx.claims.as_ref()
+            .map(|c| c.jti.clone())
+            .unwrap_or_else(|| "none".to_string());
         event.data.insert("target_user_id".to_string(), json!(target_user_id));
         event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
         

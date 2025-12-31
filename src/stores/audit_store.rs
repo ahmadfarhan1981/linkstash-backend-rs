@@ -36,7 +36,7 @@ impl AuditStore {
             id: sea_orm::ActiveValue::NotSet, // Let auto-increment handle this
             timestamp: Set(Utc::now().to_rfc3339()),
             event_type: Set(event.event_type.to_string()),
-            user_id: Set(event.user_id.unwrap_or_else(|| "unknown".to_string())),
+            user_id: Set(event.user_id),
             ip_address: Set(event.ip_address),
             jwt_id: Set(event.jwt_id),
             data: Set(data_json),

@@ -17,7 +17,7 @@ impl UserStore {
     }
     pub async fn get_user_from_username_for_auth(
         &self,
-        conn: impl ConnectionTrait,
+        conn: &impl ConnectionTrait,
         username: &str,
     )->Result<UserForAuth, InternalError> {
         let user: Option<UserForAuth> = db::user::Entity::find()
@@ -28,7 +28,7 @@ impl UserStore {
             .column(user::Column::Username)
             .column(user::Column::PasswordHash)
             .into_model::<UserForAuth>()
-            .one(&conn)
+            .one(conn)
             .await
             .map_err(|e| InternalError::Database(DatabaseError::Operation{ operation: "get_user_from_username_for_auth".to_string(), source: e }))?;
 
