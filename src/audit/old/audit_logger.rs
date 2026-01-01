@@ -22,7 +22,7 @@ pub trait AuditableError {
     /// 
     /// The audit logger will add common fields (user_id, ip_address, request_id, etc.)
     /// automatically, so implementations should only include error-specific data.
-    fn to_audit_data(&self) -> (EventType, serde_json::Map<String, serde_json::Value>);
+    fn to_audit_data(&self) -> (EventType, Map<String, serde_json::Value>);
 }
 
 /// Audit logging provider that handles all audit event creation and logging

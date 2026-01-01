@@ -2,8 +2,8 @@ use crate::audit::{AuditLogger, audit_logger};
 use crate::config::database::DatabaseConnections;
 use crate::config::{EnvironmentProvider, SecretManager, SystemEnvironment};
 use crate::errors::InternalError;
-use crate::providers::{CryptoProvider, TokenProvider, token_provider};
 use crate::providers::authentication_provider::AuthenticationProvider;
+use crate::providers::{CryptoProvider, TokenProvider, token_provider};
 use crate::stores::user_store::UserStore;
 use crate::stores::{AuditStore, user_store};
 use sea_orm::DatabaseConnection;
@@ -46,6 +46,7 @@ pub struct AppData {
 pub struct Providers {
     pub authentication_provider: Arc<AuthenticationProvider>,
     pub crypto_provider: Arc<CryptoProvider>,
+    pub token_provider: Arc<TokenProvider>,
 }
 pub struct Stores {
     pub user_store: Arc<UserStore>,
@@ -100,7 +101,7 @@ impl AppData {
         //     system_config_store.clone(),
         // ));
 
-        let stores = Stores{
+        let stores = Stores {
             user_store: Arc::clone(&user_store),
             // credential_store,
             // system_config_store,
@@ -108,26 +109,28 @@ impl AppData {
             // hibp_cache_store,
         };
 
-
         tracing::debug!("Stores created");
 
         tracing::debug!("Initializing audit logger...");
         let audit_logger = Arc::new(AuditLogger::new(audit_store.clone()));
-        
+
         tracing::debug!("Initializing providers...");
         let crypto_provider = Arc::new(CryptoProvider::new(Arc::clone(&secret_manager)));
-        let token_provider= Arc::new(TokenProvider::new(Arc::clone(&secret_manager)));
+        let token_provider = Arc::new(TokenProvider::new(
+            Arc::clone(&secret_manager),
+            Arc::clone(&crypto_provider),
+        ));
         let authentication_provider = Arc::new(AuthenticationProvider::new(
             Arc::clone(&user_store),
-            Arc::clone(&crypto_provider),     
+            Arc::clone(&crypto_provider),
             Arc::clone(&token_provider),
         ));
-        let providers = Providers{
+        let providers = Providers {
             crypto_provider,
             authentication_provider,
+            token_provider,
         };
 
-        
         Ok(Self {
             connections,
             audit_logger,

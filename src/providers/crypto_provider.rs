@@ -48,6 +48,17 @@ impl CryptoProvider {
         format!("{:x}", result.into_bytes())
     }
 
+    /// Hash a refresh token using HMAC-SHA256
+    /// 
+    /// # Arguments
+    /// * `token` - The plaintext refresh token to hash
+    /// 
+    /// # Returns
+    /// * `String` - The hex-encoded HMAC-SHA256 hash
+    // pub fn hash_refresh_token(&self, token: &str) -> String {
+    //     self.crypto_provider.hmac_sha256_token(self.secret_manager.refresh_token_secret(), token)
+    // }
+
     /// Generate a cryptographically secure random password
     /// 
     /// Generates a 20-character password with a mix of uppercase letters,

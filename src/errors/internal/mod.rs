@@ -5,12 +5,14 @@ pub mod system_config;
 pub mod audit;
 pub mod database;
 pub mod jwt_validation;
+pub mod login;
 
 pub use credential::CredentialError;
 pub use system_config::SystemConfigError;
 pub use audit::AuditError;
 pub use database::DatabaseError;
 pub use jwt_validation::JWTValidationError;
+use crate::{config::ApplicationError, errors::internal::login::LoginError};
 
 /// Internal error type for store and service operations
 /// 
@@ -18,6 +20,9 @@ pub use jwt_validation::JWTValidationError;
 /// Not exposed via API - endpoints must convert to AuthError or AdminError.
 #[derive(Error, Debug)]
 pub enum InternalError {
+    #[error(transparent)]
+    Login(LoginError),
+    
     #[error(transparent)]
     Database(#[from] DatabaseError),
     
@@ -48,5 +53,15 @@ pub enum InternalError {
 impl InternalError {
     pub fn database( operation: &str, source: sea_orm::DbErr)->InternalError{
         InternalError::Database(DatabaseError::Operation { operation: operation.to_string(), source })
+    }
+}
+
+
+
+impl From<InternalError> for ApplicationError{
+    fn from(internal_error: InternalError) -> Self {
+        match internal_error{
+            _ => ApplicationError::UnknownServerError { message: "Placeholder error".to_owned() }
+        }
     }
 }
