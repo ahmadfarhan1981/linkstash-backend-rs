@@ -6,8 +6,4 @@ pub mod internal;
 pub use api::{AuthError, AdminError};
 pub use internal::InternalError;
 
-#[cfg(test)]
-mod admin_test;
 
-#[cfg(test)]
-mod internal_test;

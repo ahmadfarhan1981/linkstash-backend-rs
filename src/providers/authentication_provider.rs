@@ -22,12 +22,15 @@ pub struct AuthenticatedUser{
     pub rt: String,
 }
 pub enum  LoginResponse{
-    Success{ user: AuthenticatedUser},
+    Success{ user: UserForAuth},
+    Failure{ reason: LoginFailureReason}
+}
+
+pub enum LoginFailureReason{
     InvalidCredentials,
     /** For future **/
     Banned,
     RateLimited,
-    PasswordChangeRequired,
 }
 pub struct RefreshRequest{}
 pub struct RefreshResponse{}
@@ -58,21 +61,16 @@ impl AuthenticationProvider {
 
 
         match authenticated {
-            true => {
-                let user_for_jwt = self.store.get_user_roles_for_jwt(conn, &creds.username).await?;
-                let jwt = self.token_provider.generate_jwt(&user_for_jwt).await?;
-                let rt = self.token_provider.generate_refresh_token();
-                self.store.save_refresh_token_for_user(conn , &user, &rt.token, rt.created_at, rt.expires_at).await?;
-                Ok(LoginResponse::Success{ user:AuthenticatedUser{
-                    username: creds.username.clone(),
-                    jwt: jwt.jwt,
-                    rt: rt.token.to_string() ,
-                }  })
-
-            },
-            false => Ok(LoginResponse::InvalidCredentials)
+            true => Ok(LoginResponse::Success{ user }),
+            false => Ok(LoginResponse::Failure { reason:LoginFailureReason::InvalidCredentials })
         }
     }
+
+    // pub async fn generate_refresh_token_for_user(&self, conn: &impl ConnectionTrait, user_id:&str)-> Result<GeneratedRT,InternalError>{
+    //     let rt = self.token_provider.generate_refresh_token();
+    //     self.store.save_refresh_token_for_user(conn , user_id, &rt.token, rt.created_at, rt.expires_at).await?;
+    //     Ok(rt)
+    // }
     async fn refresh(&self, ctx: &RequestContext, refresh_request: RefreshRequest)->Result<RefreshResponse, InternalError>{
         Ok(RefreshResponse{})
     }

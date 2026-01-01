@@ -11,6 +11,7 @@ pub enum ApplicationError {
     ReadOnlyFromEnvironment { setting_name: String },
     NoWritableSource { setting_name: String },
     FileUpdatesNotSupported,
+    UnknownServerError{message: String},
 }
 
 impl fmt::Display for ApplicationError {
@@ -44,7 +45,12 @@ impl fmt::Display for ApplicationError {
             }
             Self::FileUpdatesNotSupported => {
                 write!(f, "Runtime updates to file-based configuration are not supported")
+            },
+            Self::UnknownServerError { message }=>{
+                write!(f, "Unknow server error: {} ", message)
+
             }
+
         }
     }
 }

@@ -3,6 +3,7 @@ use chrono::Utc;
 use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter, QuerySelect, Set, ActiveModelTrait};
 use crate::AppData;
 use crate::audit::AuditLogger;
+use crate::errors::internal::login::LoginError::*;
 use crate::errors::internal::{CredentialError, DatabaseError};
 use crate::errors::InternalError;
 use crate::types::db;
@@ -36,16 +37,16 @@ impl UserStore {
 
         match user {
             Some(u) => Ok(u),
-            None => Err(InternalError::Credential(CredentialError::UserNotFound(username.to_string())))
+            None => Err(InternalError::Login(UsernameNotFound { username: username.to_owned() }))
         }
 
     }
 
     pub async fn get_user_roles_for_jwt( &self,
                                          conn: &impl ConnectionTrait,
-                                         username: &str)->Result<UserForJWT,InternalError>{
+                                         user_id: &str)->Result<UserForJWT,InternalError>{
         let user= db::user::Entity::find()
-            .filter(user::Column::Username.eq(username))
+            .filter(user::Column::Id.eq(user_id))
             .select_only()
             .column(user::Column::Id)
             .column(user::Column::Username)
@@ -61,14 +62,14 @@ impl UserStore {
 
         match user {
             Some(u) => Ok(u),
-            None => Err(InternalError::Credential(CredentialError::UserNotFound(username.to_string())))
+            None => Err(InternalError::Credential(CredentialError::UserIdNotFound { user_id: user_id.to_owned() }))
         }
     }
 
-    pub async fn save_refresh_token_for_user(&self, conn: &impl ConnectionTrait, user: &UserForAuth, generated_rt: &str, created_at: i64, expires_at: i64)->Result<(), InternalError> {
+    pub async fn save_refresh_token_for_user(&self, conn: &impl ConnectionTrait, user_id: &str, token_hash: &str, created_at: i64, expires_at: i64)->Result<(), InternalError> {
         let new_token = db::refresh_token::ActiveModel {
-            token_hash: Set(generated_rt.to_string()),
-            user_id: Set(user.id.clone()),
+            token_hash: Set(token_hash.to_owned()),
+            user_id: Set(user_id.to_owned()),
             expires_at: Set(expires_at),
             created_at: Set(created_at),
         };

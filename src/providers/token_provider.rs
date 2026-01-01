@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::types::internal::auth::Claims;
 use crate::errors::InternalError;
 use crate::errors::internal::CredentialError;
-use crate::providers::CryptoProvider;
+use crate::providers::{CryptoProvider, crypto_provider};
 use crate::config::SecretManager;
 use crate::stores::user_store::UserForJWT;
 
@@ -22,7 +22,7 @@ pub struct TokenProvider {
     jwt_expiration_minutes: i64,
     refresh_expiration_days: i64,
     // audit_store: Arc<AuditStore>,
-    // crypto_provider: Arc<CryptoProvider>,
+    crypto_provider: Arc<CryptoProvider>,
     // audit_logger: Arc<AuditLogger>
 }
 pub struct GeneratedJWT{
@@ -32,18 +32,19 @@ pub struct GeneratedJWT{
 
 pub struct GeneratedRT{
     pub token: String,
+    pub token_hash: String,
     pub created_at: i64,
     pub expires_at: i64,
 }
 impl TokenProvider {
     /// Create a new TokenProvider with the given SecretManager and audit store
-    pub fn new(secret_manager: Arc<SecretManager>) -> Self {
+pub fn new(secret_manager: Arc<SecretManager>, crypto_provider: Arc<CryptoProvider> ) -> Self {
         Self {
             secret_manager,
             jwt_expiration_minutes: 15, // 15 minutes as per requirements
             refresh_expiration_days: 7, // 7 days as per requirements
             // audit_store,
-            // crypto_provider,
+            crypto_provider,
         }
     }
     
@@ -216,11 +217,13 @@ impl TokenProvider {
         let mut rng = rand::rng();
         let random_bytes: [u8; 32] = rng.random();
         let token = general_purpose::STANDARD.encode(random_bytes);
+        let token_hash = self.hash_refresh_token(&token);
         let created_at = Utc::now().timestamp();
         let expires_at = self.get_refresh_expiration(created_at);
-
+        
         GeneratedRT{
             token,
+            token_hash,
             created_at,
             expires_at,
         }
@@ -233,9 +236,9 @@ impl TokenProvider {
     /// 
     /// # Returns
     /// * `String` - The hex-encoded HMAC-SHA256 hash
-    // pub fn hash_refresh_token(&self, token: &str) -> String {
-    //     self.crypto_provider.hmac_sha256_token(self.secret_manager.refresh_token_secret(), token)
-    // }
+    pub fn hash_refresh_token(&self, token: &str) -> String {
+        self.crypto_provider.hmac_sha256_token(self.secret_manager.refresh_token_secret(), token)
+    }
     
     /// Get the expiration timestamp for a refresh token (7 days from now)
     /// 
