@@ -1,24 +1,20 @@
-use poem_openapi::auth::BearerAuthorization;
-use poem_openapi::{payload::Json, OpenApi, Tags, SecurityScheme, auth::Bearer};
-use poem::Request;
 use crate::AppData;
 use crate::coordinators::LoginCoordinator;
-use crate::types::dto::auth::{
-    ErrorResponse, LoginApiResponse, LoginRequest, TokenResponse
-};
+use crate::types::dto::auth::{ErrorResponse, LoginApiResponse, LoginRequest, TokenResponse};
+use poem::Request;
+use poem_openapi::auth::BearerAuthorization;
+use poem_openapi::{OpenApi, SecurityScheme, Tags, auth::Bearer, payload::Json};
 use std::sync::Arc;
 
 /// Authentication API endpoints
 pub struct AuthApi {
-    auth_coordinator: LoginCoordinator
+    auth_coordinator: LoginCoordinator,
 }
 
 impl AuthApi {
     /// Create a new AuthApi with the given AuthCoordinator
-    pub fn new(
-        app_data: Arc<AppData>,
-    ) -> Self {
-        Self { 
+    pub fn new(app_data: Arc<AppData>) -> Self {
+        Self {
             auth_coordinator: LoginCoordinator::new(app_data),
         }
     }
@@ -45,23 +41,29 @@ enum AuthTags {
 impl AuthApi {
     #[oai(path = "/login", method = "post", tag = "AuthTags::Authentication")]
     async fn login(&self, req: &Request, body: Json<LoginRequest>) -> LoginApiResponse {
-        let auth = match  Bearer::from_request(req){
+        let auth = match Bearer::from_request(req) {
             Ok(bearer) => Some(bearer),
             Err(_) => None,
         };
         
+        self.auth_coordinator.login(ctx, conn, username, password)
+
         // self.auth_coordinator.login(ctx, username, password)
-        LoginApiResponse::Ok(Json(TokenResponse{
+        LoginApiResponse::Ok(Json(TokenResponse {
             access_token: format!("{:?}", auth),
             refresh_token: "".to_string(),
             token_type: "".to_string(),
             expires_in: 0,
         }))
-
     }
     #[oai(path = "/test", method = "post", tag = "AuthTags::Authentication")]
-    async fn test(&self, req: &Request, body: Json<LoginRequest>, auth: BearerAuth) -> LoginApiResponse {
-        LoginApiResponse::Ok(Json(TokenResponse{
+    async fn test(
+        &self,
+        req: &Request,
+        body: Json<LoginRequest>,
+        auth: BearerAuth,
+    ) -> LoginApiResponse {
+        LoginApiResponse::Ok(Json(TokenResponse {
             access_token: format!("{:?}", auth),
             refresh_token: "".to_string(),
             token_type: "".to_string(),

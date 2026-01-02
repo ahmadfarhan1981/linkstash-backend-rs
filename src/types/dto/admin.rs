@@ -12,7 +12,7 @@ pub struct AssignRoleRequest {
 pub struct AssignRoleResponse {
     /// Whether the operation was successful
     pub success: bool,
-    
+
     /// Human-readable message describing the result
     pub message: String,
 }
@@ -29,7 +29,7 @@ pub struct RemoveRoleRequest {
 pub struct RemoveRoleResponse {
     /// Whether the operation was successful
     pub success: bool,
-    
+
     /// Human-readable message describing the result
     pub message: String,
 }
@@ -39,7 +39,7 @@ pub struct RemoveRoleResponse {
 pub struct DeactivateResponse {
     /// Whether the operation was successful
     pub success: bool,
-    
+
     /// Human-readable message describing the result
     pub message: String,
 }

@@ -1,11 +1,17 @@
-use std::fmt;
 use crate::config::{SecretConfig, SecretType};
+use std::fmt;
 
 /// Custom error type for secret-related failures
 #[derive(Debug)]
 pub enum SecretError {
-    Missing { secret_name: String },
-    InvalidLength { secret_name: String, expected: usize, actual: usize },
+    Missing {
+        secret_name: String,
+    },
+    InvalidLength {
+        secret_name: String,
+        expected: usize,
+        actual: usize,
+    },
 }
 
 impl SecretError {
@@ -30,7 +36,11 @@ impl fmt::Display for SecretError {
             Self::Missing { secret_name } => {
                 write!(f, "Required secret '{}' is missing", secret_name)
             }
-            Self::InvalidLength { secret_name, expected, actual } => {
+            Self::InvalidLength {
+                secret_name,
+                expected,
+                actual,
+            } => {
                 write!(
                     f,
                     "Secret '{}' must be at least {} characters, got {}",
@@ -52,7 +62,7 @@ pub struct SecretManager {
 
 impl SecretManager {
     /// Initialize the SecretManager by loading and validating all secrets
-    /// 
+    ///
     /// # Errors
     /// Returns `SecretError` if any required secret is missing or fails validation
     pub fn init() -> Result<Self, SecretError> {
@@ -60,7 +70,7 @@ impl SecretManager {
         let jwt_secret = Self::load_secret(&Self::jwt_config())?;
         let password_pepper = Self::load_secret(&Self::password_pepper_config())?;
         let refresh_token_secret = Self::load_secret(&Self::refresh_token_config())?;
-        
+
         Ok(Self {
             jwt_secret,
             password_pepper,
@@ -114,33 +124,26 @@ impl SecretManager {
     pub(crate) fn load_secret(config: &SecretConfig) -> Result<String, SecretError> {
         // Match on secret type to determine loading strategy
         let value = match &config.secret_type {
-            SecretType::EnvVar { name } => {
-                match std::env::var(name) {
-                    Ok(v) => v,
-                    Err(_) if !config.required => return Ok(String::new()),
-                    Err(_) => return Err(SecretError::missing(name)),
-                }
-            }
-            // Future implementations:
-            // SecretType::AwsSecretsManager { secret_id, region } => {
-            //     load_from_aws(secret_id, region).await?
-            // }
+            SecretType::EnvVar { name } => match std::env::var(name) {
+                Ok(v) => v,
+                Err(_) if !config.required => return Ok(String::new()),
+                Err(_) => return Err(SecretError::missing(name)),
+            }, // Future implementations:
+               // SecretType::AwsSecretsManager { secret_id, region } => {
+               //     load_from_aws(secret_id, region).await?
+               // }
         };
-        
+
         // Validate minimum length
         if let Some(min_len) = config.min_length {
             if value.len() < min_len {
                 let name = match &config.secret_type {
                     SecretType::EnvVar { name } => name,
                 };
-                return Err(SecretError::invalid_length(
-                    name,
-                    min_len,
-                    value.len(),
-                ));
+                return Err(SecretError::invalid_length(name, min_len, value.len()));
             }
         }
-        
+
         Ok(value)
     }
 }
@@ -201,36 +204,59 @@ mod tests {
     // Helper to set all required secrets for testing
     fn set_valid_secrets() {
         unsafe {
-            std::env::set_var("JWT_SECRET", "this-is-a-valid-jwt-secret-with-32-characters");
+            std::env::set_var(
+                "JWT_SECRET",
+                "this-is-a-valid-jwt-secret-with-32-characters",
+            );
             std::env::set_var("PASSWORD_PEPPER", "valid-pepper-16ch");
-            std::env::set_var("REFRESH_TOKEN_SECRET", "this-is-a-valid-refresh-token-secret-32");
+            std::env::set_var(
+                "REFRESH_TOKEN_SECRET",
+                "this-is-a-valid-refresh-token-secret-32",
+            );
         }
     }
 
     #[test]
     fn test_successful_initialization_with_valid_secrets() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
-        
+        let _guard = EnvGuard::new(vec![
+            "JWT_SECRET",
+            "PASSWORD_PEPPER",
+            "REFRESH_TOKEN_SECRET",
+        ]);
+
         set_valid_secrets();
 
         let result = SecretManager::init();
         assert!(result.is_ok());
 
         let manager = result.unwrap();
-        assert_eq!(manager.jwt_secret(), "this-is-a-valid-jwt-secret-with-32-characters");
+        assert_eq!(
+            manager.jwt_secret(),
+            "this-is-a-valid-jwt-secret-with-32-characters"
+        );
         assert_eq!(manager.password_pepper(), "valid-pepper-16ch");
-        assert_eq!(manager.refresh_token_secret(), "this-is-a-valid-refresh-token-secret-32");
+        assert_eq!(
+            manager.refresh_token_secret(),
+            "this-is-a-valid-refresh-token-secret-32"
+        );
     }
 
     #[test]
     fn test_error_when_jwt_secret_missing() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
-        
+        let _guard = EnvGuard::new(vec![
+            "JWT_SECRET",
+            "PASSWORD_PEPPER",
+            "REFRESH_TOKEN_SECRET",
+        ]);
+
         unsafe {
             std::env::set_var("PASSWORD_PEPPER", "valid-pepper-16ch");
-            std::env::set_var("REFRESH_TOKEN_SECRET", "this-is-a-valid-refresh-token-secret-32");
+            std::env::set_var(
+                "REFRESH_TOKEN_SECRET",
+                "this-is-a-valid-refresh-token-secret-32",
+            );
         }
 
         let result = SecretManager::init();
@@ -248,11 +274,21 @@ mod tests {
     #[test]
     fn test_error_when_password_pepper_missing() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
-        
+        let _guard = EnvGuard::new(vec![
+            "JWT_SECRET",
+            "PASSWORD_PEPPER",
+            "REFRESH_TOKEN_SECRET",
+        ]);
+
         unsafe {
-            std::env::set_var("JWT_SECRET", "this-is-a-valid-jwt-secret-with-32-characters");
-            std::env::set_var("REFRESH_TOKEN_SECRET", "this-is-a-valid-refresh-token-secret-32");
+            std::env::set_var(
+                "JWT_SECRET",
+                "this-is-a-valid-jwt-secret-with-32-characters",
+            );
+            std::env::set_var(
+                "REFRESH_TOKEN_SECRET",
+                "this-is-a-valid-refresh-token-secret-32",
+            );
         }
 
         let result = SecretManager::init();
@@ -270,12 +306,19 @@ mod tests {
     #[test]
     fn test_error_when_jwt_secret_too_short() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
-        
+        let _guard = EnvGuard::new(vec![
+            "JWT_SECRET",
+            "PASSWORD_PEPPER",
+            "REFRESH_TOKEN_SECRET",
+        ]);
+
         unsafe {
             std::env::set_var("JWT_SECRET", "short-secret");
             std::env::set_var("PASSWORD_PEPPER", "valid-pepper-16ch");
-            std::env::set_var("REFRESH_TOKEN_SECRET", "this-is-a-valid-refresh-token-secret-32");
+            std::env::set_var(
+                "REFRESH_TOKEN_SECRET",
+                "this-is-a-valid-refresh-token-secret-32",
+            );
         }
 
         let result = SecretManager::init();
@@ -283,7 +326,11 @@ mod tests {
 
         let err = result.unwrap_err();
         match err {
-            SecretError::InvalidLength { secret_name, expected, actual } => {
+            SecretError::InvalidLength {
+                secret_name,
+                expected,
+                actual,
+            } => {
                 assert_eq!(secret_name, "JWT_SECRET");
                 assert_eq!(expected, 32);
                 assert_eq!(actual, 12);
@@ -295,12 +342,22 @@ mod tests {
     #[test]
     fn test_error_when_password_pepper_too_short() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
-        
+        let _guard = EnvGuard::new(vec![
+            "JWT_SECRET",
+            "PASSWORD_PEPPER",
+            "REFRESH_TOKEN_SECRET",
+        ]);
+
         unsafe {
-            std::env::set_var("JWT_SECRET", "this-is-a-valid-jwt-secret-with-32-characters");
+            std::env::set_var(
+                "JWT_SECRET",
+                "this-is-a-valid-jwt-secret-with-32-characters",
+            );
             std::env::set_var("PASSWORD_PEPPER", "short");
-            std::env::set_var("REFRESH_TOKEN_SECRET", "this-is-a-valid-refresh-token-secret-32");
+            std::env::set_var(
+                "REFRESH_TOKEN_SECRET",
+                "this-is-a-valid-refresh-token-secret-32",
+            );
         }
 
         let result = SecretManager::init();
@@ -308,7 +365,11 @@ mod tests {
 
         let err = result.unwrap_err();
         match err {
-            SecretError::InvalidLength { secret_name, expected, actual } => {
+            SecretError::InvalidLength {
+                secret_name,
+                expected,
+                actual,
+            } => {
                 assert_eq!(secret_name, "PASSWORD_PEPPER");
                 assert_eq!(expected, 16);
                 assert_eq!(actual, 5);
@@ -320,12 +381,16 @@ mod tests {
     #[test]
     fn test_getter_methods_return_correct_values() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
-        
+        let _guard = EnvGuard::new(vec![
+            "JWT_SECRET",
+            "PASSWORD_PEPPER",
+            "REFRESH_TOKEN_SECRET",
+        ]);
+
         let jwt_value = "my-super-secret-jwt-key-with-32-chars";
         let pepper_value = "my-pepper-value-16";
         let refresh_value = "my-refresh-token-secret-with-32-chars";
-        
+
         unsafe {
             std::env::set_var("JWT_SECRET", jwt_value);
             std::env::set_var("PASSWORD_PEPPER", pepper_value);
@@ -333,7 +398,7 @@ mod tests {
         }
 
         let manager = SecretManager::init().unwrap();
-        
+
         assert_eq!(manager.jwt_secret(), jwt_value);
         assert_eq!(manager.password_pepper(), pepper_value);
         assert_eq!(manager.refresh_token_secret(), refresh_value);
@@ -342,13 +407,17 @@ mod tests {
     #[test]
     fn test_debug_trait_does_not_expose_secrets() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
-        
+        let _guard = EnvGuard::new(vec![
+            "JWT_SECRET",
+            "PASSWORD_PEPPER",
+            "REFRESH_TOKEN_SECRET",
+        ]);
+
         set_valid_secrets();
 
         let manager = SecretManager::init().unwrap();
         let debug_output = format!("{:?}", manager);
-        
+
         assert!(debug_output.contains("<redacted>"));
         assert!(!debug_output.contains("this-is-a-valid-jwt-secret-with-32-characters"));
         assert!(!debug_output.contains("valid-pepper-16ch"));
@@ -358,13 +427,17 @@ mod tests {
     #[test]
     fn test_display_trait_shows_metadata_only() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
-        
+        let _guard = EnvGuard::new(vec![
+            "JWT_SECRET",
+            "PASSWORD_PEPPER",
+            "REFRESH_TOKEN_SECRET",
+        ]);
+
         set_valid_secrets();
 
         let manager = SecretManager::init().unwrap();
         let display_output = format!("{}", manager);
-        
+
         assert!(display_output.contains("secrets_loaded: 3"));
         assert!(!display_output.contains("this-is-a-valid-jwt-secret-with-32-characters"));
         assert!(!display_output.contains("valid-pepper-16ch"));
@@ -375,7 +448,7 @@ mod tests {
     fn test_secret_type_env_var_loading() {
         let _lock = TEST_MUTEX.lock().unwrap();
         let _guard = EnvGuard::new(vec!["TEST_VAR"]);
-        
+
         unsafe {
             std::env::set_var("TEST_VAR", "test-value-with-sufficient-length");
         }
@@ -396,24 +469,38 @@ mod tests {
     #[test]
     fn test_successful_initialization_with_valid_refresh_token_secret() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
-        
+        let _guard = EnvGuard::new(vec![
+            "JWT_SECRET",
+            "PASSWORD_PEPPER",
+            "REFRESH_TOKEN_SECRET",
+        ]);
+
         set_valid_secrets();
 
         let result = SecretManager::init();
         assert!(result.is_ok());
 
         let manager = result.unwrap();
-        assert_eq!(manager.refresh_token_secret(), "this-is-a-valid-refresh-token-secret-32");
+        assert_eq!(
+            manager.refresh_token_secret(),
+            "this-is-a-valid-refresh-token-secret-32"
+        );
     }
 
     #[test]
     fn test_error_when_refresh_token_secret_missing() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
-        
+        let _guard = EnvGuard::new(vec![
+            "JWT_SECRET",
+            "PASSWORD_PEPPER",
+            "REFRESH_TOKEN_SECRET",
+        ]);
+
         unsafe {
-            std::env::set_var("JWT_SECRET", "this-is-a-valid-jwt-secret-with-32-characters");
+            std::env::set_var(
+                "JWT_SECRET",
+                "this-is-a-valid-jwt-secret-with-32-characters",
+            );
             std::env::set_var("PASSWORD_PEPPER", "valid-pepper-16ch");
         }
 
@@ -432,10 +519,17 @@ mod tests {
     #[test]
     fn test_error_when_refresh_token_secret_too_short() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
-        
+        let _guard = EnvGuard::new(vec![
+            "JWT_SECRET",
+            "PASSWORD_PEPPER",
+            "REFRESH_TOKEN_SECRET",
+        ]);
+
         unsafe {
-            std::env::set_var("JWT_SECRET", "this-is-a-valid-jwt-secret-with-32-characters");
+            std::env::set_var(
+                "JWT_SECRET",
+                "this-is-a-valid-jwt-secret-with-32-characters",
+            );
             std::env::set_var("PASSWORD_PEPPER", "valid-pepper-16ch");
             std::env::set_var("REFRESH_TOKEN_SECRET", "short");
         }
@@ -445,7 +539,11 @@ mod tests {
 
         let err = result.unwrap_err();
         match err {
-            SecretError::InvalidLength { secret_name, expected, actual } => {
+            SecretError::InvalidLength {
+                secret_name,
+                expected,
+                actual,
+            } => {
                 assert_eq!(secret_name, "REFRESH_TOKEN_SECRET");
                 assert_eq!(expected, 32);
                 assert_eq!(actual, 5);
@@ -457,12 +555,19 @@ mod tests {
     #[test]
     fn test_refresh_token_secret_getter_returns_correct_value() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
-        
+        let _guard = EnvGuard::new(vec![
+            "JWT_SECRET",
+            "PASSWORD_PEPPER",
+            "REFRESH_TOKEN_SECRET",
+        ]);
+
         let refresh_value = "my-specific-refresh-token-secret-32-chars";
-        
+
         unsafe {
-            std::env::set_var("JWT_SECRET", "this-is-a-valid-jwt-secret-with-32-characters");
+            std::env::set_var(
+                "JWT_SECRET",
+                "this-is-a-valid-jwt-secret-with-32-characters",
+            );
             std::env::set_var("PASSWORD_PEPPER", "valid-pepper-16ch");
             std::env::set_var("REFRESH_TOKEN_SECRET", refresh_value);
         }
@@ -474,13 +579,17 @@ mod tests {
     #[test]
     fn test_debug_trait_does_not_expose_refresh_token_secret() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["JWT_SECRET", "PASSWORD_PEPPER", "REFRESH_TOKEN_SECRET"]);
-        
+        let _guard = EnvGuard::new(vec![
+            "JWT_SECRET",
+            "PASSWORD_PEPPER",
+            "REFRESH_TOKEN_SECRET",
+        ]);
+
         set_valid_secrets();
 
         let manager = SecretManager::init().unwrap();
         let debug_output = format!("{:?}", manager);
-        
+
         // Verify refresh_token_secret field is present but redacted
         assert!(debug_output.contains("refresh_token_secret"));
         assert!(debug_output.contains("<redacted>"));

@@ -1,16 +1,16 @@
-use poem_openapi::{payload::Json, ApiResponse, Object};
+use crate::errors::internal::{CredentialError, InternalError, SystemConfigError};
+use poem_openapi::{ApiResponse, Object, payload::Json};
 use std::fmt;
-use crate::errors::internal::{InternalError, CredentialError, SystemConfigError};
 
 /// Standardized error response for admin endpoints
 #[derive(Object, Debug)]
 pub struct AdminErrorResponse {
     /// Error code identifier
     pub error: String,
-    
+
     /// Human-readable error message
     pub message: String,
-    
+
     /// HTTP status code
     pub status_code: u16,
 }
@@ -21,43 +21,43 @@ pub enum AdminError {
     /// System has already been bootstrapped
     #[oai(status = 409)]
     AlreadyBootstrapped(Json<AdminErrorResponse>),
-    
+
     /// Owner account not found
     #[oai(status = 404)]
     OwnerNotFound(Json<AdminErrorResponse>),
-    
+
     /// User not found
     #[oai(status = 404)]
     UserNotFound(Json<AdminErrorResponse>),
-    
+
     /// Owner role required
     #[oai(status = 403)]
     OwnerRequired(Json<AdminErrorResponse>),
-    
+
     /// System Admin role required
     #[oai(status = 403)]
     SystemAdminRequired(Json<AdminErrorResponse>),
-    
+
     /// Role Admin role required
     #[oai(status = 403)]
     RoleAdminRequired(Json<AdminErrorResponse>),
-    
+
     /// Owner or System Admin role required
     #[oai(status = 403)]
     OwnerOrSystemAdminRequired(Json<AdminErrorResponse>),
-    
+
     /// Cannot modify your own admin roles
     #[oai(status = 403)]
     SelfModificationDenied(Json<AdminErrorResponse>),
-    
+
     /// Password validation failed
     #[oai(status = 400)]
     PasswordValidationFailed(Json<AdminErrorResponse>),
-    
+
     /// Password change required
     #[oai(status = 403)]
     PasswordChangeRequired(Json<AdminErrorResponse>),
-    
+
     /// Internal server error
     #[oai(status = 500)]
     InternalError(Json<AdminErrorResponse>),
@@ -72,7 +72,7 @@ impl AdminError {
             status_code: 409,
         }))
     }
-    
+
     /// Create an OwnerNotFound error
     pub fn owner_not_found() -> Self {
         AdminError::OwnerNotFound(Json(AdminErrorResponse {
@@ -81,7 +81,7 @@ impl AdminError {
             status_code: 404,
         }))
     }
-    
+
     /// Create a UserNotFound error
     pub fn user_not_found(user_id: String) -> Self {
         AdminError::UserNotFound(Json(AdminErrorResponse {
@@ -90,7 +90,7 @@ impl AdminError {
             status_code: 404,
         }))
     }
-    
+
     /// Create an OwnerRequired error
     pub fn owner_required() -> Self {
         AdminError::OwnerRequired(Json(AdminErrorResponse {
@@ -99,7 +99,7 @@ impl AdminError {
             status_code: 403,
         }))
     }
-    
+
     /// Create a SystemAdminRequired error
     pub fn system_admin_required() -> Self {
         AdminError::SystemAdminRequired(Json(AdminErrorResponse {
@@ -108,7 +108,7 @@ impl AdminError {
             status_code: 403,
         }))
     }
-    
+
     /// Create a RoleAdminRequired error
     pub fn role_admin_required() -> Self {
         AdminError::RoleAdminRequired(Json(AdminErrorResponse {
@@ -117,7 +117,7 @@ impl AdminError {
             status_code: 403,
         }))
     }
-    
+
     /// Create an OwnerOrSystemAdminRequired error
     pub fn owner_or_system_admin_required() -> Self {
         AdminError::OwnerOrSystemAdminRequired(Json(AdminErrorResponse {
@@ -126,7 +126,7 @@ impl AdminError {
             status_code: 403,
         }))
     }
-    
+
     /// Create a SelfModificationDenied error
     pub fn self_modification_denied() -> Self {
         AdminError::SelfModificationDenied(Json(AdminErrorResponse {
@@ -135,7 +135,7 @@ impl AdminError {
             status_code: 403,
         }))
     }
-    
+
     /// Create a PasswordValidationFailed error
     pub fn password_validation_failed(reason: String) -> Self {
         AdminError::PasswordValidationFailed(Json(AdminErrorResponse {
@@ -144,18 +144,20 @@ impl AdminError {
             status_code: 400,
         }))
     }
-    
+
     /// Create a PasswordChangeRequired error
     pub fn password_change_required() -> Self {
         AdminError::PasswordChangeRequired(Json(AdminErrorResponse {
             error: "password_change_required".to_string(),
-            message: "Password change required. Please change your password at /auth/change-password".to_string(),
+            message:
+                "Password change required. Please change your password at /auth/change-password"
+                    .to_string(),
             status_code: 403,
         }))
     }
-    
+
     /// Convert InternalError to AdminError
-    /// 
+    ///
     /// This is the explicit conversion point from internal errors to API errors.
     /// Internal error details are logged but not exposed to clients.
     pub fn from_internal_error(err: InternalError) -> Self {
@@ -177,16 +179,16 @@ impl AdminError {
                 tracing::error!("Crypto error in {}: {}", operation, err);
                 Self::internal_server_error()
             }
-            
+
             // Credential domain errors
             InternalError::Credential(CredentialError::UserNotFound(user_id)) => {
                 Self::user_not_found(user_id.clone())
             }
             InternalError::Credential(CredentialError::DuplicateUsername(username)) => {
                 tracing::warn!("Duplicate username in admin operation: {}", username);
-                Self::internal_server_error()  // Shouldn't happen in admin context
+                Self::internal_server_error() // Shouldn't happen in admin context
             }
-            
+
             // SystemConfig domain errors
             InternalError::SystemConfig(SystemConfigError::OwnerAlreadyExists) => {
                 Self::already_bootstrapped()
@@ -194,7 +196,7 @@ impl AdminError {
             InternalError::SystemConfig(SystemConfigError::OwnerNotFound) => {
                 Self::owner_not_found()
             }
-            
+
             // Other domain errors
             _ => {
                 tracing::error!("Unexpected error in admin operation: {}", err);
@@ -202,9 +204,9 @@ impl AdminError {
             }
         }
     }
-    
+
     /// Create a generic internal server error
-    /// 
+    ///
     /// This replaces the old internal_error() method. It always returns
     /// a generic message without exposing internal details.
     fn internal_server_error() -> Self {
@@ -214,7 +216,7 @@ impl AdminError {
             status_code: 500,
         }))
     }
-    
+
     /// Get the error message from the error variant
     pub fn message(&self) -> String {
         match self {
@@ -231,7 +233,7 @@ impl AdminError {
             AdminError::InternalError(json) => json.0.message.clone(),
         }
     }
-    
+
     /// Get the HTTP status code from the error variant
     pub fn status_code(&self) -> u16 {
         match self {

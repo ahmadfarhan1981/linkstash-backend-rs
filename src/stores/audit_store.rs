@@ -1,10 +1,10 @@
 use chrono::Utc;
 use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
 
-use crate::types::db::audit_event;
-use crate::types::internal::audit::AuditEvent;
 use crate::errors::InternalError;
 use crate::errors::internal::AuditError;
+use crate::types::db::audit_event;
+use crate::types::internal::audit::AuditEvent;
 
 /// Repository for audit event storage operations
 pub struct AuditStore {
@@ -27,8 +27,9 @@ impl AuditStore {
     /// Returns `InternalError` if serialization or database insert fails
     pub async fn write_event(&self, event: AuditEvent) -> Result<(), InternalError> {
         // Serialize data HashMap to JSON
-        let data_json = serde_json::to_string(&event.data)
-            .map_err(|e| AuditError::LogWriteFailed(format!("Failed to serialize audit data: {}", e)))?;
+        let data_json = serde_json::to_string(&event.data).map_err(|e| {
+            AuditError::LogWriteFailed(format!("Failed to serialize audit data: {}", e))
+        })?;
 
         // Create active model for insertion
         // Note: user_id is optional for events like login_failure where user may not exist
@@ -43,7 +44,9 @@ impl AuditStore {
         };
 
         // Insert into database
-        audit_event.insert(&self.db).await
+        audit_event
+            .insert(&self.db)
+            .await
             .map_err(|e| InternalError::database("write_audit_event", e))?;
 
         Ok(())

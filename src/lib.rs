@@ -2,14 +2,14 @@
 
 pub mod api;
 pub mod app_data;
+pub mod audit;
+pub mod cli;
 pub mod config;
 pub mod coordinators;
 pub mod errors;
 pub mod providers;
 pub mod stores;
 pub mod types;
-pub mod cli;
-pub mod audit;
 use std::sync::Arc;
 
 pub use app_data::AppData;
@@ -17,7 +17,10 @@ use clap::Parser;
 use poem::{Route, handler, web::Html};
 use poem_openapi::OpenApiService;
 
-use crate::{api::{AdminApi, AuthApi, HealthApi}, config::{ApplicationError, BootstrapSettings}};
+use crate::{
+    api::{AdminApi, AuthApi, HealthApi},
+    config::{ApplicationError, BootstrapSettings},
+};
 
 // Test utilities (available for unit and integration tests)
 // Note: Compiled in all builds but only used during testing
@@ -53,24 +56,25 @@ async fn get_init_appdata() -> Result<(), std::io::Error> {
     Ok(())
 }
 
-pub fn init_bootstrap_settings()-> Result<BootstrapSettings, ApplicationError> {
+pub fn init_bootstrap_settings() -> Result<BootstrapSettings, ApplicationError> {
     // Check if CLI arguments are present
     let args: Vec<String> = std::env::args().collect();
     let is_cli_mode = args.len() > 1;
-    
+
     // Parse CLI once if in CLI mode, otherwise use default env file
     let cli_parsed = if is_cli_mode {
         Some(cli::Cli::parse())
     } else {
         None
     };
-    
+
     // Load environment variables from specified file
-    let env_file = cli_parsed.as_ref()
+    let env_file = cli_parsed
+        .as_ref()
         .map(|c| c.env_file.as_str())
         .unwrap_or(".env");
     dotenv::from_filename(env_file).ok();
-    
+
     BootstrapSettings::from_env()
 }
 

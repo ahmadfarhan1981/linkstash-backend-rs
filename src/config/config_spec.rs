@@ -1,8 +1,8 @@
+use crate::config::EnvironmentProvider;
+use crate::config::errors::ApplicationError;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use crate::config::errors::ApplicationError;
-use crate::config::EnvironmentProvider;
 
 #[derive(Debug, Clone)]
 pub enum ConfigSource {
@@ -89,10 +89,10 @@ impl ConfigSpec {
     }
 
     /// Load a setting value with source tracking according to priority rules
-    /// 
+    ///
     /// Uses environment override → persistent source → default priority.
     /// Environment variables are read-only; database sources are mutable.
-    /// 
+    ///
     /// This method is synchronous and will block on database operations when needed.
     /// Intended for use during application startup where blocking is acceptable.
     pub fn load_setting_with_source(
@@ -102,11 +102,11 @@ impl ConfigSpec {
         if let Some(env_var) = &self.env_override {
             if let Some(value) = self.env_provider.get_var(env_var) {
                 self.validate_value(&value, env_var)?;
-                
+
                 return Ok(ConfigValue {
                     value,
-                    source: ConfigValueSource::EnvironmentVariable { 
-                        name: env_var.clone() 
+                    source: ConfigValueSource::EnvironmentVariable {
+                        name: env_var.clone(),
                     },
                     is_mutable: false, // Cannot update env vars at runtime
                 });
@@ -120,34 +120,32 @@ impl ConfigSpec {
                         self.load_from_database_blocking(database, key)
                     } else {
                         Err(ApplicationError::DatabaseConnection(
-                            "Database connection required for database source".to_string()
+                            "Database connection required for database source".to_string(),
                         ))
                     }
                 }
-                ConfigSource::File { path, key } => {
-                    self.load_from_file_blocking(path, key)
-                }
+                ConfigSource::File { path, key } => self.load_from_file_blocking(path, key),
             };
 
             match value_result {
                 Ok(value) => {
                     let setting_name = self.get_setting_name_for_source(source);
                     self.validate_value(&value, &setting_name)?;
-                    
+
                     let is_mutable = match source {
-                        ConfigSource::Database { .. } => true,  // Can update via API
-                        ConfigSource::File { .. } => false,     // Files are read-only
+                        ConfigSource::Database { .. } => true, // Can update via API
+                        ConfigSource::File { .. } => false,    // Files are read-only
                     };
-                    
+
                     return Ok(ConfigValue {
                         value,
                         source: match source {
-                            ConfigSource::Database { key } => ConfigValueSource::Database { 
-                                key: key.clone() 
-                            },
-                            ConfigSource::File { path, key } => ConfigValueSource::File { 
-                                path: path.clone(), 
-                                key: key.clone() 
+                            ConfigSource::Database { key } => {
+                                ConfigValueSource::Database { key: key.clone() }
+                            }
+                            ConfigSource::File { path, key } => ConfigValueSource::File {
+                                path: path.clone(),
+                                key: key.clone(),
                             },
                         },
                         is_mutable,
@@ -162,7 +160,7 @@ impl ConfigSpec {
         if let Some(default) = &self.default_value {
             let setting_name = "default";
             self.validate_value(default, setting_name)?;
-            
+
             return Ok(ConfigValue {
                 value: default.clone(),
                 source: ConfigValueSource::Default,
@@ -171,9 +169,7 @@ impl ConfigSpec {
         }
 
         if self.required {
-            let setting_name = self.env_override
-                .as_deref()
-                .unwrap_or("unknown_setting");
+            let setting_name = self.env_override.as_deref().unwrap_or("unknown_setting");
             return Err(ApplicationError::InvalidSetting {
                 setting_name: setting_name.to_string(),
                 reason: "Required setting has no value from any source".to_string(),
@@ -188,7 +184,7 @@ impl ConfigSpec {
     }
 
     /// Load a setting value from database (blocking)
-    /// 
+    ///
     /// This method blocks on the async database operation. It's intended for use
     /// during application startup where blocking is acceptable.
     fn load_from_database_blocking(
@@ -199,16 +195,19 @@ impl ConfigSpec {
         // Use tokio::task::block_in_place to block on the async database call
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                use sea_orm::{EntityTrait, ColumnTrait, QueryFilter};
-                use crate::types::db::system_settings::{Entity as SystemSettings, Column};
+                use crate::types::db::system_settings::{Column, Entity as SystemSettings};
+                use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
                 let result = SystemSettings::find()
                     .filter(Column::Key.eq(key))
                     .one(db)
                     .await
-                    .map_err(|e| ApplicationError::DatabaseConnection(
-                        format!("Failed to query setting '{}': {}", key, e)
-                    ))?;
+                    .map_err(|e| {
+                        ApplicationError::DatabaseConnection(format!(
+                            "Failed to query setting '{}': {}",
+                            key, e
+                        ))
+                    })?;
 
                 match result {
                     Some(setting) => Ok(setting.value),
@@ -222,7 +221,7 @@ impl ConfigSpec {
     }
 
     /// Load a setting value from file (blocking)
-    /// 
+    ///
     /// File operations are naturally synchronous, so this method doesn't need
     /// special blocking handling.
     fn load_from_file_blocking(
@@ -286,66 +285,80 @@ impl Default for ConfigSpec {
 /// Type parsing utilities for configuration values
 impl ConfigSpec {
     /// Parse a duration value in minutes from string
-    /// 
+    ///
     /// Supports integer values representing minutes.
-    /// 
+    ///
     /// # Arguments
     /// * `value` - String value to parse (e.g., "15", "1440")
     /// * `setting_name` - Name of the setting for error messages
-    /// 
+    ///
     /// # Returns
     /// * `Ok(Duration)` - Parsed duration
     /// * `Err(ApplicationError)` - Parse error with descriptive message
-    pub fn parse_duration_minutes(value: &str, setting_name: &str) -> Result<Duration, ApplicationError> {
-        let minutes = value.parse::<u64>()
+    pub fn parse_duration_minutes(
+        value: &str,
+        setting_name: &str,
+    ) -> Result<Duration, ApplicationError> {
+        let minutes = value
+            .parse::<u64>()
             .map_err(|e| ApplicationError::ParseError {
                 setting_name: setting_name.to_string(),
-                error: format!("Expected positive integer for minutes, got '{}': {}", value, e),
+                error: format!(
+                    "Expected positive integer for minutes, got '{}': {}",
+                    value, e
+                ),
             })?;
-        
+
         Ok(Duration::from_secs(minutes * 60))
     }
 
     /// Parse a duration value in days from string
-    /// 
+    ///
     /// Supports integer values representing days.
-    /// 
+    ///
     /// # Arguments
     /// * `value` - String value to parse (e.g., "7", "365")
     /// * `setting_name` - Name of the setting for error messages
-    /// 
+    ///
     /// # Returns
     /// * `Ok(Duration)` - Parsed duration
     /// * `Err(ApplicationError)` - Parse error with descriptive message
-    pub fn parse_duration_days(value: &str, setting_name: &str) -> Result<Duration, ApplicationError> {
-        let days = value.parse::<u64>()
+    pub fn parse_duration_days(
+        value: &str,
+        setting_name: &str,
+    ) -> Result<Duration, ApplicationError> {
+        let days = value
+            .parse::<u64>()
             .map_err(|e| ApplicationError::ParseError {
                 setting_name: setting_name.to_string(),
                 error: format!("Expected positive integer for days, got '{}': {}", value, e),
             })?;
-        
+
         Ok(Duration::from_secs(days * 24 * 60 * 60))
     }
 
     /// Parse a duration value from human-readable formats
-    /// 
+    ///
     /// Supports formats like:
     /// - "15m", "30min", "45minutes" (minutes)
     /// - "2h", "3hr", "4hours" (hours)  
     /// - "1d", "7days" (days)
     /// - "300s", "600sec", "900seconds" (seconds)
     /// - Plain numbers default to seconds
-    /// 
+    ///
     /// # Arguments
     /// * `value` - String value to parse (e.g., "15m", "2h", "7d")
     /// * `setting_name` - Name of the setting for error messages
-    /// 
+    ///
     /// # Returns
     /// * `Ok(Duration)` - Parsed duration
     /// * `Err(ApplicationError)` - Parse error with descriptive message
-    pub fn parse_duration_human(value: &str, setting_name: &str) -> Result<Duration, ApplicationError> {
+    pub fn parse_duration_human(
+        value: &str,
+        setting_name: &str,
+    ) -> Result<Duration, ApplicationError> {
         let value = value.trim().to_lowercase();
-        
+
         // Try to extract number and unit
         let (number_str, unit) = if let Some(pos) = value.find(|c: char| c.is_alphabetic()) {
             (&value[..pos], &value[pos..])
@@ -353,37 +366,43 @@ impl ConfigSpec {
             // No unit, assume seconds
             (value.as_str(), "s")
         };
-        
-        let number = number_str.parse::<u64>()
+
+        let number = number_str
+            .parse::<u64>()
             .map_err(|e| ApplicationError::ParseError {
                 setting_name: setting_name.to_string(),
                 error: format!("Expected number in duration '{}': {}", value, e),
             })?;
-        
+
         let seconds = match unit {
             "s" | "sec" | "second" | "seconds" => number,
             "m" | "min" | "minute" | "minutes" => number * 60,
             "h" | "hr" | "hour" | "hours" => number * 60 * 60,
             "d" | "day" | "days" => number * 24 * 60 * 60,
-            _ => return Err(ApplicationError::ParseError {
-                setting_name: setting_name.to_string(),
-                error: format!("Unknown duration unit '{}' in '{}'. Supported: s, m, h, d", unit, value),
-            }),
+            _ => {
+                return Err(ApplicationError::ParseError {
+                    setting_name: setting_name.to_string(),
+                    error: format!(
+                        "Unknown duration unit '{}' in '{}'. Supported: s, m, h, d",
+                        unit, value
+                    ),
+                });
+            }
         };
-        
+
         Ok(Duration::from_secs(seconds))
     }
 
     /// Parse a boolean value from string
-    /// 
+    ///
     /// Supports various boolean representations:
     /// - true: "true", "1", "yes", "on", "enabled" (case insensitive)
     /// - false: "false", "0", "no", "off", "disabled" (case insensitive)
-    /// 
+    ///
     /// # Arguments
     /// * `value` - String value to parse
     /// * `setting_name` - Name of the setting for error messages
-    /// 
+    ///
     /// # Returns
     /// * `Ok(bool)` - Parsed boolean value
     /// * `Err(ApplicationError)` - Parse error with descriptive message
@@ -402,16 +421,18 @@ impl ConfigSpec {
     }
 
     /// Parse an integer value from string
-    /// 
+    ///
     /// # Arguments
     /// * `value` - String value to parse
     /// * `setting_name` - Name of the setting for error messages
-    /// 
+    ///
     /// # Returns
     /// * `Ok(i64)` - Parsed integer value
     /// * `Err(ApplicationError)` - Parse error with descriptive message
     pub fn parse_integer(value: &str, setting_name: &str) -> Result<i64, ApplicationError> {
-        value.trim().parse::<i64>()
+        value
+            .trim()
+            .parse::<i64>()
             .map_err(|e| ApplicationError::ParseError {
                 setting_name: setting_name.to_string(),
                 error: format!("Expected integer, got '{}': {}", value, e),
@@ -419,54 +440,56 @@ impl ConfigSpec {
     }
 
     /// Parse a port number from string with validation
-    /// 
+    ///
     /// Validates that the port is in the valid range (1-65535).
-    /// 
+    ///
     /// # Arguments
     /// * `value` - String value to parse
     /// * `setting_name` - Name of the setting for error messages
-    /// 
+    ///
     /// # Returns
     /// * `Ok(u16)` - Parsed port number
     /// * `Err(ApplicationError)` - Parse error or validation error
     pub fn parse_port(value: &str, setting_name: &str) -> Result<u16, ApplicationError> {
-        let port = value.trim().parse::<u16>()
+        let port = value
+            .trim()
+            .parse::<u16>()
             .map_err(|e| ApplicationError::ParseError {
                 setting_name: setting_name.to_string(),
                 error: format!("Expected port number (1-65535), got '{}': {}", value, e),
             })?;
-        
+
         if port == 0 {
             return Err(ApplicationError::InvalidSetting {
                 setting_name: setting_name.to_string(),
                 reason: "Port number must be between 1 and 65535".to_string(),
             });
         }
-        
+
         Ok(port)
     }
 
     /// Parse and validate a host address (IPv4, IPv6, or hostname)
-    /// 
+    ///
     /// Validates basic format but does not perform DNS resolution.
-    /// 
+    ///
     /// # Arguments
     /// * `value` - String value to parse
     /// * `setting_name` - Name of the setting for error messages
-    /// 
+    ///
     /// # Returns
     /// * `Ok(String)` - Validated host address
     /// * `Err(ApplicationError)` - Validation error
     pub fn parse_host(value: &str, setting_name: &str) -> Result<String, ApplicationError> {
         let host = value.trim();
-        
+
         if host.is_empty() {
             return Err(ApplicationError::InvalidSetting {
                 setting_name: setting_name.to_string(),
                 reason: "Host address cannot be empty".to_string(),
             });
         }
-        
+
         // Basic validation - check for obviously invalid characters
         if host.contains(' ') || host.contains('\t') || host.contains('\n') {
             return Err(ApplicationError::InvalidSetting {
@@ -474,11 +497,11 @@ impl ConfigSpec {
                 reason: "Host address cannot contain whitespace characters".to_string(),
             });
         }
-        
+
         // Check for IPv6 format (contains colons and brackets)
         if host.starts_with('[') && host.ends_with(']') {
             // IPv6 in brackets - basic validation
-            let ipv6_part = &host[1..host.len()-1];
+            let ipv6_part = &host[1..host.len() - 1];
             if ipv6_part.is_empty() || !ipv6_part.contains(':') {
                 return Err(ApplicationError::InvalidSetting {
                     setting_name: setting_name.to_string(),
@@ -492,26 +515,26 @@ impl ConfigSpec {
                 reason: "IPv6 addresses must be enclosed in brackets [::1]".to_string(),
             });
         }
-        
+
         Ok(host.to_string())
     }
 
     /// Parse a string value with length validation
-    /// 
+    ///
     /// # Arguments
     /// * `value` - String value to parse
     /// * `setting_name` - Name of the setting for error messages
     /// * `min_length` - Optional minimum length
     /// * `max_length` - Optional maximum length
-    /// 
+    ///
     /// # Returns
     /// * `Ok(String)` - Validated string value
     /// * `Err(ApplicationError)` - Validation error
     pub fn parse_string(
-        value: &str, 
+        value: &str,
         setting_name: &str,
         min_length: Option<usize>,
-        max_length: Option<usize>
+        max_length: Option<usize>,
     ) -> Result<String, ApplicationError> {
         if let Some(min_len) = min_length {
             if value.len() < min_len {
@@ -538,135 +561,177 @@ impl ConfigSpec {
 /// Range validation utilities
 impl ConfigSpec {
     /// Validate an integer value is within the specified range
-    /// 
+    ///
     /// # Arguments
     /// * `value` - String value to validate
     /// * `min` - Minimum allowed value (inclusive)
     /// * `max` - Maximum allowed value (inclusive)
-    /// 
+    ///
     /// # Returns
     /// * `Ok(())` - Value is within range
     /// * `Err(String)` - Validation error message
     pub fn validate_integer_range(value: &str, min: i64, max: i64) -> Result<(), String> {
-        let parsed = value.parse::<i64>()
+        let parsed = value
+            .parse::<i64>()
             .map_err(|_| format!("Expected integer between {} and {}", min, max))?;
-        
+
         if parsed < min || parsed > max {
-            return Err(format!("Value {} is outside valid range {}-{}", parsed, min, max));
+            return Err(format!(
+                "Value {} is outside valid range {}-{}",
+                parsed, min, max
+            ));
         }
-        
+
         Ok(())
     }
 
     /// Validate a port number is within the specified range
-    /// 
+    ///
     /// # Arguments
     /// * `value` - String value to validate
     /// * `min` - Minimum allowed port (inclusive)
     /// * `max` - Maximum allowed port (inclusive)
-    /// 
+    ///
     /// # Returns
     /// * `Ok(())` - Port is within range
     /// * `Err(String)` - Validation error message
     pub fn validate_port_range(value: &str, min: u16, max: u16) -> Result<(), String> {
-        let parsed = value.parse::<u16>()
+        let parsed = value
+            .parse::<u16>()
             .map_err(|_| format!("Expected port number between {} and {}", min, max))?;
-        
+
         if parsed < min || parsed > max {
-            return Err(format!("Port {} is outside valid range {}-{}", parsed, min, max));
+            return Err(format!(
+                "Port {} is outside valid range {}-{}",
+                parsed, min, max
+            ));
         }
-        
+
         Ok(())
     }
 
     /// Validate a duration (in minutes) is within the specified range
-    /// 
+    ///
     /// # Arguments
     /// * `value` - String value to validate
     /// * `min_minutes` - Minimum allowed duration in minutes
     /// * `max_minutes` - Maximum allowed duration in minutes
-    /// 
+    ///
     /// # Returns
     /// * `Ok(())` - Duration is within range
     /// * `Err(String)` - Validation error message
-    pub fn validate_duration_minutes_range(value: &str, min_minutes: u64, max_minutes: u64) -> Result<(), String> {
-        let parsed = value.parse::<u64>()
-            .map_err(|_| format!("Expected duration between {} and {} minutes", min_minutes, max_minutes))?;
-        
+    pub fn validate_duration_minutes_range(
+        value: &str,
+        min_minutes: u64,
+        max_minutes: u64,
+    ) -> Result<(), String> {
+        let parsed = value.parse::<u64>().map_err(|_| {
+            format!(
+                "Expected duration between {} and {} minutes",
+                min_minutes, max_minutes
+            )
+        })?;
+
         if parsed < min_minutes || parsed > max_minutes {
-            return Err(format!("Duration {} minutes is outside valid range {}-{} minutes", parsed, min_minutes, max_minutes));
+            return Err(format!(
+                "Duration {} minutes is outside valid range {}-{} minutes",
+                parsed, min_minutes, max_minutes
+            ));
         }
-        
+
         Ok(())
     }
 
     /// Validate a duration (in days) is within the specified range
-    /// 
+    ///
     /// # Arguments
     /// * `value` - String value to validate
     /// * `min_days` - Minimum allowed duration in days
     /// * `max_days` - Maximum allowed duration in days
-    /// 
+    ///
     /// # Returns
     /// * `Ok(())` - Duration is within range
     /// * `Err(String)` - Validation error message
-    pub fn validate_duration_days_range(value: &str, min_days: u64, max_days: u64) -> Result<(), String> {
-        let parsed = value.parse::<u64>()
-            .map_err(|_| format!("Expected duration between {} and {} days", min_days, max_days))?;
-        
+    pub fn validate_duration_days_range(
+        value: &str,
+        min_days: u64,
+        max_days: u64,
+    ) -> Result<(), String> {
+        let parsed = value.parse::<u64>().map_err(|_| {
+            format!(
+                "Expected duration between {} and {} days",
+                min_days, max_days
+            )
+        })?;
+
         if parsed < min_days || parsed > max_days {
-            return Err(format!("Duration {} days is outside valid range {}-{} days", parsed, min_days, max_days));
+            return Err(format!(
+                "Duration {} days is outside valid range {}-{} days",
+                parsed, min_days, max_days
+            ));
         }
-        
+
         Ok(())
     }
 
     /// Validate an IPv4 address format (4 dot-separated integers 0-255)
-    /// 
+    ///
     /// # Arguments
     /// * `value` - String value to validate (e.g., "192.168.1.1", "0.0.0.0")
-    /// 
+    ///
     /// # Returns
     /// * `Ok(())` - Valid IPv4 address format
     /// * `Err(String)` - Validation error message
     pub fn validate_ipv4_address(value: &str) -> Result<(), String> {
         let parts: Vec<&str> = value.split('.').collect();
-        
+
         if parts.len() != 4 {
-            return Err(format!("IPv4 address must have exactly 4 parts separated by dots, got {}", parts.len()));
+            return Err(format!(
+                "IPv4 address must have exactly 4 parts separated by dots, got {}",
+                parts.len()
+            ));
         }
-        
+
         for (i, part) in parts.iter().enumerate() {
             if part.is_empty() {
                 return Err(format!("IPv4 address part {} cannot be empty", i + 1));
             }
-            
+
             // Check for leading zeros (except for "0" itself)
             if part.len() > 1 && part.starts_with('0') {
-                return Err(format!("IPv4 address part {} cannot have leading zeros: '{}'", i + 1, part));
+                return Err(format!(
+                    "IPv4 address part {} cannot have leading zeros: '{}'",
+                    i + 1,
+                    part
+                ));
             }
-            
-            let octet = part.parse::<u16>()
+
+            let octet = part
+                .parse::<u16>()
                 .map_err(|_| format!("IPv4 address part {} must be a number: '{}'", i + 1, part))?;
-            
+
             if octet > 255 {
-                return Err(format!("IPv4 address part {} must be between 0-255, got {}", i + 1, octet));
+                return Err(format!(
+                    "IPv4 address part {} must be between 0-255, got {}",
+                    i + 1,
+                    octet
+                ));
             }
         }
-        
+
         Ok(())
     }
 
     /// Validate a host address (IPv4, IPv6, or hostname) with comprehensive validation
-    /// 
+    ///
     /// This function handles all the complex logic for validating different types of host addresses:
     /// - IPv4 addresses (strict validation with proper octet ranges and no leading zeros)
     /// - IPv6 addresses (basic format validation, must be bracketed)
     /// - Hostnames (basic validation, no whitespace)
-    /// 
+    ///
     /// # Arguments
     /// * `value` - String value to validate
-    /// 
+    ///
     /// # Returns
     /// * `Ok(())` - Valid host address
     /// * `Err(String)` - Validation error message
@@ -674,14 +739,14 @@ impl ConfigSpec {
         if value.is_empty() {
             return Err("Host address cannot be empty".to_string());
         }
-        
+
         // Check if it looks like IPv6 (contains colons) - do this first
         if value.contains(':') {
             // Allow IPv6 addresses for backward compatibility
             // Basic validation - just ensure it's not empty and has colons
             if value.starts_with('[') && value.ends_with(']') {
                 // Bracketed IPv6 - basic validation
-                let ipv6_part = &value[1..value.len()-1];
+                let ipv6_part = &value[1..value.len() - 1];
                 if ipv6_part.is_empty() || !ipv6_part.contains(':') {
                     return Err("Invalid IPv6 address format".to_string());
                 }
@@ -689,27 +754,31 @@ impl ConfigSpec {
             // For unbracketed IPv6, just do basic validation
             return Ok(());
         }
-        
+
         // Check for empty brackets (invalid IPv6)
         if value == "[]" {
             return Err("Invalid IPv6 address format".to_string());
         }
-        
+
         // Check if it looks like IPv4 (contains dots and all parts are numeric)
         if value.contains('.') {
             let parts: Vec<&str> = value.split('.').collect();
-            if parts.len() == 4 && parts.iter().all(|part| part.chars().all(|c| c.is_ascii_digit())) {
+            if parts.len() == 4
+                && parts
+                    .iter()
+                    .all(|part| part.chars().all(|c| c.is_ascii_digit()))
+            {
                 // This looks like an IPv4 address, validate it properly
                 return Self::validate_ipv4_address(value);
             }
             // Contains dots but not a valid IPv4 pattern, treat as hostname
         }
-        
+
         // Assume it's a hostname - basic validation
         if value.contains(' ') || value.contains('\t') || value.contains('\n') {
             return Err("Host address cannot contain whitespace characters".to_string());
         }
-        
+
         Ok(())
     }
 }
@@ -739,7 +808,10 @@ mod tests {
         let result = ConfigSpec::parse_duration_minutes("not_a_number", "test");
         assert!(result.is_err());
         match result.unwrap_err() {
-            ApplicationError::ParseError { setting_name, error } => {
+            ApplicationError::ParseError {
+                setting_name,
+                error,
+            } => {
                 assert_eq!(setting_name, "test");
                 assert!(error.contains("Expected positive integer for minutes"));
             }
@@ -766,7 +838,10 @@ mod tests {
         let result = ConfigSpec::parse_duration_days("not_a_number", "test");
         assert!(result.is_err());
         match result.unwrap_err() {
-            ApplicationError::ParseError { setting_name, error } => {
+            ApplicationError::ParseError {
+                setting_name,
+                error,
+            } => {
                 assert_eq!(setting_name, "test");
                 assert!(error.contains("Expected positive integer for days"));
             }
@@ -843,7 +918,7 @@ mod tests {
         // Invalid cases
         let result = ConfigSpec::parse_duration_human("15x", "test");
         assert!(result.is_err());
-        
+
         let result = ConfigSpec::parse_duration_human("not_a_number", "test");
         assert!(result.is_err());
     }
@@ -876,7 +951,10 @@ mod tests {
         let result = ConfigSpec::parse_bool("invalid", "test");
         assert!(result.is_err());
         match result.unwrap_err() {
-            ApplicationError::ParseError { setting_name, error } => {
+            ApplicationError::ParseError {
+                setting_name,
+                error,
+            } => {
                 assert_eq!(setting_name, "test");
                 assert!(error.contains("Expected boolean value"));
             }
@@ -895,7 +973,7 @@ mod tests {
         // Invalid cases
         let result = ConfigSpec::parse_integer("not_a_number", "test");
         assert!(result.is_err());
-        
+
         let result = ConfigSpec::parse_integer("12.34", "test");
         assert!(result.is_err());
     }
@@ -912,7 +990,10 @@ mod tests {
         let result = ConfigSpec::parse_port("0", "test");
         assert!(result.is_err());
         match result.unwrap_err() {
-            ApplicationError::InvalidSetting { setting_name, reason } => {
+            ApplicationError::InvalidSetting {
+                setting_name,
+                reason,
+            } => {
                 assert_eq!(setting_name, "test");
                 assert!(reason.contains("Port number must be between 1 and 65535"));
             }
@@ -931,12 +1012,27 @@ mod tests {
     #[test]
     fn test_parse_host() {
         // Valid cases
-        assert_eq!(ConfigSpec::parse_host("localhost", "test").unwrap(), "localhost");
-        assert_eq!(ConfigSpec::parse_host("127.0.0.1", "test").unwrap(), "127.0.0.1");
-        assert_eq!(ConfigSpec::parse_host("0.0.0.0", "test").unwrap(), "0.0.0.0");
+        assert_eq!(
+            ConfigSpec::parse_host("localhost", "test").unwrap(),
+            "localhost"
+        );
+        assert_eq!(
+            ConfigSpec::parse_host("127.0.0.1", "test").unwrap(),
+            "127.0.0.1"
+        );
+        assert_eq!(
+            ConfigSpec::parse_host("0.0.0.0", "test").unwrap(),
+            "0.0.0.0"
+        );
         assert_eq!(ConfigSpec::parse_host("[::1]", "test").unwrap(), "[::1]");
-        assert_eq!(ConfigSpec::parse_host("[2001:db8::1]", "test").unwrap(), "[2001:db8::1]");
-        assert_eq!(ConfigSpec::parse_host("example.com", "test").unwrap(), "example.com");
+        assert_eq!(
+            ConfigSpec::parse_host("[2001:db8::1]", "test").unwrap(),
+            "[2001:db8::1]"
+        );
+        assert_eq!(
+            ConfigSpec::parse_host("example.com", "test").unwrap(),
+            "example.com"
+        );
 
         // Invalid cases - empty
         let result = ConfigSpec::parse_host("", "test");
@@ -971,7 +1067,10 @@ mod tests {
         let result = ConfigSpec::parse_string("hi", "test", Some(5), None);
         assert!(result.is_err());
         match result.unwrap_err() {
-            ApplicationError::InvalidSetting { setting_name, reason } => {
+            ApplicationError::InvalidSetting {
+                setting_name,
+                reason,
+            } => {
                 assert_eq!(setting_name, "test");
                 assert!(reason.contains("must be at least 5 characters long"));
             }
@@ -982,7 +1081,10 @@ mod tests {
         let result = ConfigSpec::parse_string("very long string", "test", None, Some(5));
         assert!(result.is_err());
         match result.unwrap_err() {
-            ApplicationError::InvalidSetting { setting_name, reason } => {
+            ApplicationError::InvalidSetting {
+                setting_name,
+                reason,
+            } => {
                 assert_eq!(setting_name, "test");
                 assert!(reason.contains("must be at most 5 characters long"));
             }
@@ -1089,8 +1191,6 @@ mod tests {
         assert!(ConfigSpec::validate_host_address("192.168.01.1").is_err());
         assert!(ConfigSpec::validate_host_address("300.300.300.300").is_err());
 
-        
-
         // Edge cases - dots but not IPv4
         assert!(ConfigSpec::validate_host_address("example.com").is_ok()); // hostname with dots
         assert!(ConfigSpec::validate_host_address("1.2.3").is_ok()); // not 4 parts, treated as hostname
@@ -1100,33 +1200,35 @@ mod tests {
     #[test]
     fn test_load_setting_with_source_env_override() {
         use crate::config::MockEnvironment;
-        
-        let env_provider = Arc::new(MockEnvironment::empty()
-            .with_var("TEST_SETTING", "env_value"));
-        
+
+        let env_provider = Arc::new(MockEnvironment::empty().with_var("TEST_SETTING", "env_value"));
+
         let spec = ConfigSpec::new(env_provider)
             .env_override("TEST_SETTING")
             .default_value("default_value");
-        
+
         let result = spec.load_setting_with_source(None).unwrap();
-        
+
         assert_eq!(result.value, "env_value");
-        assert!(matches!(result.source, ConfigValueSource::EnvironmentVariable { .. }));
+        assert!(matches!(
+            result.source,
+            ConfigValueSource::EnvironmentVariable { .. }
+        ));
         assert!(!result.is_mutable);
     }
 
     #[test]
     fn test_load_setting_with_source_default() {
         use crate::config::MockEnvironment;
-        
+
         let env_provider = Arc::new(MockEnvironment::empty()); // Empty environment
-        
+
         let spec = ConfigSpec::new(env_provider)
             .env_override("TEST_SETTING_DEFAULT")
             .default_value("default_value");
-        
+
         let result = spec.load_setting_with_source(None).unwrap();
-        
+
         assert_eq!(result.value, "default_value");
         assert!(matches!(result.source, ConfigValueSource::Default));
         assert!(!result.is_mutable); // No persistent source, so not mutable
@@ -1135,19 +1237,22 @@ mod tests {
     #[test]
     fn test_load_setting_with_source_validation() {
         use crate::config::MockEnvironment;
-        
-        let env_provider = Arc::new(MockEnvironment::empty()
-            .with_var("TEST_SETTING_VALIDATION", "short"));
-        
+
+        let env_provider =
+            Arc::new(MockEnvironment::empty().with_var("TEST_SETTING_VALIDATION", "short"));
+
         let spec = ConfigSpec::new(env_provider)
             .env_override("TEST_SETTING_VALIDATION")
             .min_length(10);
-        
+
         let result = spec.load_setting_with_source(None);
-        
+
         assert!(result.is_err());
         match result.unwrap_err() {
-            ApplicationError::InvalidSetting { setting_name, reason } => {
+            ApplicationError::InvalidSetting {
+                setting_name,
+                reason,
+            } => {
                 assert_eq!(setting_name, "TEST_SETTING_VALIDATION");
                 assert!(reason.contains("at least 10 characters"));
             }

@@ -1,8 +1,8 @@
 // Common test utilities for integration tests
 
-use sea_orm::{Database, DatabaseConnection};
-use migration::{AuthMigrator, AuditMigrator, MigratorTrait};
 use linkstash_backend::stores::AuditStore;
+use migration::{AuditMigrator, AuthMigrator, MigratorTrait};
+use sea_orm::{Database, DatabaseConnection};
 use std::sync::{Arc, Mutex};
 
 /// Creates a test auth database with migrations applied
@@ -10,11 +10,11 @@ pub async fn setup_test_auth_db() -> DatabaseConnection {
     let db = Database::connect("sqlite::memory:")
         .await
         .expect("Failed to create test database");
-    
+
     AuthMigrator::up(&db, None)
         .await
         .expect("Failed to run auth migrations");
-    
+
     db
 }
 
@@ -23,11 +23,11 @@ pub async fn setup_test_audit_db() -> DatabaseConnection {
     let db = Database::connect("sqlite::memory:")
         .await
         .expect("Failed to create audit database");
-    
+
     AuditMigrator::up(&db, None)
         .await
         .expect("Failed to run audit migrations");
-    
+
     db
 }
 
@@ -45,7 +45,7 @@ pub async fn setup_test_databases() -> (DatabaseConnection, DatabaseConnection) 
 }
 
 /// Helper to manage environment variables in tests
-/// 
+///
 /// Cleans up specified environment variables on creation and drop,
 /// ensuring test isolation when dealing with global environment state.
 pub struct EnvGuard {
@@ -77,7 +77,7 @@ impl Drop for EnvGuard {
 }
 
 /// Global mutex for tests that modify environment variables
-/// 
+///
 /// Environment variables are process-global, so tests that modify them
 /// must run serially to avoid race conditions.
 pub static ENV_TEST_MUTEX: Mutex<()> = Mutex::new(());

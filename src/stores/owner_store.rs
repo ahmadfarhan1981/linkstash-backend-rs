@@ -1,11 +1,7 @@
-pub struct OwnerStore{
-    
-}
+pub struct OwnerStore {}
 
 impl OwnerStore {
-    pub fn new()->Self{
-        Self{}
+    pub fn new() -> Self {
+        Self {}
     }
-    
-    
 }

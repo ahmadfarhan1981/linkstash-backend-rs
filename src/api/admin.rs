@@ -1,6 +1,6 @@
-use poem_openapi::{payload::Json, OpenApi, Tags};
-use poem::Request;
 use crate::api::auth::BearerAuth;
+use poem::Request;
+use poem_openapi::{OpenApi, Tags, payload::Json};
 use std::sync::Arc;
 
 /// Admin role management API endpoints
@@ -13,8 +13,8 @@ impl AdminApi {
     // pub fn new(admin_coordinator: Arc<AdminCoordinator>) -> Self {
     //     Self { admin_coordinator }
     // }
-     pub fn new() -> Self {
-        Self {  }
+    pub fn new() -> Self {
+        Self {}
     }
 }
 
@@ -26,6 +26,4 @@ enum AdminTags {
 }
 
 #[OpenApi(prefix_path = "/api/admin")]
-impl AdminApi {
-  
-}
+impl AdminApi {}

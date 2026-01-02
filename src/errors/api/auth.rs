@@ -1,16 +1,16 @@
-use poem_openapi::{payload::Json, ApiResponse, Object};
+use crate::errors::internal::{CredentialError, InternalError};
+use poem_openapi::{ApiResponse, Object, payload::Json};
 use std::fmt;
-use crate::errors::internal::{InternalError, CredentialError};
 
 /// Standardized error response for authentication endpoints
 #[derive(Object, Debug)]
 pub struct AuthErrorResponse {
     /// Error code identifier
     pub error: String,
-    
+
     /// Human-readable error message
     pub message: String,
-    
+
     /// HTTP status code
     pub status_code: u16,
 }
@@ -21,47 +21,47 @@ pub enum AuthError {
     /// Invalid username or password
     #[oai(status = 401)]
     InvalidCredentials(Json<AuthErrorResponse>),
-    
+
     /// Current password is incorrect (for password change)
     #[oai(status = 401)]
     IncorrectPassword(Json<AuthErrorResponse>),
-    
+
     /// Password validation failed
     #[oai(status = 400)]
     PasswordValidationFailed(Json<AuthErrorResponse>),
-    
+
     /// Username already exists
     #[oai(status = 400)]
     DuplicateUsername(Json<AuthErrorResponse>),
-    
+
     /// Invalid or malformed JWT
     #[oai(status = 401)]
     InvalidToken(Json<AuthErrorResponse>),
-    
+
     /// JWT has expired
     #[oai(status = 401)]
     ExpiredToken(Json<AuthErrorResponse>),
-    
+
     /// Authorization header is missing
     #[oai(status = 401)]
     MissingAuthHeader(Json<AuthErrorResponse>),
-    
+
     /// Authorization header format is invalid
     #[oai(status = 401)]
     InvalidAuthHeader(Json<AuthErrorResponse>),
-    
+
     /// Invalid refresh token
     #[oai(status = 401)]
     InvalidRefreshToken(Json<AuthErrorResponse>),
-    
+
     /// Refresh token has expired
     #[oai(status = 401)]
     ExpiredRefreshToken(Json<AuthErrorResponse>),
-    
+
     /// Password change required - contains RequestContext for allowed endpoints
     #[oai(status = 403)]
     PasswordChangeRequired(Json<AuthErrorResponse>),
-    
+
     /// Internal server error
     #[oai(status = 500)]
     InternalError(Json<AuthErrorResponse>),
@@ -76,7 +76,7 @@ impl AuthError {
             status_code: 401,
         }))
     }
-    
+
     /// Create an IncorrectPassword error
     pub fn incorrect_password() -> Self {
         AuthError::IncorrectPassword(Json(AuthErrorResponse {
@@ -85,7 +85,7 @@ impl AuthError {
             status_code: 401,
         }))
     }
-    
+
     /// Create a PasswordValidationFailed error
     pub fn password_validation_failed(message: String) -> Self {
         AuthError::PasswordValidationFailed(Json(AuthErrorResponse {
@@ -94,7 +94,7 @@ impl AuthError {
             status_code: 400,
         }))
     }
-    
+
     /// Create a DuplicateUsername error
     pub fn duplicate_username() -> Self {
         AuthError::DuplicateUsername(Json(AuthErrorResponse {
@@ -103,7 +103,7 @@ impl AuthError {
             status_code: 400,
         }))
     }
-    
+
     /// Create an InvalidToken error
     pub fn invalid_token() -> Self {
         AuthError::InvalidToken(Json(AuthErrorResponse {
@@ -112,7 +112,7 @@ impl AuthError {
             status_code: 401,
         }))
     }
-    
+
     /// Create an ExpiredToken error
     pub fn expired_token() -> Self {
         AuthError::ExpiredToken(Json(AuthErrorResponse {
@@ -121,7 +121,7 @@ impl AuthError {
             status_code: 401,
         }))
     }
-    
+
     /// Create a MissingAuthHeader error
     pub fn missing_auth_header() -> Self {
         AuthError::MissingAuthHeader(Json(AuthErrorResponse {
@@ -130,7 +130,7 @@ impl AuthError {
             status_code: 401,
         }))
     }
-    
+
     /// Create an InvalidAuthHeader error
     pub fn invalid_auth_header() -> Self {
         AuthError::InvalidAuthHeader(Json(AuthErrorResponse {
@@ -139,7 +139,7 @@ impl AuthError {
             status_code: 401,
         }))
     }
-    
+
     /// Create an InvalidRefreshToken error
     pub fn invalid_refresh_token() -> Self {
         AuthError::InvalidRefreshToken(Json(AuthErrorResponse {
@@ -148,7 +148,7 @@ impl AuthError {
             status_code: 401,
         }))
     }
-    
+
     /// Create an ExpiredRefreshToken error
     pub fn expired_refresh_token() -> Self {
         AuthError::ExpiredRefreshToken(Json(AuthErrorResponse {
@@ -157,18 +157,20 @@ impl AuthError {
             status_code: 401,
         }))
     }
-    
+
     /// Create a PasswordChangeRequired error
     pub fn password_change_required() -> Self {
         AuthError::PasswordChangeRequired(Json(AuthErrorResponse {
             error: "password_change_required".to_string(),
-            message: "Password change required. Please change your password at /auth/change-password".to_string(),
+            message:
+                "Password change required. Please change your password at /auth/change-password"
+                    .to_string(),
             status_code: 403,
         }))
     }
-    
+
     /// Convert InternalError to AuthError
-    /// 
+    ///
     /// This is the explicit conversion point from internal errors to API errors.
     /// Internal error details are logged but not exposed to clients.
     pub fn from_internal_error(err: InternalError) -> Self {
@@ -190,7 +192,7 @@ impl AuthError {
                 tracing::error!("Crypto error in {}: {}", operation, err);
                 Self::internal_server_error()
             }
-            
+
             // Domain errors - convert to specific API errors
             InternalError::Credential(CredentialError::InvalidCredentials) => {
                 tracing::debug!("Invalid credentials attempt");
@@ -228,7 +230,7 @@ impl AuthError {
                     Self::expired_token()
                 }
             }
-            
+
             // Other domain errors that shouldn't appear in auth context
             _ => {
                 tracing::error!("Unexpected error in auth operation: {}", err);
@@ -236,9 +238,9 @@ impl AuthError {
             }
         }
     }
-    
+
     /// Create a generic internal server error
-    /// 
+    ///
     /// This replaces the old internal_error() method. It always returns
     /// a generic message without exposing internal details.
     fn internal_server_error() -> Self {
@@ -248,7 +250,7 @@ impl AuthError {
             status_code: 500,
         }))
     }
-    
+
     /// Get the error message from the error variant
     pub fn message(&self) -> String {
         match self {

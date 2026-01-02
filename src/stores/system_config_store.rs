@@ -1,29 +1,26 @@
-use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseConnection, EntityTrait, Set};
-use chrono::Utc;
-use crate::types::db::system_config::{self, Entity as SystemConfig, ActiveModel};
 use crate::errors::InternalError;
 use crate::errors::internal::SystemConfigError;
-
+use crate::types::db::system_config::{self, ActiveModel, Entity as SystemConfig};
+use chrono::Utc;
+use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseConnection, EntityTrait, Set};
 
 /// SystemConfigStore manages system-level configuration flags in the database
-pub struct SystemConfigStore {
-}
+pub struct SystemConfigStore {}
 
 impl SystemConfigStore {
-
     pub fn new() -> Self {
-        Self { }
+        Self {}
     }
 
     /// Ensure the singleton system_config row exists
-    /// 
+    ///
     /// Creates the row with default values if it doesn't exist.
     /// This is a helper method called by other methods to ensure the table is initialized.
-    /// 
+    ///
     /// # Returns
     /// * `Ok(())` - Config row exists or was created successfully
     /// * `Err(InternalError)` - Database error
-    async fn ensure_config_exists(&self, conn: &impl ConnectionTrait ) -> Result<(), InternalError> {
+    async fn ensure_config_exists(&self, conn: &impl ConnectionTrait) -> Result<(), InternalError> {
         // Check if config row exists
         let config = SystemConfig::find_by_id(1)
             .one(conn)
@@ -49,13 +46,16 @@ impl SystemConfigStore {
     }
 
     /// Get the system configuration
-    /// 
+    ///
     /// Retrieves the singleton system_config row (id=1).
-    /// 
+    ///
     /// # Returns
     /// * `Ok(Model)` - The system configuration
     /// * `Err(InternalError)` - Database error or config not found
-    pub async fn get_config(&self, conn: &impl ConnectionTrait) -> Result<system_config::Model, InternalError> {
+    pub async fn get_config(
+        &self,
+        conn: &impl ConnectionTrait,
+    ) -> Result<system_config::Model, InternalError> {
         self.ensure_config_exists(conn).await?;
 
         SystemConfig::find_by_id(1)
@@ -66,15 +66,15 @@ impl SystemConfigStore {
     }
 
     /// Set the owner_active flag
-    /// 
+    ///
     /// Updates the owner_active flag in the system_config table.
     /// Logs the change to the audit database at point of action.
-    /// 
+    ///
     /// # Arguments
     /// * `active` - The new value for owner_active
     /// * `actor_user_id` - Optional user ID of who performed the action (for audit logging)
     /// * `ip_address` - Optional IP address (for audit logging)
-    /// 
+    ///
     /// # Returns
     /// * `Ok(())` - Flag updated successfully
     /// * `Err(InternalError)` - Database error
@@ -108,7 +108,7 @@ impl SystemConfigStore {
         // Log at point of action
         // let actor = actor_user_id.unwrap_or_else(|| "system".to_string());
         // let ip = ip_address.clone();
-        
+
         // Determine activation method based on actor
         // let activation_method = if actor == "cli" || actor == "system" {
         //     "cli".to_string()
@@ -138,13 +138,16 @@ impl SystemConfigStore {
     }
 
     /// Check if the owner account is active
-    /// 
+    ///
     /// Returns the current value of the owner_active flag.
-    /// 
+    ///
     /// # Returns
     /// * `Ok(bool)` - True if owner is active, false otherwise
     /// * `Err(InternalError)` - Database error
-    pub async fn is_owner_active(&self, conn: &impl ConnectionTrait) -> Result<bool, InternalError> {
+    pub async fn is_owner_active(
+        &self,
+        conn: &impl ConnectionTrait,
+    ) -> Result<bool, InternalError> {
         let config = self.get_config(conn).await?;
         Ok(config.owner_active)
     }
@@ -161,7 +164,9 @@ impl std::fmt::Debug for SystemConfigStore {
 
 impl std::fmt::Display for SystemConfigStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "SystemConfigStore {{ db: <connection>, audit_store: <audit_store> }}")
+        write!(
+            f,
+            "SystemConfigStore {{ db: <connection>, audit_store: <audit_store> }}"
+        )
     }
 }
-

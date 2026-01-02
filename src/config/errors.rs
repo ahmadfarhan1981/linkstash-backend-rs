@@ -1,17 +1,29 @@
 use std::fmt;
 
-
-
 #[derive(Debug)]
 pub enum ApplicationError {
     DatabaseConnection(String),
-    InvalidSetting { setting_name: String, reason: String },
-    ParseError { setting_name: String, error: String },
-    UnknownSetting { name: String },
-    ReadOnlyFromEnvironment { setting_name: String },
-    NoWritableSource { setting_name: String },
+    InvalidSetting {
+        setting_name: String,
+        reason: String,
+    },
+    ParseError {
+        setting_name: String,
+        error: String,
+    },
+    UnknownSetting {
+        name: String,
+    },
+    ReadOnlyFromEnvironment {
+        setting_name: String,
+    },
+    NoWritableSource {
+        setting_name: String,
+    },
     FileUpdatesNotSupported,
-    UnknownServerError{message: String},
+    UnknownServerError {
+        message: String,
+    },
 }
 
 impl fmt::Display for ApplicationError {
@@ -20,10 +32,16 @@ impl fmt::Display for ApplicationError {
             Self::DatabaseConnection(msg) => {
                 write!(f, "Database connection error: {}", msg)
             }
-            Self::InvalidSetting { setting_name, reason } => {
+            Self::InvalidSetting {
+                setting_name,
+                reason,
+            } => {
                 write!(f, "Invalid setting '{}': {}", setting_name, reason)
             }
-            Self::ParseError { setting_name, error } => {
+            Self::ParseError {
+                setting_name,
+                error,
+            } => {
                 write!(f, "Failed to parse setting '{}': {}", setting_name, error)
             }
             Self::UnknownSetting { name } => {
@@ -44,13 +62,14 @@ impl fmt::Display for ApplicationError {
                 )
             }
             Self::FileUpdatesNotSupported => {
-                write!(f, "Runtime updates to file-based configuration are not supported")
-            },
-            Self::UnknownServerError { message }=>{
-                write!(f, "Unknow server error: {} ", message)
-
+                write!(
+                    f,
+                    "Runtime updates to file-based configuration are not supported"
+                )
             }
-
+            Self::UnknownServerError { message } => {
+                write!(f, "Unknow server error: {} ", message)
+            }
         }
     }
 }
@@ -103,7 +122,10 @@ mod tests {
             setting_name: "test_setting".to_string(),
             reason: "test reason".to_string(),
         };
-        assert_eq!(format!("{}", error), "Invalid setting 'test_setting': test reason");
+        assert_eq!(
+            format!("{}", error),
+            "Invalid setting 'test_setting': test reason"
+        );
     }
 
     #[test]
@@ -112,14 +134,17 @@ mod tests {
             name: "unknown_setting".to_string(),
         };
         let settings_error = SettingsError::Application(app_error);
-        assert_eq!(format!("{}", settings_error), "Settings error: Unknown setting: unknown_setting");
+        assert_eq!(
+            format!("{}", settings_error),
+            "Settings error: Unknown setting: unknown_setting"
+        );
     }
 
     #[test]
     fn test_settings_error_from_application_error() {
         let app_error = ApplicationError::DatabaseConnection("test error".to_string());
         let settings_error: SettingsError = app_error.into();
-        
+
         match settings_error {
             SettingsError::Application(ApplicationError::DatabaseConnection(msg)) => {
                 assert_eq!(msg, "test error");

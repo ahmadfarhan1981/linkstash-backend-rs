@@ -5,5 +5,5 @@ pub enum LoginError {
     #[error("Password incorrect")]
     IncorrectPassword,
     #[error("Username not found: {username}")]
-    UsernameNotFound{username: String},
+    UsernameNotFound { username: String },
 }
