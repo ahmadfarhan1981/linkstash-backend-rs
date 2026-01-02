@@ -4,10 +4,10 @@ use thiserror::Error;
 pub enum SystemConfigError {
     #[error("System config not found")]
     ConfigNotFound,
-    
+
     #[error("Owner already exists")]
     OwnerAlreadyExists,
-    
+
     #[error("Owner not found")]
     OwnerNotFound,
 }

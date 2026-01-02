@@ -5,7 +5,7 @@ use poem_openapi::Object;
 pub struct HealthResponse {
     /// Status of the service
     pub status: String,
-    
+
     /// Timestamp of the health check (ISO 8601 format)
     pub timestamp: String,
 }
@@ -15,10 +15,10 @@ pub struct HealthResponse {
 pub struct ErrorResponse {
     /// Error type or category
     pub error: String,
-    
+
     /// Human-readable error message
     pub message: String,
-    
+
     /// HTTP status code
     pub status_code: u16,
 }

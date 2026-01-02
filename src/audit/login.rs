@@ -1,8 +1,8 @@
-use serde_json::json;
+use super::AuditLogger;
 use crate::errors::InternalError;
 use crate::types::internal::audit::{AuditEvent, EventType};
 use crate::types::internal::context::RequestContext;
-use super::AuditLogger;
+use serde_json::json;
 
 impl AuditLogger {
     /// Log a successful login event
@@ -17,12 +17,21 @@ impl AuditLogger {
     ) -> Result<(), InternalError> {
         let mut event = AuditEvent::new(EventType::LoginSuccess);
         event.user_id = ctx.actor_id.clone();
-        event.ip_address = ctx.ip_address.clone().unwrap_or_else(|| "unknown".to_string());
-        event.jwt_id = ctx.claims.as_ref()
+        event.ip_address = ctx
+            .ip_address
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        event.jwt_id = ctx
+            .claims
+            .as_ref()
             .map(|c| c.jti.clone())
             .unwrap_or_else(|| "none".to_string());
-        event.data.insert("target_user_id".to_string(), json!(target_user_id));
-        event.data.insert("request_id".to_string(), json!(ctx.request_id.clone()));
+        event
+            .data
+            .insert("target_user_id".to_string(), json!(target_user_id));
+        event
+            .data
+            .insert("request_id".to_string(), json!(ctx.request_id.clone()));
 
         self.audit_store.write_event(event).await
     }

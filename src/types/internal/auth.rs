@@ -7,28 +7,28 @@ use crate::types::db::user::Model;
 pub struct Claims {
     /// Subject (user_id)
     pub sub: String,
-    
+
     /// Expiration time (Unix timestamp)
     pub exp: i64,
-    
+
     /// Issued at (Unix timestamp)
     pub iat: i64,
-    
+
     /// JWT ID (unique identifier for this token)
     pub jti: String,
-    
+
     /// Owner role flag
     pub is_owner: bool,
-    
+
     /// System Admin role flag
     pub is_system_admin: bool,
-    
+
     /// Role Admin role flag
     pub is_role_admin: bool,
-    
+
     /// Application roles (list of role names)
     pub app_roles: Vec<String>,
-    
+
     /// Password change required flag
     pub password_change_required: bool,
 }
@@ -50,7 +50,7 @@ impl AdminFlags {
             is_role_admin: false,
         }
     }
-    
+
     /// Create AdminFlags for a system admin account
     pub fn system_admin() -> Self {
         Self {
@@ -59,7 +59,7 @@ impl AdminFlags {
             is_role_admin: false,
         }
     }
-    
+
     /// Create AdminFlags for a role admin account
     pub fn role_admin() -> Self {
         Self {
@@ -68,7 +68,7 @@ impl AdminFlags {
             is_role_admin: true,
         }
     }
-    
+
     /// Create AdminFlags for a regular user (no admin roles)
     pub fn none() -> Self {
         Self {
@@ -77,7 +77,7 @@ impl AdminFlags {
             is_role_admin: false,
         }
     }
-    
+
     /// Create AdminFlags with custom role combination
     pub fn custom(is_owner: bool, is_system_admin: bool, is_role_admin: bool) -> Self {
         Self {
@@ -86,27 +86,27 @@ impl AdminFlags {
             is_role_admin,
         }
     }
-    
+
     /// Check if any admin role is set
     pub fn has_any_admin_role(&self) -> bool {
         self.is_owner || self.is_system_admin || self.is_role_admin
     }
-    
+
     /// Check if this represents an owner account
     pub fn is_owner_account(&self) -> bool {
         self.is_owner
     }
-    
+
     /// Check if this represents a system admin account
     pub fn is_system_admin_account(&self) -> bool {
         self.is_system_admin
     }
-    
+
     /// Check if this represents a role admin account
     pub fn is_role_admin_account(&self) -> bool {
         self.is_role_admin
     }
-    
+
     /// Validate that owner flag is not combined with other admin roles
     /// Returns true if the combination is valid
     pub fn is_valid(&self) -> bool {
@@ -114,11 +114,11 @@ impl AdminFlags {
         // for flexibility (design allows multiple roles simultaneously)
         true
     }
-    
+
     /// Get a human-readable description of the roles
     pub fn description(&self) -> String {
         let mut roles = Vec::new();
-        
+
         if self.is_owner {
             roles.push("Owner");
         }
@@ -128,7 +128,7 @@ impl AdminFlags {
         if self.is_role_admin {
             roles.push("Role Admin");
         }
-        
+
         if roles.is_empty() {
             "No admin roles".to_string()
         } else {

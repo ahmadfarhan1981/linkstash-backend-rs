@@ -1,6 +1,6 @@
-use poem_openapi::{payload::Json, OpenApi, Tags};
 use crate::types::dto::common::HealthResponse;
 use chrono::Utc;
+use poem_openapi::{OpenApi, Tags, payload::Json};
 
 /// Health check API
 pub struct HealthApi;
@@ -15,7 +15,7 @@ enum ApiTags {
 #[OpenApi]
 impl HealthApi {
     /// Health check endpoint
-    /// 
+    ///
     /// Returns the current status of the API service
     #[oai(path = "/health", method = "get", tag = "ApiTags::Health")]
     async fn health(&self) -> Json<HealthResponse> {

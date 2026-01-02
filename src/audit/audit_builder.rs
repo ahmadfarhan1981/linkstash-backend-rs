@@ -1,12 +1,12 @@
-use std::sync::Arc;
-use std::collections::HashMap;
-use serde::Serialize;
-use serde_json::json;
-use sha2::{Digest, Sha256};
 use crate::errors::InternalError;
 use crate::stores::AuditStore;
 use crate::types::internal::audit::{AuditEvent, EventType};
 use crate::types::internal::context::RequestContext;
+use serde::Serialize;
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Builder for creating custom audit events
 ///
@@ -29,7 +29,7 @@ use crate::types::internal::context::RequestContext;
 ///         .expect("Failed to write audit event");
 /// }
 /// ```
-/// 
+///
 pub struct AuditBuilder {
     event_type: EventType,
     user_id: Option<String>,
@@ -57,7 +57,7 @@ impl AuditBuilder {
     }
 
     /// Populate builder fields from RequestContext
-    /// 
+    ///
     /// Maps RequestContext fields to AuditEvent fields:
     /// - `actor_id` -> `user_id` (actor who performed the action)
     /// - `ip_address` -> `ip_address` (or "unknown" if None)
@@ -66,23 +66,30 @@ impl AuditBuilder {
     pub fn with_context(mut self, ctx: &RequestContext) -> Self {
         // Actor ID becomes user_id (who performed the action)
         self.user_id = Some(ctx.actor_id.clone());
-        
+
         // IP address (use "unknown" if not available)
-        self.ip_address = Some(ctx.ip_address.clone().unwrap_or_else(|| "unknown".to_string()));
-        
+        self.ip_address = Some(
+            ctx.ip_address
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
+        );
+
         // Extract JWT ID from claims if available, otherwise use "none"
         self.jwt_id = Some(
             ctx.claims
                 .as_ref()
                 .map(|claims| claims.jti.clone())
-                .unwrap_or_else(|| "none".to_string())
+                .unwrap_or_else(|| "none".to_string()),
         );
-        
+
         // Add other context fields to data JSON
-        self.data.insert("request_id".to_string(), json!(ctx.request_id));
-        self.data.insert("source".to_string(), json!(format!("{:?}", ctx.source)));
-        self.data.insert("authenticated".to_string(), json!(ctx.authenticated));
-        
+        self.data
+            .insert("request_id".to_string(), json!(ctx.request_id));
+        self.data
+            .insert("source".to_string(), json!(format!("{:?}", ctx.source)));
+        self.data
+            .insert("authenticated".to_string(), json!(ctx.authenticated));
+
         self
     }
 
@@ -159,10 +166,10 @@ impl AuditBuilder {
     }
 
     /// Build the audit event without writing to database
-    /// 
+    ///
     /// Returns the constructed AuditEvent. All required fields must be set
     /// (user_id, ip_address, jwt_id) or defaults will be used.
-    /// 
+    ///
     /// # Panics
     /// Panics if required fields are not set. Use `with_context()` or set fields manually.
     pub fn build(self) -> AuditEvent {
@@ -188,4 +195,3 @@ impl AuditBuilder {
         store.write_event(event).await
     }
 }
-

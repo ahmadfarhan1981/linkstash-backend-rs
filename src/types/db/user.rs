@@ -9,18 +9,18 @@ pub struct Model {
     pub username: String,
     pub password_hash: String,
     pub created_at: i64,
-    
+
     // Admin role flags
     pub is_owner: bool,
     pub is_system_admin: bool,
     pub is_role_admin: bool,
-    
+
     // Application roles (JSON array of strings)
     pub app_roles: Option<String>,
-    
+
     // Password management
     pub password_change_required: bool,
-    
+
     // Last modification timestamp
     pub updated_at: i64,
 }

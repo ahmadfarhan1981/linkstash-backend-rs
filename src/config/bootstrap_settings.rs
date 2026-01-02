@@ -1,31 +1,33 @@
+use crate::config::EnvironmentProvider;
+use crate::config::config_spec::ConfigSpec;
+use crate::config::errors::ApplicationError;
 use std::fmt;
 use std::sync::Arc;
-use crate::config::errors::ApplicationError;
-use crate::config::config_spec::ConfigSpec;
-use crate::config::EnvironmentProvider;
 
 /// Bootstrap settings for infrastructure configuration
 pub struct BootstrapSettings {
     database_url: String,
-    audit_database_url:String,
+    audit_database_url: String,
     server_host: String,
     server_port: u16,
 }
 
 impl BootstrapSettings {
     /// Load bootstrap settings from environment variables using ConfigSpec
-    /// 
+    ///
     /// This method uses the unified ConfigSpec system for consistent validation
     /// and error handling across all configuration layers.
-    pub fn from_env_provider(env_provider: Arc<dyn EnvironmentProvider + Send + Sync>) -> Result<Self, ApplicationError> {
+    pub fn from_env_provider(
+        env_provider: Arc<dyn EnvironmentProvider + Send + Sync>,
+    ) -> Result<Self, ApplicationError> {
         // Define configuration specifications for each setting
         // Use the provided Arc for sharing across ConfigSpecs
-        
+
         let database_url_spec = ConfigSpec::new(env_provider.clone())
             .env_override("DATABASE_URL")
             .default_value("sqlite://auth.db?mode=rwc")
             .min_length(1);
-        
+
         let audit_database_url_spec = ConfigSpec::new(env_provider.clone())
             .env_override("AUDIT_DATABASE_URL")
             .default_value("sqlite://audit.db?mode=rwc")
@@ -35,7 +37,7 @@ impl BootstrapSettings {
             .env_override("HOST")
             .default_value("0.0.0.0")
             .validator(ConfigSpec::validate_host_address);
-            
+
         let port_spec = ConfigSpec::new(env_provider.clone())
             .env_override("PORT")
             .default_value("3000")
@@ -45,22 +47,16 @@ impl BootstrapSettings {
             });
 
         // Load settings using ConfigSpec (no database needed for bootstrap)
-        let database_url = database_url_spec
-            .load_setting_with_source(None)?
-            .value;
-        
+        let database_url = database_url_spec.load_setting_with_source(None)?.value;
+
         let audit_database_url = audit_database_url_spec
             .load_setting_with_source(None)?
             .value;
-            
-        let server_host = host_spec
-            .load_setting_with_source(None)?
-            .value;
-            
-        let port_value = port_spec
-            .load_setting_with_source(None)?
-            .value;
-            
+
+        let server_host = host_spec.load_setting_with_source(None)?.value;
+
+        let port_value = port_spec.load_setting_with_source(None)?.value;
+
         // Parse port using ConfigSpec's parsing utilities
         let server_port = ConfigSpec::parse_port(&port_value, "PORT")?;
 
@@ -127,7 +123,7 @@ mod tests {
         let env_provider = create_test_env(env_vars);
 
         let settings = BootstrapSettings::from_env_provider(env_provider).unwrap();
-        
+
         assert_eq!(settings.database_url(), "sqlite://test.db");
         assert_eq!(settings.server_host(), "127.0.0.1");
         assert_eq!(settings.server_port(), 8080);
@@ -136,13 +132,12 @@ mod tests {
 
     #[test]
     fn test_bootstrap_settings_with_defaults() {
-        let env_vars = HashMap::from([
-            ("DATABASE_URL".to_string(), "sqlite://test.db".to_string()),
-        ]);
+        let env_vars =
+            HashMap::from([("DATABASE_URL".to_string(), "sqlite://test.db".to_string())]);
         let env_provider = create_test_env(env_vars);
 
         let settings = BootstrapSettings::from_env_provider(env_provider).unwrap();
-        
+
         assert_eq!(settings.database_url(), "sqlite://test.db");
         assert_eq!(settings.server_host(), "0.0.0.0");
         assert_eq!(settings.server_port(), 3000);
@@ -158,7 +153,7 @@ mod tests {
         let env_provider = create_test_env(env_vars);
 
         let settings = BootstrapSettings::from_env_provider(env_provider).unwrap();
-        
+
         // Should use default value when DATABASE_URL is not set
         assert_eq!(settings.database_url(), "sqlite://auth.db?mode=rwc");
         assert_eq!(settings.server_host(), "127.0.0.1");
@@ -175,14 +170,17 @@ mod tests {
         let env_provider = create_test_env(env_vars);
 
         let result = BootstrapSettings::from_env_provider(env_provider);
-        
+
         // Empty DATABASE_URL should fail validation (minimum length requirement)
         assert!(result.is_err());
         match result.unwrap_err() {
-            ApplicationError::InvalidSetting { setting_name, reason } => {
+            ApplicationError::InvalidSetting {
+                setting_name,
+                reason,
+            } => {
                 assert_eq!(setting_name, "DATABASE_URL");
                 assert!(reason.contains("must be at least 1 characters long"));
-            },
+            }
             other => panic!("Expected InvalidSetting for DATABASE_URL, got: {:?}", other),
         }
     }
@@ -197,14 +195,17 @@ mod tests {
         let env_provider = create_test_env(env_vars);
 
         let result = BootstrapSettings::from_env_provider(env_provider);
-        
+
         // Empty HOST should fail validation
         assert!(result.is_err());
         match result.unwrap_err() {
-            ApplicationError::InvalidSetting { setting_name, reason } => {
+            ApplicationError::InvalidSetting {
+                setting_name,
+                reason,
+            } => {
                 assert_eq!(setting_name, "HOST");
                 assert!(reason.contains("cannot be empty"));
-            },
+            }
             other => panic!("Expected InvalidSetting for HOST, got: {:?}", other),
         }
     }
@@ -219,13 +220,16 @@ mod tests {
         let env_provider = create_test_env(env_vars);
 
         let result = BootstrapSettings::from_env_provider(env_provider);
-        
+
         assert!(result.is_err());
         match result.unwrap_err() {
-            ApplicationError::InvalidSetting { setting_name, reason } => {
+            ApplicationError::InvalidSetting {
+                setting_name,
+                reason,
+            } => {
                 assert_eq!(setting_name, "PORT");
                 assert!(reason.contains("Expected port number between 1 and 65535"));
-            },
+            }
             other => panic!("Expected InvalidSetting for PORT, got: {:?}", other),
         }
     }
@@ -240,13 +244,16 @@ mod tests {
         let env_provider = create_test_env(env_vars);
 
         let result = BootstrapSettings::from_env_provider(env_provider);
-        
+
         assert!(result.is_err());
         match result.unwrap_err() {
-            ApplicationError::InvalidSetting { setting_name, reason } => {
+            ApplicationError::InvalidSetting {
+                setting_name,
+                reason,
+            } => {
                 assert_eq!(setting_name, "PORT");
                 assert!(reason.contains("outside valid range"));
-            },
+            }
             _ => panic!("Expected InvalidSetting error for zero PORT"),
         }
     }
@@ -284,7 +291,7 @@ mod tests {
         let env_provider = create_test_env(env_vars);
 
         let settings = BootstrapSettings::from_env_provider(env_provider).unwrap();
-        
+
         assert_eq!(settings.server_host(), "::1");
         assert_eq!(settings.server_address(), "::1:8080");
     }
@@ -300,7 +307,7 @@ mod tests {
 
         let settings = BootstrapSettings::from_env_provider(env_provider).unwrap();
         let debug_str = format!("{:?}", settings);
-        
+
         assert!(debug_str.contains("database_url"));
         assert!(debug_str.contains("sqlite://test.db"));
         assert!(debug_str.contains("server_host"));
@@ -312,14 +319,17 @@ mod tests {
     #[test]
     fn test_bootstrap_settings_getters() {
         let env_vars = HashMap::from([
-            ("DATABASE_URL".to_string(), "sqlite://production.db".to_string()),
+            (
+                "DATABASE_URL".to_string(),
+                "sqlite://production.db".to_string(),
+            ),
             ("HOST".to_string(), "api.example.com".to_string()),
             ("PORT".to_string(), "443".to_string()),
         ]);
         let env_provider = create_test_env(env_vars);
 
         let settings = BootstrapSettings::from_env_provider(env_provider).unwrap();
-        
+
         assert_eq!(settings.database_url(), "sqlite://production.db");
         assert_eq!(settings.server_host(), "api.example.com");
         assert_eq!(settings.server_port(), 443);
@@ -330,27 +340,35 @@ mod tests {
     fn test_bootstrap_settings_uses_configspec() {
         // Test that the new ConfigSpec-based implementation works
         let env_vars = HashMap::from([
-            ("DATABASE_URL".to_string(), "sqlite://configspec-test.db".to_string()),
+            (
+                "DATABASE_URL".to_string(),
+                "sqlite://configspec-test.db".to_string(),
+            ),
             ("HOST".to_string(), "127.0.0.1".to_string()),
             ("PORT".to_string(), "9000".to_string()),
         ]);
         let env_provider = create_test_env(env_vars);
 
         let settings = BootstrapSettings::from_env_provider(env_provider).unwrap();
-        
+
         // Verify all values are loaded correctly
         assert_eq!(settings.database_url(), "sqlite://configspec-test.db");
         assert_eq!(settings.server_host(), "127.0.0.1");
         assert_eq!(settings.server_port(), 9000);
-        
+
         // Test that defaults work
-        let env_vars_defaults = HashMap::from([
-            ("DATABASE_URL".to_string(), "sqlite://configspec-test.db".to_string()),
-        ]);
+        let env_vars_defaults = HashMap::from([(
+            "DATABASE_URL".to_string(),
+            "sqlite://configspec-test.db".to_string(),
+        )]);
         let env_provider_defaults = create_test_env(env_vars_defaults);
-        
-        let settings_with_defaults = BootstrapSettings::from_env_provider(env_provider_defaults).unwrap();
-        assert_eq!(settings_with_defaults.database_url(), "sqlite://configspec-test.db");
+
+        let settings_with_defaults =
+            BootstrapSettings::from_env_provider(env_provider_defaults).unwrap();
+        assert_eq!(
+            settings_with_defaults.database_url(),
+            "sqlite://configspec-test.db"
+        );
         assert_eq!(settings_with_defaults.server_host(), "0.0.0.0");
         assert_eq!(settings_with_defaults.server_port(), 3000);
     }
@@ -366,7 +384,7 @@ mod tests {
         let env_provider = create_test_env(env_vars);
         let settings = BootstrapSettings::from_env_provider(env_provider).unwrap();
         assert_eq!(settings.server_port(), 8080);
-        
+
         // Test boundary values
         let env_vars = HashMap::from([
             ("DATABASE_URL".to_string(), "sqlite://test.db".to_string()),
@@ -376,7 +394,7 @@ mod tests {
         let env_provider = create_test_env(env_vars);
         let settings = BootstrapSettings::from_env_provider(env_provider).unwrap();
         assert_eq!(settings.server_port(), 1);
-        
+
         let env_vars = HashMap::from([
             ("DATABASE_URL".to_string(), "sqlite://test.db".to_string()),
             ("HOST".to_string(), "127.0.0.1".to_string()),
@@ -385,7 +403,7 @@ mod tests {
         let env_provider = create_test_env(env_vars);
         let settings = BootstrapSettings::from_env_provider(env_provider).unwrap();
         assert_eq!(settings.server_port(), 65535);
-        
+
         // Test invalid port (zero)
         let env_vars = HashMap::from([
             ("DATABASE_URL".to_string(), "sqlite://test.db".to_string()),
@@ -395,7 +413,7 @@ mod tests {
         let env_provider = create_test_env(env_vars);
         let result = BootstrapSettings::from_env_provider(env_provider);
         assert!(result.is_err());
-        
+
         // Test invalid port (too high)
         let env_vars = HashMap::from([
             ("DATABASE_URL".to_string(), "sqlite://test.db".to_string()),
@@ -405,7 +423,7 @@ mod tests {
         let env_provider = create_test_env(env_vars);
         let result = BootstrapSettings::from_env_provider(env_provider);
         assert!(result.is_err());
-        
+
         // Test invalid port (not a number)
         let env_vars = HashMap::from([
             ("DATABASE_URL".to_string(), "sqlite://test.db".to_string()),
@@ -420,13 +438,8 @@ mod tests {
     #[test]
     fn test_bootstrap_settings_ipv4_validation() {
         // Test valid IPv4 addresses
-        let test_cases = vec![
-            "127.0.0.1",
-            "192.168.1.1",
-            "0.0.0.0",
-            "255.255.255.255",
-        ];
-        
+        let test_cases = vec!["127.0.0.1", "192.168.1.1", "0.0.0.0", "255.255.255.255"];
+
         for host in test_cases {
             let env_vars = HashMap::from([
                 ("DATABASE_URL".to_string(), "sqlite://test.db".to_string()),
@@ -437,14 +450,10 @@ mod tests {
             let settings = BootstrapSettings::from_env_provider(env_provider).unwrap();
             assert_eq!(settings.server_host(), host);
         }
-        
+
         // Test invalid IPv4 addresses
-        let invalid_cases = vec![
-            "256.1.1.1",
-            "192.168.01.1",
-            "300.300.300.300",
-        ];
-        
+        let invalid_cases = vec!["256.1.1.1", "192.168.01.1", "300.300.300.300"];
+
         for host in invalid_cases {
             let env_vars = HashMap::from([
                 ("DATABASE_URL".to_string(), "sqlite://test.db".to_string()),
@@ -455,14 +464,14 @@ mod tests {
             let result = BootstrapSettings::from_env_provider(env_provider);
             assert!(result.is_err(), "Expected error for invalid host: {}", host);
         }
-        
+
         // Test hostnames (should still work)
         let hostname_cases = vec![
             "localhost",
             "example.com",
             "::1", // IPv6
         ];
-        
+
         for host in hostname_cases {
             let env_vars = HashMap::from([
                 ("DATABASE_URL".to_string(), "sqlite://test.db".to_string()),
@@ -486,7 +495,7 @@ mod tests {
         let env_provider = create_test_env(env_vars);
         let settings = BootstrapSettings::from_env_provider(env_provider).unwrap();
         assert_eq!(settings.server_host(), "127.0.0.1");
-        
+
         // Test invalid IPv4 - out of range
         let env_vars = HashMap::from([
             ("DATABASE_URL".to_string(), "sqlite://test.db".to_string()),

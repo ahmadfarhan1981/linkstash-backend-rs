@@ -35,8 +35,7 @@ impl SettingsRegistry {
     /// * `Ok(SettingsRegistry)` - Successfully initialized with all settings loaded
     /// * `Err(ApplicationError)` - Failed to connect to database or load required settings
     pub async fn init(db: Arc<sea_orm::DatabaseConnection>) -> Result<Arc<Self>, ApplicationError> {
-        let application_settings =
-            ApplicationSettings::init(db.clone())?;//TODO should be passed in via the appdata/bootstrap settins.
+        let application_settings = ApplicationSettings::init(db.clone())?; //TODO should be passed in via the appdata/bootstrap settins.
         let registry = Self {
             db,
             application_settings: Arc::new(ArcSwap::from_pointee(application_settings)),

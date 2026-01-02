@@ -3,7 +3,5 @@ pub mod api;
 pub mod internal;
 
 // Re-exports for convenience
-pub use api::{AuthError, AdminError};
+pub use api::{AdminError, AuthError};
 pub use internal::InternalError;
-
-
