@@ -70,10 +70,10 @@ impl AuthenticationProvider {
             .await?;
 
         match authenticated {
-            true => Ok(VerifyCredentialResult::Success { user }),
-            false => Ok(VerifyCredentialResult::Failure {
+            true => Ok(ActionOutcome::new(VerifyCredentialResult::Success { user })),//TODO Audit intent
+            false => Ok(ActionOutcome::new(VerifyCredentialResult::Failure {
                 reason: LoginFailureReason::InvalidCredentials,
-            }),
+            })),//TODO Audit intent
         }
     }
 

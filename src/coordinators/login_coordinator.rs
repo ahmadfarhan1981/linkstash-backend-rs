@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
 use poem_openapi::payload::Json;
-use sea_orm::ConnectionTrait;
+use sea_orm::{ConnectionTrait, TransactionTrait};
 
 use crate::audit::AuditLogger;
-use crate::coordinators::{Exec, execute};
+use crate::config::database::DatabaseConnections;
+use crate::coordinators::{Coordinator, Exec, execute};
 use crate::errors::AuthError;
 use crate::providers::TokenProvider;
 use crate::providers::authentication_provider::AuthenticationProvider;
+use crate::providers::authentication_provider::VerifyCredentialResult::{Failure, Success};
 use crate::stores::user_store::UserStore;
 use crate::{
     AppData,
@@ -24,15 +26,15 @@ pub struct LoginCoordinator {
     authentication_provider: Arc<AuthenticationProvider>,
     token_provider: Arc<TokenProvider>,
     user_store: Arc<UserStore>,
+    connections: DatabaseConnections,
 }
 
-impl LoginCoordinator {
-    fn exec(&self, ctx: &RequestContext) -> Exec {
-        Exec {
-            ctx: ctx.clone(),
-            audit: Arc::clone(&self.audit_logger),
-        }
+impl Coordinator for LoginCoordinator{
+    fn get_logger (&self)-> &Arc<AuditLogger> {
+        &self.audit_logger
     }
+}
+impl LoginCoordinator {
 
     pub fn new(app_data: Arc<AppData>) -> Self {
         Self {
@@ -40,33 +42,25 @@ impl LoginCoordinator {
             audit_logger: Arc::clone(&app_data.audit_logger),
             token_provider: Arc::clone(&app_data.providers.token_provider),
             user_store: Arc::clone(&app_data.stores.user_store),
+            connections: app_data.connections.clone(),
         }
     }
 
     pub async fn login(
         &self,
         ctx: &RequestContext,
-        conn: &impl ConnectionTrait,
         username: String,
         password: String,
     ) -> Result<LoginApiResponse, ApplicationError> {
-      
+        let conn =self.connections.begin_auth_transaction().await?;
         let exec = self.exec(ctx);
-
-
-        let login_reponse = exec.fut(self.authentication_provider.verify_credential(conn, LoginRequest { username, password })).await?;
+        let verify_credential_result = exec.fut(self.authentication_provider.verify_credential(&conn, LoginRequest { username, password })).await?;
         
 
-
-        match self
-            .authentication_provider
-            .verify_credential(conn, )
-            .await
-        {
-            Ok(user) => match user {
-                crate::providers::authentication_provider::LoginResponse::Success { user } => {
+        match verify_credential_result {
+            Success { user } => {        
                     let user_for_jwt = exec
-                        .fut(self.user_store.get_user_roles_for_jwt(conn, &user.id))
+                        .fut(self.user_store.get_user_roles_for_jwt(&conn, &user.id))
                         .await?;
                     let jwt = exec
                         .fut(self.token_provider.generate_jwt(&user_for_jwt))
@@ -76,7 +70,7 @@ impl LoginCoordinator {
                         .await?;
                     self.user_store
                         .save_refresh_token_for_user(
-                            conn,
+                            &conn,
                             &user.id,
                             &rt.token_hash,
                             rt.created_at,
@@ -89,12 +83,12 @@ impl LoginCoordinator {
                         token_type: jwt.token_type,
                         expires_in: jwt.expires_in,
                     })))
-                }
-                crate::providers::authentication_provider::LoginResponse::Failure { reason } => {
-                    Err(AuthError::invalid_credentials())
-                }
-            },
-            Err(_e) => {}
+                },
+            Failure { reason } => Err(ApplicationError::UnknownServerError { message: "Placeholeder".to_owned() }),
         }
+
+        
+        
     }
+    
 }
