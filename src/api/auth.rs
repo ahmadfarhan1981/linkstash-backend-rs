@@ -1,6 +1,7 @@
 use crate::AppData;
 use crate::coordinators::LoginCoordinator;
 use crate::types::dto::auth::{ErrorResponse, LoginApiResponse, LoginRequest, TokenResponse};
+use crate::types::internal::context::RequestContext;
 use poem::Request;
 use poem_openapi::auth::BearerAuthorization;
 use poem_openapi::{OpenApi, SecurityScheme, Tags, auth::Bearer, payload::Json};
@@ -45,8 +46,10 @@ impl AuthApi {
             Ok(bearer) => Some(bearer),
             Err(_) => None,
         };
+
+        let ctx = RequestContext::new();
         
-        self.auth_coordinator.login(ctx, conn, username, password)
+        // self.auth_coordinator.login(ctx, username, password);
 
         // self.auth_coordinator.login(ctx, username, password)
         LoginApiResponse::Ok(Json(TokenResponse {

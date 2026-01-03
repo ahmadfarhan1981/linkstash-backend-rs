@@ -43,9 +43,16 @@ pub async fn execute<T>(
     }
 }
 
+
+
 pub struct ActionOutcome<T> {
     pub value: T,
     pub audit: Vec<AuditIntent>,
+}
+impl<T> ActionOutcome<T>{
+    pub fn new(value:T)->Self{
+        Self { value, audit: Vec::new() }
+    }
 }
 
 pub struct AuditIntent {
@@ -86,5 +93,16 @@ impl Exec {
         F: Future<Output = Result<ActionOutcome<T>, InternalError>>,
     {
         execute(&self.ctx, &self.audit, fut.await).await
+    }
+}
+
+pub trait Coordinator{
+    fn get_logger (&self)-> &Arc<AuditLogger>;
+
+    fn exec(&self, ctx: &RequestContext) -> Exec {
+        Exec {
+            ctx: ctx.clone(),
+            audit: Arc::clone(self.get_logger()),
+        }
     }
 }

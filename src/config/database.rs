@@ -10,6 +10,7 @@ use sea_orm::{
 };
 use std::sync::Arc;
 
+#[derive(Clone)]
 pub struct DatabaseConnections {
     pub auth: DatabaseConnection,
     pub audit: DatabaseConnection,
