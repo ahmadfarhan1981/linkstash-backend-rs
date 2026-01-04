@@ -72,7 +72,7 @@ impl AuthenticationProvider {
 
             
         match authenticated {
-            true => ProviderResult::some(VerifyCredentialResult::Success { user }),//TODO Audit intent
+            true => ProviderResult::new(VerifyCredentialResult::Success { user }),//TODO Audit intent
             false => Ok(ActionOutcome::new(VerifyCredentialResult::Failure {
                 reason: LoginFailureReason::InvalidCredentials,
             })),//TODO Audit intent
