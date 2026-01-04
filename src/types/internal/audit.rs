@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
+use chrono;
 
 /// Event types for audit logging
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +89,7 @@ pub struct AuditEvent {
     pub user_id: String,
     pub ip_address: String,
     pub jwt_id: String,
+    pub timestamp: String, // RFC3339 formatted timestamp
     pub data: HashMap<String, serde_json::Value>,
 }
 
@@ -99,6 +101,7 @@ impl AuditEvent {
             user_id: String::new(),
             ip_address: String::new(),
             jwt_id: String::new(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
             data: HashMap::new(),
         }
     }

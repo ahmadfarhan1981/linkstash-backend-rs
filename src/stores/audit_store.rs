@@ -1,4 +1,3 @@
-use chrono::Utc;
 use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
 
 use crate::errors::InternalError;
@@ -20,7 +19,7 @@ impl AuditStore {
     /// Write an audit event to the database
     ///
     /// Validates that user_id is present, serializes the data HashMap to JSON,
-    /// and inserts the event into the audit_events table.
+    /// and inserts the event into the audit_events table using the event's timestamp.
     ///
     /// # Errors
     ///
@@ -35,7 +34,7 @@ impl AuditStore {
         // Note: user_id is optional for events like login_failure where user may not exist
         let audit_event = audit_event::ActiveModel {
             id: sea_orm::ActiveValue::NotSet, // Let auto-increment handle this
-            timestamp: Set(Utc::now().to_rfc3339()),
+            timestamp: Set(event.timestamp), // Use the event's timestamp instead of now
             event_type: Set(event.event_type.to_string()),
             user_id: Set(event.user_id),
             ip_address: Set(event.ip_address),
