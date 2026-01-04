@@ -2,6 +2,7 @@ use crate::errors::InternalError;
 use crate::stores::AuditStore;
 use crate::types::internal::audit::{AuditEvent, EventType};
 use crate::types::internal::context::RequestContext;
+use chrono;
 use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -35,6 +36,7 @@ pub struct AuditBuilder {
     user_id: Option<String>,
     ip_address: Option<String>,
     jwt_id: Option<String>,
+    timestamp: Option<String>,
     data: HashMap<String, serde_json::Value>,
     store: Arc<AuditStore>,
 }
@@ -51,6 +53,7 @@ impl AuditBuilder {
             user_id: None,
             ip_address: None,
             jwt_id: None,
+            timestamp: None,
             data: HashMap::new(),
             store,
         }
@@ -120,6 +123,15 @@ impl AuditBuilder {
         self
     }
 
+    /// Set the timestamp for this audit event
+    ///
+    /// # Arguments
+    /// * `timestamp` - RFC3339 formatted timestamp string
+    pub fn timestamp(mut self, timestamp: impl Into<String>) -> Self {
+        self.timestamp = Some(timestamp.into());
+        self
+    }
+
     /// Add an arbitrary field to the audit event
     ///
     /// The value will be serialized to JSON and stored in the event's data field.
@@ -168,7 +180,7 @@ impl AuditBuilder {
     /// Build the audit event without writing to database
     ///
     /// Returns the constructed AuditEvent. All required fields must be set
-    /// (user_id, ip_address, jwt_id) or defaults will be used.
+    /// (user_id, ip_address, jwt_id, timestamp) or defaults will be used.
     ///
     /// # Panics
     /// Panics if required fields are not set. Use `with_context()` or set fields manually.
@@ -176,12 +188,14 @@ impl AuditBuilder {
         let user_id = self.user_id.unwrap_or_else(|| "unknown".to_string());
         let ip_address = self.ip_address.unwrap_or_else(|| "unknown".to_string());
         let jwt_id = self.jwt_id.unwrap_or_else(|| "none".to_string());
+        let timestamp = self.timestamp.unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
 
         AuditEvent {
             event_type: self.event_type,
             user_id,
             ip_address,
             jwt_id,
+            timestamp,
             data: self.data,
         }
     }
