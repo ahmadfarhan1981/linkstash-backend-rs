@@ -1,6 +1,6 @@
 use crate::AppData;
 use crate::coordinators::LoginCoordinator;
-use crate::types::dto::auth::{ErrorResponse, LoginApiResponse, LoginRequest, TokenResponse};
+use crate::types::dto::auth::{ LoginApiResponse, LoginRequest, TokenResponse};
 use crate::types::internal::context::RequestContext;
 use poem::Request;
 use poem_openapi::auth::BearerAuthorization;

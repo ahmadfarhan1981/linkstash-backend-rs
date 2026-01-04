@@ -10,6 +10,7 @@ use crate::providers::crypto_provider::CryptoProvider;
 use crate::providers::token_provider::GeneratedRT;
 use crate::providers::{TokenProvider, token_provider};
 use crate::stores::user_store::{UserForAuth, UserStore};
+use crate::types::{ProviderResult, ProviderResultTrait};
 use crate::types::internal::context::RequestContext;
 
 pub struct LoginRequest {
@@ -59,7 +60,7 @@ impl AuthenticationProvider {
         &self,
         conn: &impl ConnectionTrait,
         creds: LoginRequest,
-    ) -> Result<ActionOutcome<VerifyCredentialResult>, InternalError> {
+    ) -> ProviderResult<VerifyCredentialResult> {
         let user = self
             .store
             .get_user_from_username_for_auth(conn, &creds.username)
@@ -69,8 +70,9 @@ impl AuthenticationProvider {
             .verify_password(&user.password_hash, &creds.password)
             .await?;
 
+            
         match authenticated {
-            true => Ok(ActionOutcome::new(VerifyCredentialResult::Success { user })),//TODO Audit intent
+            true => ProviderResult::some(VerifyCredentialResult::Success { user }),//TODO Audit intent
             false => Ok(ActionOutcome::new(VerifyCredentialResult::Failure {
                 reason: LoginFailureReason::InvalidCredentials,
             })),//TODO Audit intent
