@@ -14,7 +14,7 @@ use poem::Request;
 use poem_openapi::auth::Bearer;
 
 
-use crate::{providers::TokenProvider, types::internal::context::RequestContext};
+use crate::{providers::TokenProvider, types::{ApiResult, internal::context::RequestContext}};
 
 
 pub trait Api {
@@ -24,9 +24,10 @@ pub trait Api {
         print!("Test");
     }
 
-    async fn get_context_for_unauthenticated_endpoint(&self, req :&Request){
+    async fn get_context_for_unauthenticated_endpoint(&self, req :&Request)-> ApiResult<RequestContext>{
         let token_provider = self.get_token_provider();
         let context = RequestContext::validate_request(req, token_provider).await;
+        Err(crate::config::ApplicationError::UnknownSetting { name: "placeholder".to_owned() })
     }
 
 
