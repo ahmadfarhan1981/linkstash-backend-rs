@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use crate::{providers::TokenProvider, types::internal::auth::Claims};
+use crate::{errors::AuthError, providers::TokenProvider, types::internal::auth::Claims};
 use poem::Request;
-use poem_openapi::auth::Bearer;
+use poem_openapi::auth::{Bearer, BearerAuthorization};
 use uuid::Uuid;
 
 /// Source of the request

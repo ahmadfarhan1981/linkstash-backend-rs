@@ -164,11 +164,7 @@ pub enum ChangePasswordApiResponse {
     BadRequest(Json<ErrorResponse>),
 }
 
-/// Generic error response
-#[derive(Object, Debug, Serialize, Deserialize)]
-pub struct ErrorResponse {
-    /// Error message
-    pub error: String,
-}
 
 use poem_openapi::payload::Json;
+
+use crate::types::dto::common::ErrorResponse;
