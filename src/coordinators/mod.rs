@@ -8,19 +8,21 @@
 // pub mod auth_coordinator;
 // pub mod admin_coordinator;
 pub mod login_coordinator;
-use std::{collections::HashMap, sync::Arc};
 
 // Re-export coordinators for clean imports
 // pub use auth_coordinator::AuthCoordinator;
 // pub use admin_coordinator::AdminCoordinator;
 pub use login_coordinator::LoginCoordinator;
 
+use std::{future::Future, sync::Arc};
+
 use crate::{
     audit::AuditLogger,
     config::ApplicationError,
     errors::InternalError,
     types::internal::{
-        audit::{AuditEvent, EventType},
+        action_outcome::ActionOutcome,
+        audit_intent::AuditIntent,
         context::RequestContext,
     },
 };
@@ -42,28 +44,6 @@ pub async fn execute<T>(
         }
     }
 }
-
-
-
-pub struct ActionOutcome<T> {
-    pub value: T,
-    pub audit: Vec<AuditIntent>,
-}
-impl<T> ActionOutcome<T>{
-    pub fn new(value:T)->Self{
-        Self { value, audit: Vec::new() }
-    }
-}
-
-pub struct AuditIntent {
-    pub event_type: EventType,
-    pub data: HashMap<String, serde_json::Value>,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-}
-
-
-
-// use std::{future::Future, sync::Arc};
 
 #[derive(Clone)]
 pub struct Exec {

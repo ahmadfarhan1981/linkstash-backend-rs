@@ -1,5 +1,5 @@
 
-use crate::{config::ApplicationError, coordinators::ActionOutcome, errors::InternalError, types::internal::audit::AuditEvent};
+use crate::{config::ApplicationError, errors::InternalError, types::internal::{action_outcome::ActionOutcome, audit::AuditEvent}};
 
 // Types layer - All data structures
 pub mod db;
@@ -23,22 +23,7 @@ pub trait ProviderResultTrait<T> {
     fn new (value: T) -> ProviderResult<T>{
         Ok(ActionOutcome::new(value))
     }
-    // fn audit(&self, event: AuditEvent) -> ProviderResult<T> {
-    //     match self {
-    //         Ok(outcome) => {
-    //             // Clone the outcome and add the audit event
-    //             let mut new_outcome = outcome.clone();
-    //             // new_outcome.add_audit_event(event);
-    //             Ok(new_outcome)
-    //         }
-    //         Err(error) => {
-    //             // For errors, we could either:
-    //             // 1. Just return the error as-is
-    //             // 2. Or attach the audit event to the error if it supports it
-    //             Err(error.clone())
-    //         }
-    //     }
-    // }
+   
     fn error(error: InternalError)->ProviderResult<T>{
         Err(error)
     }

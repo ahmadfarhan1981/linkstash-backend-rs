@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::audit::audit_logger::AuditLogger;
 use crate::config::database::DatabaseConnections;
-use crate::coordinators::ActionOutcome;
+use crate::types::internal::action_outcome::ActionOutcome;
 use crate::errors::InternalError;
 use crate::providers::crypto_provider::CryptoProvider;
 use crate::providers::token_provider::GeneratedRT;
