@@ -1,6 +1,6 @@
 use crate::AppData;
 use crate::audit::AuditLogger;
-use crate::coordinators::ActionOutcome;
+use crate::types::internal::action_outcome::ActionOutcome;
 use crate::errors::InternalError;
 use crate::errors::internal::login::LoginError::*;
 use crate::errors::internal::{CredentialError, DatabaseError};
