@@ -7,11 +7,10 @@ pub mod jwt_validation;
 pub mod login;
 pub mod system_config;
 
-use crate::{config::ApplicationError, errors::internal::login::LoginError};
+use crate::{config::ApplicationError, errors::internal::{jwt_validation::JwtValidationError, login::LoginError}};
 pub use audit::AuditError;
 pub use credential::CredentialError;
 pub use database::DatabaseError;
-pub use jwt_validation::JWTValidationError;
 pub use system_config::SystemConfigError;
 
 /// Internal error type for store and service operations
@@ -42,7 +41,7 @@ pub enum InternalError {
     Audit(#[from] AuditError),
 
     #[error(transparent)]
-    JWTValidation(#[from] JWTValidationError),
+    JWTValidation(#[from] JwtValidationError),
 }
 impl InternalError {
     pub fn database(operation: &str, source: sea_orm::DbErr) -> InternalError {

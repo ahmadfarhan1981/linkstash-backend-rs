@@ -1,8 +1,9 @@
 use crate::config::SecretManager;
+use crate::errors::internal::jwt_validation::JwtValidationError;
 use crate::types::internal::action_outcome::ActionOutcome;
 use crate::errors::InternalError;
-use crate::errors::internal::{CredentialError, JWTValidationError};
-use crate::providers::{CryptoProvider, crypto_provider};
+use crate::errors::internal::{CredentialError};
+use crate::providers::CryptoProvider;
 use crate::stores::user_store::UserForJWT;
 use crate::types::internal::auth::Claims;
 use base64::{Engine as _, engine::general_purpose};
@@ -157,91 +158,63 @@ impl TokenProvider {
             &validation,
         )
         .map_err(|e| {
-            match e.kind(){
-                ErrorKind::MissingAlgorithm=> InternalError::JWTValidation(JWTValidationError::InvalidAlgorithm { source: e } ),
-                ErrorKind::InvalidToken => todo!(),
-                ErrorKind::InvalidSignature => todo!(),
-                ErrorKind::InvalidEcdsaKey => todo!(),
-                ErrorKind::InvalidRsaKey(_) => todo!(),
-                ErrorKind::RsaFailedSigning => todo!(),
-                ErrorKind::InvalidAlgorithmName => todo!(),
-                ErrorKind::InvalidKeyFormat => todo!(),
-                ErrorKind::MissingRequiredClaim(_) => todo!(),
-                ErrorKind::ExpiredSignature => todo!(),
-                ErrorKind::InvalidIssuer => todo!(),
-                ErrorKind::InvalidAudience => todo!(),
-                ErrorKind::InvalidSubject => todo!(),
-                ErrorKind::ImmatureSignature => todo!(),
-                ErrorKind::InvalidAlgorithm => todo!(),
-                ErrorKind::Base64(decode_error) => todo!(),
-                ErrorKind::Json(error) => todo!(),
-                ErrorKind::Utf8(_) => todo!(),
-                ErrorKind::Crypto(unspecified) => todo!(),
-                _ => todo!(),
-            }
+            InternalError::JWTValidation(JwtValidationError::from_error(e, token) )
 
-            // // Check if the error is due to expiration
-            // if e.to_string().contains("ExpiredSignature") {
-            //     InternalError::from(CredentialError::ExpiredToken("jwt".to_string()))
-            // } else {
-            //     InternalError::from(CredentialError::InvalidToken {
-            //         token_type: "jwt".to_string(),
-            //         reason: "invalid signature or malformed".to_string(),
-            //     })
-            // }
         });
-
-        // Log validation failures at point of action
-        if let Err(ref err) = token_data {
-            // Try to extract claims without validation for audit logging
-            if let Ok(unverified_claims) = self.extract_unverified_claims(token) {
-                let failure_reason = match err {
-                    InternalError::Credential(CredentialError::ExpiredToken(_)) => "expired",
-                    InternalError::Credential(CredentialError::InvalidToken { .. }) => {
-                        "invalid_signature"
-                    }
-                    _ => "validation_error",
-                };
-
-                // Create temporary RequestContext from unverified JWT claims for audit logging
-                let ctx = crate::types::internal::context::RequestContext {
-                    ip_address: None, // Not available in token validation context
-                    request_id: uuid::Uuid::new_v4().to_string(),
-                    authenticated: false, // JWT validation failed
-                    claims: Some(unverified_claims.clone()),
-                    source: crate::types::internal::context::RequestSource::API,
-                    actor_id: unverified_claims.sub.clone(),
-                };
-
-                // Check if this is a tampering attempt (invalid signature)
-                if matches!(
-                    err,
-                    InternalError::Credential(CredentialError::InvalidToken { .. })
-                ) {
-                    // if let Err(audit_err) = audit_logger::log_jwt_tampered(
-                    //     &self.audit_store,
-                    //     &ctx,
-                    //     token.to_string(),
-                    //     failure_reason.to_string(),
-                    // ).await {
-                    //     tracing::error!("Failed to log JWT tampering: {:?}", audit_err);
-                    // }
-                } else {
-                    // Normal validation failure (expired, etc.)
-                    // if let Err(audit_err) = audit_logger::log_jwt_validation_failure(
-                    //     &self.audit_store,
-                    //     &ctx,
-                    //     failure_reason.to_string(),
-                    // ).await {
-                    //     tracing::error!("Failed to log JWT validation failure: {:?}", audit_err);
-                    // }
-                }
-            }
-        }
-
+        // TODO audit intent
         token_data.map(|td| td.claims)
-    }
+        
+        // // Log validation failures at point of action
+        // if let Err(ref err) = token_data {
+        //     // Try to extract claims without validation for audit logging
+        //     if let Ok(unverified_claims) = self.extract_unverified_claims(token) {
+        //         let failure_reason = match err {
+        //             InternalError::Credential(CredentialError::ExpiredToken(_)) => "expired",
+        //             InternalError::Credential(CredentialError::InvalidToken { .. }) => {
+        //                 "invalid_signature"
+        //             }
+        //             _ => "validation_error",
+        //         };
 
+        //         // Create temporary RequestContext from unverified JWT claims for audit logging
+        //         let ctx = crate::types::internal::context::RequestContext {
+        //             ip_address: None, // Not available in token validation context
+        //             request_id: uuid::Uuid::new_v4().to_string(),
+        //             authenticated: false, // JWT validation failed
+        //             claims: Some(unverified_claims.clone()),
+        //             source: crate::types::internal::context::RequestSource::API,
+        //             actor_id: unverified_claims.sub.clone(),
+        //         };
+
+        //         // Check if this is a tampering attempt (invalid signature)
+        //         if matches!(
+        //             err,
+        //             InternalError::Credential(CredentialError::InvalidToken { .. })
+        //         ) {
+        //             // if let Err(audit_err) = audit_logger::log_jwt_tampered(
+        //             //     &self.audit_store,
+        //             //     &ctx,
+        //             //     token.to_string(),
+        //             //     failure_reason.to_string(),
+        //             // ).await {
+        //             //     tracing::error!("Failed to log JWT tampering: {:?}", audit_err);
+        //             // }
+        //         } else {
+        //             // Normal validation failure (expired, etc.)
+        //             // if let Err(audit_err) = audit_logger::log_jwt_validation_failure(
+        //             //     &self.audit_store,
+        //             //     &ctx,
+        //             //     failure_reason.to_string(),
+        //             // ).await {
+        //             //     tracing::error!("Failed to log JWT validation failure: {:?}", audit_err);
+        //             // }
+        //         }
+        //     }
+        //}
+
+        
+    
+    }
     /// Extract claims from JWT without validation (for audit logging only)
     fn extract_unverified_claims(&self, token: &str) -> Result<Claims, InternalError> {
         use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};

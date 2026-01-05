@@ -1,3 +1,4 @@
+use jsonwebtoken::errors::Error;
 use thiserror::Error;
 
 // #[derive(Error, Debug)]
@@ -60,14 +61,12 @@ pub enum JwtFailClass {
     /// Internal error during validation (key store, config, crypto infra)
     Internal,
 }
-#[derive(Debug, Default, Clone)]
-pub struct JwtErrorInfo {
-    pub kid: Option<String>,
-    pub alg: Option<String>,
-    pub typ: Option<String>,
 
-    /// Small, stable hint like "expired", "aud", "iss", "sig", "malformed"
-    pub note: Option<&'static str>,
+#[derive(Debug, Clone)]
+pub struct JwtErrorInfo {
+    pub token_len: u16,
+    pub segment_count: u8,
+    pub source_message: String,
 }
 
 
@@ -78,49 +77,104 @@ pub struct JwtValidationError {
     pub info: JwtErrorInfo,
 
     #[source]
-    pub source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    pub source: Option<jsonwebtoken::errors::Error>,
 }
+impl JwtValidationError {
+    pub fn new(class: JwtFailClass, info: JwtErrorInfo, source:Option<jsonwebtoken::errors::Error>) ->Self{
+        Self { class, info, source }
+    }
 
+    pub fn from_error(err: jsonwebtoken::errors::Error,
+    token: &str)-> Self{
+        use jsonwebtoken::errors::ErrorKind;
 
-fn classify_jwt_error(err: &jsonwebtoken::errors::Error) -> (JwtFailClass, JwtErrorInfo) {
-    use jsonwebtoken::errors::ErrorKind::*;
+    let token_len = token.len().min(u16::MAX as usize) as u16;
+    let segment_count =
+        token.as_bytes().iter().filter(|&&b| b == b'.').count().saturating_add(1) as u8;
 
-    match err.kind() {
+    let class = match err.kind() {
         // Not a JWT / undecodable
-        InvalidToken | Base64(_) | Json(_) | Utf8(_) => (
-            JwtFailClass::Malformed,
-            JwtErrorInfo { note: Some("malformed"), ..Default::default() },
-        ),
+        ErrorKind::InvalidToken
+        | ErrorKind::Base64(_)
+        | ErrorKind::Json(_)
+        | ErrorKind::Utf8(_) => JwtFailClass::Malformed,
 
-        // Crypto / verification
-        InvalidSignature | InvalidAlgorithm => (
-            JwtFailClass::Invalid,
-            JwtErrorInfo { note: Some("signature"), ..Default::default() },
-        ),
+        // Crypto verification failures
+        ErrorKind::InvalidSignature
+        | ErrorKind::InvalidAlgorithm => JwtFailClass::Invalid,
 
-        // Claims rejected
-        ExpiredSignature
-        | ImmatureSignature
-        | InvalidAudience
-        | InvalidIssuer
-        | InvalidSubject
-        | MissingRequiredClaim(_) => (
-            JwtFailClass::ClaimsRejected,
-            JwtErrorInfo { note: Some("claims"), ..Default::default() },
-        ),
+        // Claims rejected (time, audience, issuer, etc.)
+        ErrorKind::ExpiredSignature
+        | ErrorKind::ImmatureSignature
+        | ErrorKind::InvalidAudience
+        | ErrorKind::InvalidIssuer
+        | ErrorKind::InvalidSubject
+        | ErrorKind::MissingRequiredClaim(_) => JwtFailClass::ClaimsRejected,
 
-        // Algo / key support
-        MissingAlgorithm
-        | InvalidAlgorithmName
-        | InvalidKeyFormat => (
-            JwtFailClass::Unsupported,
-            JwtErrorInfo { note: Some("algorithm"), ..Default::default() },
-        ),
+        // Unsupported / config issues
+        ErrorKind::MissingAlgorithm
+        | ErrorKind::InvalidAlgorithmName
+        | ErrorKind::InvalidKeyFormat => JwtFailClass::Unsupported,
 
         // Everything else
-        _ => (
-            JwtFailClass::Internal,
-            JwtErrorInfo { note: Some("internal"), ..Default::default() },
-        ),
+        _ => JwtFailClass::Internal,
+    };
+
+    let info = JwtErrorInfo {
+        token_len,
+        segment_count,
+        source_message: err.to_string(),
+    };
+
+    JwtValidationError::new(class, info, Some(err)) 
+
     }
+    
 }
+
+// fn classify_jwt_error(
+//     err: jsonwebtoken::errors::Error,
+//     token: &str,
+// ) -> JwtValidationError {
+//     use jsonwebtoken::errors::ErrorKind;
+
+//     let token_len = token.len().min(u16::MAX as usize) as u16;
+//     let segment_count =
+//         token.as_bytes().iter().filter(|&&b| b == b'.').count().saturating_add(1) as u8;
+
+//     let class = match err.kind() {
+//         // Not a JWT / undecodable
+//         ErrorKind::InvalidToken
+//         | ErrorKind::Base64(_)
+//         | ErrorKind::Json(_)
+//         | ErrorKind::Utf8(_) => JwtFailClass::Malformed,
+
+//         // Crypto verification failures
+//         ErrorKind::InvalidSignature
+//         | ErrorKind::InvalidAlgorithm => JwtFailClass::Invalid,
+
+//         // Claims rejected (time, audience, issuer, etc.)
+//         ErrorKind::ExpiredSignature
+//         | ErrorKind::ImmatureSignature
+//         | ErrorKind::InvalidAudience
+//         | ErrorKind::InvalidIssuer
+//         | ErrorKind::InvalidSubject
+//         | ErrorKind::MissingRequiredClaim(_) => JwtFailClass::ClaimsRejected,
+
+//         // Unsupported / config issues
+//         ErrorKind::MissingAlgorithm
+//         | ErrorKind::InvalidAlgorithmName
+//         | ErrorKind::InvalidKeyFormat => JwtFailClass::Unsupported,
+
+//         // Everything else
+//         _ => JwtFailClass::Internal,
+//     };
+
+//     let info = JwtErrorInfo {
+//         token_len,
+//         segment_count,
+//         source_message: err.to_string(),
+//     };
+
+//     JwtValidationError::new(class, info, Some(err)) 
+// }
