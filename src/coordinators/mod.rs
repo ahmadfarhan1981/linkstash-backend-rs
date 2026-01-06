@@ -23,7 +23,7 @@ use crate::{
     types::internal::{
         action_outcome::ActionOutcome,
         audit_intent::AuditIntent,
-        context::RequestContext,
+        context::{RequestContext, RequestContextMeta},
     },
 };
 
@@ -76,13 +76,24 @@ impl Exec {
     }
 }
 
-pub trait Coordinator{
-    fn get_logger (&self)-> &Arc<AuditLogger>;
+pub trait Coordinator {
+    fn get_logger(&self) -> &Arc<AuditLogger>;
 
     fn exec(&self, ctx: &RequestContext) -> Exec {
         Exec {
             ctx: ctx.clone(),
             audit: Arc::clone(self.get_logger()),
+        }
+    }
+
+    fn create_request_context(data: RequestContextMeta) -> RequestContext {
+        RequestContext {
+            ip_address: data.ip,
+            request_id: data.request_id,
+            authenticated: false,
+            claims: None,
+            source: data.source,
+            actor_id: "".to_owned(),
         }
     }
 }

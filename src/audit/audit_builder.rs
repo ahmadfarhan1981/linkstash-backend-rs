@@ -7,6 +7,7 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::Arc;
 
 /// Builder for creating custom audit events
@@ -34,7 +35,7 @@ use std::sync::Arc;
 pub struct AuditBuilder {
     event_type: EventType,
     user_id: Option<String>,
-    ip_address: Option<String>,
+    ip_address: Option<IpAddr>,
     jwt_id: Option<String>,
     timestamp: Option<String>,
     data: HashMap<String, serde_json::Value>,
@@ -71,11 +72,7 @@ impl AuditBuilder {
         self.user_id = Some(ctx.actor_id.clone());
 
         // IP address (use "unknown" if not available)
-        self.ip_address = Some(
-            ctx.ip_address
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string()),
-        );
+        self.ip_address = ctx.ip_address;
 
         // Extract JWT ID from claims if available, otherwise use "none"
         self.jwt_id = Some(
@@ -109,8 +106,8 @@ impl AuditBuilder {
     ///
     /// # Arguments
     /// * `ip` - IP address as a string
-    pub fn ip_address(mut self, ip: impl Into<String>) -> Self {
-        self.ip_address = Some(ip.into());
+    pub fn ip_address(mut self, ip: Option<IpAddr>) -> Self {
+        self.ip_address = ip;
         self
     }
 
@@ -186,7 +183,7 @@ impl AuditBuilder {
     /// Panics if required fields are not set. Use `with_context()` or set fields manually.
     pub fn build(self) -> AuditEvent {
         let user_id = self.user_id.unwrap_or_else(|| "unknown".to_string());
-        let ip_address = self.ip_address.unwrap_or_else(|| "unknown".to_string());
+        let ip_address = self.ip_address.map(|ip| ip.to_string()).unwrap_or_else(|| "unknown".to_string());
         let jwt_id = self.jwt_id.unwrap_or_else(|| "none".to_string());
         let timestamp = self.timestamp.unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
 
