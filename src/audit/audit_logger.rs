@@ -65,7 +65,7 @@ impl AuditLogger {
         event.user_id = ctx.actor_id.clone();
         event.ip_address = ctx
             .ip_address
-            .clone()
+            .map(|ip| ip.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         event.jwt_id = ctx
             .claims
@@ -102,7 +102,7 @@ impl AuditLogger {
         event.user_id = ctx.actor_id.clone();
         event.ip_address = ctx
             .ip_address
-            .clone()
+            .map(|ip| ip.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         event.jwt_id = ctx
             .claims
@@ -141,7 +141,7 @@ impl AuditLogger {
         event.user_id = ctx.actor_id.clone();
         event.ip_address = ctx
             .ip_address
-            .clone()
+            .map(|ip| ip.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         event.jwt_id = ctx
             .claims
@@ -191,7 +191,7 @@ impl AuditLogger {
         event.user_id = ctx.actor_id.clone();
         event.ip_address = ctx
             .ip_address
-            .clone()
+            .map(|ip| ip.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         event.jwt_id = ctx
             .claims
@@ -249,7 +249,7 @@ impl AuditLogger {
         event.user_id = ctx.actor_id.clone();
         event.ip_address = ctx
             .ip_address
-            .clone()
+            .map(|ip| ip.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         event.jwt_id = ctx
             .claims
@@ -349,7 +349,7 @@ impl AuditLogger {
         event.user_id = ctx.actor_id.clone();
         event.ip_address = ctx
             .ip_address
-            .clone()
+            .map(|ip| ip.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         event.jwt_id = ctx
             .claims
@@ -383,7 +383,7 @@ impl AuditLogger {
         event.user_id = ctx.actor_id.clone();
         event.ip_address = ctx
             .ip_address
-            .clone()
+            .map(|ip| ip.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         event.jwt_id = ctx
             .claims
@@ -419,7 +419,7 @@ impl AuditLogger {
         event.user_id = ctx.actor_id.clone();
         event.ip_address = ctx
             .ip_address
-            .clone()
+            .map(|ip| ip.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         event.jwt_id = ctx
             .claims
@@ -459,7 +459,7 @@ impl AuditLogger {
         event.user_id = ctx.actor_id.clone();
         event.ip_address = ctx
             .ip_address
-            .clone()
+            .map(|ip| ip.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         event.jwt_id = ctx
             .claims
@@ -504,7 +504,7 @@ impl AuditLogger {
         event.user_id = ctx.actor_id.clone();
         event.ip_address = ctx
             .ip_address
-            .clone()
+            .map(|ip| ip.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         event.jwt_id = ctx
             .claims
@@ -543,7 +543,7 @@ impl AuditLogger {
         event.user_id = ctx.actor_id.clone();
         event.ip_address = ctx
             .ip_address
-            .clone()
+            .map(|ip| ip.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         event.jwt_id = ctx
             .claims
@@ -582,7 +582,7 @@ impl AuditLogger {
         event.user_id = ctx.actor_id.clone();
         event.ip_address = ctx
             .ip_address
-            .clone()
+            .map(|ip| ip.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         event.jwt_id = ctx
             .claims
