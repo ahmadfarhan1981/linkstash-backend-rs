@@ -47,7 +47,7 @@ impl AuthApi {
             Err(_) => None,
         };
 
-        let ctx = RequestContext::validate_request(req, )::new();
+        // let ctx = RequestContext::validate_request(req, )::new();
         
         // self.auth_coordinator.login(ctx, username, password);
 

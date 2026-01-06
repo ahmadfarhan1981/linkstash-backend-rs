@@ -1,8 +1,10 @@
-use std::sync::Arc;
+use std::{net::IpAddr, sync::Arc};
 
 use crate::{errors::AuthError, providers::TokenProvider, types::internal::auth::Claims};
+use base64::engine::general_purpose::NO_PAD;
 use poem::Request;
 use poem_openapi::auth::{Bearer, BearerAuthorization};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Source of the request
@@ -18,6 +20,9 @@ pub enum RequestSource {
     System,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestId(Uuid);
+
 /// Request context that flows through all layers
 ///
 /// Contains contextual information about the current request that is needed
@@ -25,10 +30,10 @@ pub enum RequestSource {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RequestContext {
     /// IP address of the client making the request
-    pub ip_address: Option<String>,
+    pub ip_address: Option<IpAddr>,
 
     /// Unique identifier for this request (for tracing across layers)
-    pub request_id: String,
+    pub request_id: RequestId,
 
     /// Whether the request is authenticated (JWT validated successfully)
     pub authenticated: bool,
@@ -43,6 +48,21 @@ pub struct RequestContext {
     pub actor_id: String,
 }
 
+pub struct RequestContextMeta{
+    pub request_id: RequestId,
+    pub ip: Option<IpAddr>,
+    pub auth: Option<Bearer>,
+    pub source: RequestSource,
+
+}
+
+impl From<RequestContextMeta>for RequestContext{
+    fn from(value: RequestContextMeta) -> Self {
+        todo!()
+    }
+}
+
+
 impl RequestContext {
     /// Create a new RequestContext with a generated request_id
     ///
@@ -51,7 +71,7 @@ impl RequestContext {
     pub fn new() -> Self {
         Self {
             ip_address: None,
-            request_id: Uuid::new_v4().to_string(),
+            request_id: RequestId(Uuid::new_v4()),
             authenticated: false,
             claims: None,
             source: RequestSource::API,
@@ -68,8 +88,8 @@ impl RequestContext {
     /// * RequestContext configured for CLI source
     pub fn for_cli(command_name: &str) -> Self {
         Self {
-            ip_address: Some("localhost".to_string()),
-            request_id: Uuid::new_v4().to_string(),
+            ip_address: None,
+            request_id: RequestId(Uuid::new_v4()),
             authenticated: false,
             claims: None,
             source: RequestSource::CLI,
@@ -87,7 +107,7 @@ impl RequestContext {
     pub fn for_system(operation_name: &str) -> Self {
         Self {
             ip_address: None,
-            request_id: Uuid::new_v4().to_string(),
+            request_id: RequestId(Uuid::new_v4()),
             authenticated: false,
             claims: None,
             source: RequestSource::System,
@@ -96,8 +116,8 @@ impl RequestContext {
     }
 
     /// Set the ip_address
-    pub fn with_ip_address(mut self, ip_address: impl Into<String>) -> Self {
-        self.ip_address = Some(ip_address.into());
+    pub fn with_ip_address(mut self, ip_address: IpAddr) -> Self {
+        self.ip_address = Some(ip_address);
         self
     }
 
@@ -139,23 +159,23 @@ impl RequestContext {
     /// # Returns
     /// * `Some(String)` - IP address if found
     /// * `None` - No IP address could be determined
-    fn extract_ip_address(req: &Request) -> Option<String> {
+    fn extract_ip_address(req: &Request) -> Option<IpAddr> {
         // Check X-Forwarded-For header (proxy/load balancer)
         if let Some(forwarded) = req.header("X-Forwarded-For") {
             if let Some(ip) = forwarded.split(',').next() {
-                return Some(ip.trim().to_string());
+                return ip.trim().parse().ok();
             }
         }
 
         // Check X-Real-IP header (nginx)
         if let Some(real_ip) = req.header("X-Real-IP") {
-            return Some(real_ip.to_string());
+            return real_ip.parse().ok();
         }
 
         // Fall back to remote address
         req.remote_addr()
             .as_socket_addr()
-            .map(|addr| addr.ip().to_string())
+            .map(|addr| addr.ip())
     }
 
     /// Create RequestContext from request and optional authentication
@@ -185,8 +205,12 @@ impl RequestContext {
         let ip_address = Self::extract_ip_address(req);
         let auth = Self::extract_bearer(req);
         // Create base context with IP and request_id (defaults to API source)
-        let mut ctx = RequestContext::new()
-            .with_ip_address(ip_address.unwrap_or_else(|| "unknown".to_string()));
+        
+        let mut ctx = RequestContext::new();
+        if let Some(ip) = ip_address{
+            ctx = ctx.clone().with_ip_address(ip);
+        }
+            // .with_ip_address(ip_address.unwrap_or_else(|| "unknown".to_string()));
 
         // If auth is provided, validate JWT and populate claims
         if let Some(bearer) = auth {

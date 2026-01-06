@@ -289,9 +289,8 @@ impl AuditLogger {
         let mut event = AuditEvent::new(EventType::PasswordChanged);
         event.user_id = ctx.actor_id.clone();
         event.ip_address = ctx
-            .ip_address
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
+            .ip_address.map(|ip| ip.to_string()).unwrap_or("unknown".to_owned());
+            
         event.jwt_id = ctx
             .claims
             .as_ref()
@@ -321,7 +320,7 @@ impl AuditLogger {
         event.user_id = ctx.actor_id.clone();
         event.ip_address = ctx
             .ip_address
-            .clone()
+            .map(|ip| ip.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         event.jwt_id = ctx
             .claims
