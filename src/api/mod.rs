@@ -4,7 +4,7 @@ pub mod auth;
 pub mod health;
 pub mod helpers;
 
-use std::sync::Arc;
+use std::{net::IpAddr, sync::Arc};
 
 pub use admin::AdminApi;
 pub use auth::AuthApi;
@@ -18,17 +18,24 @@ use crate::{providers::TokenProvider, types::{ApiResult, internal::context::Requ
 
 
 pub trait Api {
-    fn get_token_provider(&self) -> &Arc<TokenProvider>;
+   
+    fn extract_ip_address(&self, req: &Request) -> Option<IpAddr> {
+        // Check X-Forwarded-For header (proxy/load balancer)
+        if let Some(forwarded) = req.header("X-Forwarded-For") {
+            if let Some(ip) = forwarded.split(',').next() {
+                return ip.trim().parse().ok();
+            }
+        }
 
-    fn get_context_for_authenticated_endpoint() {
-        print!("Test");
-    }
+        // Check X-Real-IP header (nginx)
+        if let Some(real_ip) = req.header("X-Real-IP") {
+            return real_ip.parse().ok();
+        }
 
-    async fn get_context_for_unauthenticated_endpoint(&self, req :&Request)-> ApiResult<RequestContext>{
-        let token_provider = self.get_token_provider();
-        let context = RequestContext::validate_request(req, token_provider).await;
-
-        Err(crate::config::ApplicationError::UnknownSetting { name: "placeholder".to_owned() })
+        // Fall back to remote address
+        req.remote_addr()
+            .as_socket_addr()
+            .map(|addr| addr.ip())
     }
 }
 

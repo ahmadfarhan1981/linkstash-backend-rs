@@ -1,5 +1,6 @@
 use crate::config::SecretManager;
 use crate::errors::internal::jwt_validation::JwtValidationError;
+use crate::types::db::AccessToken;
 use crate::types::internal::action_outcome::ActionOutcome;
 use crate::errors::InternalError;
 use crate::errors::internal::{CredentialError};
@@ -149,11 +150,11 @@ impl TokenProvider {
     ///
     /// # Returns
     /// * `Result<Claims, InternalError>` - The decoded claims or an error
-    pub async fn validate_jwt(&self, token: &str) -> Result<Claims, InternalError> {
+    pub async fn validate_jwt(&self, token: AccessToken) -> Result<Claims, InternalError> {
         let validation = Validation::new(Algorithm::HS256);
 
         let token_data = decode::<Claims>(
-            token,
+            token.as_str(),
             &DecodingKey::from_secret(self.secret_manager.jwt_secret().as_bytes()),
             &validation,
         )

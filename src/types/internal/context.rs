@@ -21,7 +21,7 @@ pub enum RequestSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RequestId(Uuid);
+pub struct RequestId(pub Uuid);
 
 /// Request context that flows through all layers
 ///
