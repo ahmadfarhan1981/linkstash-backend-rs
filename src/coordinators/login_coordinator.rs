@@ -11,6 +11,7 @@ use crate::providers::TokenProvider;
 use crate::providers::authentication_provider::AuthenticationProvider;
 use crate::providers::authentication_provider::VerifyCredentialResult::{Failure, Success};
 use crate::stores::user_store::UserStore;
+use crate::types::internal::context::RequestContextMeta;
 use crate::{
     AppData,
     config::ApplicationError,
@@ -48,11 +49,14 @@ impl LoginCoordinator {
 
     pub async fn login(
         &self,
-        ctx: &RequestContext,
+        context_meta: RequestContextMeta,
         username: String,
         password: String,
     ) -> Result<LoginApiResponse, ApplicationError> {
         let conn =self.connections.begin_auth_transaction().await?;
+        
+        let claims = self.token_provider.validate_jwt(context_meta.auth);
+        let ctx = RequestContext::from(context_meta);
         let exec = self.exec(ctx);
         let verify_credential_result = exec.fut(self.authentication_provider.verify_credential(&conn, LoginRequest { username, password })).await?;
         
