@@ -53,15 +53,7 @@ impl LoginCoordinator {
         password: String,
     ) -> Result<LoginApiResponse, ApplicationError> {
         let conn = self.connections.begin_auth_transaction().await?;
-
-        let claims = context_meta
-            .auth
-            .as_ref()
-            .ok_or_else(||InternalError::Login(crate::errors::internal::login::LoginError::IncorrectPassword))
-            .and_then(|bearer| self.token_provider.validate_jwt(bearer))
-            
-            ;
-        let ctx = RequestContext::from(context_meta);
+        let ctx = RequestContext::from_context_meta(context_meta, &self.token_provider);
         let exec = self.exec(&ctx);
         let verify_credential_result = exec
             .fut(
