@@ -1,6 +1,6 @@
 use std::{net::IpAddr, sync::Arc};
 
-use crate::{providers::TokenProvider, types::internal::auth::Claims};
+use crate::{errors::InternalError, providers::TokenProvider, types::internal::{RequestContextMeta, auth::Claims}};
 use poem::Request;
 use poem_openapi::auth::{Bearer, BearerAuthorization};
 use uuid::Uuid;
@@ -192,5 +192,33 @@ impl RequestContext {
     pub fn with_actor_id(mut self, actor_id: impl Into<String>) -> Self {
         self.actor_id = actor_id.into();
         self
+    }
+
+    pub fn from_context_meta(
+        context_meta: RequestContextMeta,
+        token_provider: &Arc<TokenProvider>,
+    ) -> Self {
+        let claims = context_meta
+            .auth
+            .as_ref()
+            .ok_or_else(|| {
+                InternalError::Login(crate::errors::internal::login::LoginError::IncorrectPassword)
+            })
+            .and_then(|bearer| token_provider.validate_jwt(bearer));
+
+        let actor_id = claims
+            .as_ref()
+            .ok()
+            .map(|claims| claims.sub.clone())
+            .unwrap_or("unknown".to_owned());
+
+        Self {
+            ip_address: context_meta.ip,
+            request_id: context_meta.request_id,
+            authenticated: claims.is_ok(),
+            claims: claims.ok(),
+            source: context_meta.source,
+            actor_id,
+        }
     }
 }
