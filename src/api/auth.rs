@@ -3,6 +3,7 @@ use crate::api::Api;
 use crate::coordinators::LoginCoordinator;
 use crate::types::dto::UUID;
 use crate::types::dto::auth::{LoginApiResponse, LoginRequest, TokenResponse};
+use crate::types::dto::common::ErrorResponse;
 
 use poem::Request;
 use poem_openapi::auth::BearerAuthorization;
@@ -54,12 +55,23 @@ impl AuthApi {
         // self.auth_coordinator.login(ctx, username, password);
 
         // self.auth_coordinator.login(ctx, username, password)
-        LoginApiResponse::Ok(Json(TokenResponse {
-            access_token: format!("{:?}", &meta.auth),
-            refresh_token: "".to_string(),
-            token_type: "".to_string(),
-            expires_in: 0,
-        }))
+
+        let response = self
+            .auth_coordinator
+            .login(meta, body.username.clone(), body.password.clone() )
+            .await.unwrap_or(LoginApiResponse::Unauthorized(Json(ErrorResponse {
+                    message: "Unauthorized".to_owned(),
+                    error: "Error".to_owned(),
+                    status_code: 301,
+                })));
+        response
+        
+        // LoginApiResponse::Ok(Json(TokenResponse {
+        //     access_token: format!("{:?}", &meta.auth),
+        //     refresh_token: "".to_string(),
+        //     token_type: "".to_string(),
+        //     expires_in: 0,
+        // }))
     }
     #[oai(path = "/test", method = "post", tag = "AuthTags::Authentication")]
     async fn test(
