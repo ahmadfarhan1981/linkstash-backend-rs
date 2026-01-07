@@ -4,3 +4,5 @@ pub mod audit;
 pub mod audit_intent;
 pub mod auth;
 pub mod context;
+
+pub use context::*;
