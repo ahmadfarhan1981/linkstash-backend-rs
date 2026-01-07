@@ -11,10 +11,11 @@ pub use auth::AuthApi;
 pub use health::HealthApi;
 use migration::token;
 use poem::Request;
-use poem_openapi::auth::Bearer;
+use poem_openapi::auth::{Bearer, BearerAuthorization};
+use uuid::Uuid;
 
 
-use crate::{providers::TokenProvider, types::{ApiResult, internal::context::RequestContext}};
+use crate::{providers::TokenProvider, types::{ApiResult, internal::context::{RequestContext, RequestContextMeta, RequestId, RequestSource}}};
 
 
 pub trait Api {
@@ -36,6 +37,22 @@ pub trait Api {
         req.remote_addr()
             .as_socket_addr()
             .map(|addr| addr.ip())
+    }
+
+    fn generate_request_context_meta(&self, req: &Request)->RequestContextMeta{
+        let ip = self.extract_ip_address(req);
+        let auth = match Bearer::from_request(req) {
+            Ok(bearer) => Some(bearer),
+            Err(_) => None,
+        };
+        let request_id = RequestId(Uuid::new_v4());
+        
+        RequestContextMeta {
+            request_id,
+            ip,
+            auth,
+            source: RequestSource::API,
+        }
     }
 }
 

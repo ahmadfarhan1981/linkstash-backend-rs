@@ -1,27 +1,11 @@
 use std::{net::IpAddr, sync::Arc};
 
-use crate::{errors::AuthError, providers::TokenProvider, types::internal::auth::Claims};
-use base64::engine::general_purpose::NO_PAD;
+use crate::{providers::TokenProvider, types::internal::auth::Claims};
 use poem::Request;
 use poem_openapi::auth::{Bearer, BearerAuthorization};
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Source of the request
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RequestSource {
-    /// Request originated from API endpoint
-    API,
-
-    /// Request originated from CLI command
-    CLI,
-
-    /// Request originated from system (automated operations)
-    System,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RequestId(pub Uuid);
+use super::{context_result::ContextResult, request_id::RequestId, request_source::RequestSource};
 
 /// Request context that flows through all layers
 ///
@@ -48,37 +32,7 @@ pub struct RequestContext {
     pub actor_id: String,
 }
 
-pub struct RequestContextMeta{
-    pub request_id: RequestId,
-    pub ip: Option<IpAddr>,
-    pub auth: Option<Bearer>,
-    pub source: RequestSource,
-
-}
-
-impl From<RequestContextMeta>for RequestContext{
-    fn from(value: RequestContextMeta) -> Self {
-        todo!()
-    }
-}
-
-
 impl RequestContext {
-    /// Create a new RequestContext with a generated request_id
-    ///
-    /// Defaults to API source with "unknown" actor_id.
-    /// Use `for_cli()` or `for_system()` for non-API operations.
-    pub fn new() -> Self {
-        Self {
-            ip_address: None,
-            request_id: RequestId(Uuid::new_v4()),
-            authenticated: false,
-            claims: None,
-            source: RequestSource::API,
-            actor_id: "unknown".to_string(),
-        }
-    }
-
     /// Create a RequestContext for CLI operations
     ///
     /// # Arguments
@@ -115,33 +69,6 @@ impl RequestContext {
         }
     }
 
-    /// Set the ip_address
-    pub fn with_ip_address(mut self, ip_address: IpAddr) -> Self {
-        self.ip_address = Some(ip_address);
-        self
-    }
-
-    /// Set authentication state with claims
-    pub fn with_auth(mut self, claims: Claims) -> Self {
-        self.authenticated = true;
-        self.claims = Some(claims);
-        self
-    }
-
-    /// Set the actor_id
-    pub fn with_actor_id(mut self, actor_id: impl Into<String>) -> Self {
-        self.actor_id = actor_id.into();
-        self
-    }
-}
-
-impl Default for RequestContext {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RequestContext {
     fn extract_bearer(req: &Request) -> Option<Bearer> {
         match Bearer::from_request(req) {
             Ok(bearer) => Some(bearer),
@@ -173,9 +100,7 @@ impl RequestContext {
         }
 
         // Fall back to remote address
-        req.remote_addr()
-            .as_socket_addr()
-            .map(|addr| addr.ip())
+        req.remote_addr().as_socket_addr().map(|addr| addr.ip())
     }
 
     /// Create RequestContext from request and optional authentication
@@ -205,16 +130,25 @@ impl RequestContext {
         let ip_address = Self::extract_ip_address(req);
         let auth = Self::extract_bearer(req);
         // Create base context with IP and request_id (defaults to API source)
-        
-        let mut ctx = RequestContext::new();
-        if let Some(ip) = ip_address{
-            ctx = ctx.clone().with_ip_address(ip);
+
+        let mut ctx = RequestContext {
+            ip_address,
+            request_id: RequestId(Uuid::new_v4()),
+            authenticated: false,
+            claims: None,
+            source: RequestSource::API,
+            actor_id: "".to_owned(),
+        };
+        if let Some(ip) = ip_address {
+            // ctx = ctx.clone().with_ip_address(ip);
+            let mut ctx = ctx.clone();
+            ctx.ip_address = Some(ip);
         }
-            // .with_ip_address(ip_address.unwrap_or_else(|| "unknown".to_string()));
+        // .with_ip_address(ip_address.unwrap_or_else(|| "unknown".to_string()));
 
         // If auth is provided, validate JWT and populate claims
         if let Some(bearer) = auth {
-            match token_provider.validate_jwt(&bearer.token).await {
+            match token_provider.validate_jwt(&bearer) {
                 Ok(claims) => {
                     // JWT is valid, set authenticated and claims
                     // Set actor_id from JWT subject (user_id)
@@ -240,41 +174,23 @@ impl RequestContext {
 
         ContextResult::Ok(ctx)
     }
-}
-/// Result type for create_request_context that can carry context in error
-pub enum ContextResult {
-    /// Context created successfully, no password change required
-    Ok(RequestContext),
-    /// Password change required - context is included so allowed endpoints can extract it
-    PasswordChangeRequired(RequestContext),
-}
 
-impl ContextResult {
-    /// Convert ContextResult to Result, mapping PasswordChangeRequired to an error
-    ///
-    /// Most endpoints should use this to automatically reject users with password_change_required=true.
-    ///
-    /// # Returns
-    /// * `Ok(ctx)` - Context ready to use
-    /// * `Err(AuthError::PasswordChangeRequired)` - User must change password first
-    pub fn into_result(self) -> Result<RequestContext, AuthError> {
-        match self {
-            ContextResult::Ok(ctx) => Ok(ctx),
-            ContextResult::PasswordChangeRequired(_) => Err(AuthError::password_change_required()),
-        }
+    /// Set the ip_address
+    pub fn with_ip_address(mut self, ip_address: IpAddr) -> Self {
+        self.ip_address = Some(ip_address);
+        self
     }
 
-    /// Extract the context regardless of whether password change is required
-    ///
-    /// Only use this for endpoints that should remain accessible when password change is required
-    /// (/auth/change-password, /auth/whoami).
-    ///
-    /// # Returns
-    /// The RequestContext
-    pub fn into_context(self) -> RequestContext {
-        match self {
-            ContextResult::Ok(ctx) => ctx,
-            ContextResult::PasswordChangeRequired(ctx) => ctx,
-        }
+    /// Set authentication state with claims
+    pub fn with_auth(mut self, claims: Claims) -> Self {
+        self.authenticated = true;
+        self.claims = Some(claims);
+        self
+    }
+
+    /// Set the actor_id
+    pub fn with_actor_id(mut self, actor_id: impl Into<String>) -> Self {
+        self.actor_id = actor_id.into();
+        self
     }
 }

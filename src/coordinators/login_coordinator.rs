@@ -6,7 +6,7 @@ use sea_orm::{ConnectionTrait, TransactionTrait};
 use crate::audit::AuditLogger;
 use crate::config::database::DatabaseConnections;
 use crate::coordinators::{Coordinator, Exec, execute};
-use crate::errors::AuthError;
+use crate::errors::{AuthError, InternalError};
 use crate::providers::TokenProvider;
 use crate::providers::authentication_provider::AuthenticationProvider;
 use crate::providers::authentication_provider::VerifyCredentialResult::{Failure, Success};
@@ -30,13 +30,12 @@ pub struct LoginCoordinator {
     connections: DatabaseConnections,
 }
 
-impl Coordinator for LoginCoordinator{
-    fn get_logger (&self)-> &Arc<AuditLogger> {
+impl Coordinator for LoginCoordinator {
+    fn get_logger(&self) -> &Arc<AuditLogger> {
         &self.audit_logger
     }
 }
 impl LoginCoordinator {
-
     pub fn new(app_data: Arc<AppData>) -> Self {
         Self {
             authentication_provider: Arc::clone(&app_data.providers.authentication_provider),
@@ -53,46 +52,54 @@ impl LoginCoordinator {
         username: String,
         password: String,
     ) -> Result<LoginApiResponse, ApplicationError> {
-        let conn =self.connections.begin_auth_transaction().await?;
-        
-        let claims = self.token_provider.validate_jwt(context_meta.auth);
+        let conn = self.connections.begin_auth_transaction().await?;
+
+        let claims = context_meta
+            .auth
+            .as_ref()
+            .ok_or_else(||InternalError::Login(crate::errors::internal::login::LoginError::IncorrectPassword))
+            .and_then(|bearer| self.token_provider.validate_jwt(bearer))
+            
+            ;
         let ctx = RequestContext::from(context_meta);
-        let exec = self.exec(ctx);
-        let verify_credential_result = exec.fut(self.authentication_provider.verify_credential(&conn, LoginRequest { username, password })).await?;
-        
+        let exec = self.exec(&ctx);
+        let verify_credential_result = exec
+            .fut(
+                self.authentication_provider
+                    .verify_credential(&conn, LoginRequest { username, password }),
+            )
+            .await?;
 
         match verify_credential_result {
-            Success { user } => {        
-                    let user_for_jwt = exec
-                        .fut(self.user_store.get_user_roles_for_jwt(&conn, &user.id))
-                        .await?;
-                    let jwt = exec
-                        .fut(self.token_provider.generate_jwt(&user_for_jwt))
-                        .await?;
-                    let rt = exec
-                        .res(self.token_provider.generate_refresh_token())
-                        .await?;
-                    self.user_store
-                        .save_refresh_token_for_user(
-                            &conn,
-                            &user.id,
-                            &rt.token_hash,
-                            rt.created_at,
-                            rt.expires_at,
-                        )
-                        .await?;
-                    Ok(LoginApiResponse::Ok(Json(TokenResponse {
-                        access_token: jwt.jwt,
-                        refresh_token: rt.token,
-                        token_type: jwt.token_type,
-                        expires_in: jwt.expires_in,
-                    })))
-                },
-            Failure { reason } => Err(ApplicationError::UnknownServerError { message: "Placeholeder".to_owned() }),
+            Success { user } => {
+                let user_for_jwt = exec
+                    .fut(self.user_store.get_user_roles_for_jwt(&conn, &user.id))
+                    .await?;
+                let jwt = exec
+                    .fut(self.token_provider.generate_jwt(&user_for_jwt))
+                    .await?;
+                let rt = exec
+                    .res(self.token_provider.generate_refresh_token())
+                    .await?;
+                self.user_store
+                    .save_refresh_token_for_user(
+                        &conn,
+                        &user.id,
+                        &rt.token_hash,
+                        rt.created_at,
+                        rt.expires_at,
+                    )
+                    .await?;
+                Ok(LoginApiResponse::Ok(Json(TokenResponse {
+                    access_token: jwt.jwt,
+                    refresh_token: rt.token,
+                    token_type: jwt.token_type,
+                    expires_in: jwt.expires_in,
+                })))
+            }
+            Failure { reason } => Err(ApplicationError::UnknownServerError {
+                message: "Placeholeder".to_owned(),
+            }),
         }
-
-        
-        
     }
-    
 }

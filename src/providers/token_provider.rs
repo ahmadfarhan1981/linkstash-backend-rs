@@ -11,6 +11,7 @@ use base64::{Engine as _, engine::general_purpose};
 use chrono::{DateTime, Utc};
 use jsonwebtoken::errors::ErrorKind;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use poem_openapi::auth::Bearer;
 use rand::prelude::*;
 use std::fmt;
 use std::sync::Arc;
@@ -150,11 +151,11 @@ impl TokenProvider {
     ///
     /// # Returns
     /// * `Result<Claims, InternalError>` - The decoded claims or an error
-    pub async fn validate_jwt(&self, token: AccessToken) -> Result<Claims, InternalError> {
+    pub fn validate_jwt(&self, auth: &Bearer) -> Result<Claims, InternalError> {
         let validation = Validation::new(Algorithm::HS256);
-
+        let token = auth.token.as_str();
         let token_data = decode::<Claims>(
-            token.as_str(),
+            token,
             &DecodingKey::from_secret(self.secret_manager.jwt_secret().as_bytes()),
             &validation,
         )
@@ -164,56 +165,7 @@ impl TokenProvider {
         });
         // TODO audit intent
         token_data.map(|td| td.claims)
-        
-        // // Log validation failures at point of action
-        // if let Err(ref err) = token_data {
-        //     // Try to extract claims without validation for audit logging
-        //     if let Ok(unverified_claims) = self.extract_unverified_claims(token) {
-        //         let failure_reason = match err {
-        //             InternalError::Credential(CredentialError::ExpiredToken(_)) => "expired",
-        //             InternalError::Credential(CredentialError::InvalidToken { .. }) => {
-        //                 "invalid_signature"
-        //             }
-        //             _ => "validation_error",
-        //         };
-
-        //         // Create temporary RequestContext from unverified JWT claims for audit logging
-        //         let ctx = crate::types::internal::context::RequestContext {
-        //             ip_address: None, // Not available in token validation context
-        //             request_id: uuid::Uuid::new_v4().to_string(),
-        //             authenticated: false, // JWT validation failed
-        //             claims: Some(unverified_claims.clone()),
-        //             source: crate::types::internal::context::RequestSource::API,
-        //             actor_id: unverified_claims.sub.clone(),
-        //         };
-
-        //         // Check if this is a tampering attempt (invalid signature)
-        //         if matches!(
-        //             err,
-        //             InternalError::Credential(CredentialError::InvalidToken { .. })
-        //         ) {
-        //             // if let Err(audit_err) = audit_logger::log_jwt_tampered(
-        //             //     &self.audit_store,
-        //             //     &ctx,
-        //             //     token.to_string(),
-        //             //     failure_reason.to_string(),
-        //             // ).await {
-        //             //     tracing::error!("Failed to log JWT tampering: {:?}", audit_err);
-        //             // }
-        //         } else {
-        //             // Normal validation failure (expired, etc.)
-        //             // if let Err(audit_err) = audit_logger::log_jwt_validation_failure(
-        //             //     &self.audit_store,
-        //             //     &ctx,
-        //             //     failure_reason.to_string(),
-        //             // ).await {
-        //             //     tracing::error!("Failed to log JWT validation failure: {:?}", audit_err);
-        //             // }
-        //         }
-        //     }
-        //}
-
-        
+                
     
     }
     /// Extract claims from JWT without validation (for audit logging only)
