@@ -96,44 +96,26 @@ pub enum CLIResult {
     
     
 }
-pub fn run_cli_commands()->CLIResult{
+pub async fn run_cli_commands(app_data: &AppData)->CLIResult{
     let args: Vec<String> = std::env::args().collect();
-    let is_cli_mode = args.len() > 1;
-
-    // Parse CLI once if in CLI mode, otherwise use default env file
-    let cli_parsed = if is_cli_mode {
-        Some(cli::Cli::parse())
+    let cli  = cli::Cli::parse();
+    println!("{:?}",cli.command);
+    
+    if let Some(command) = cli.command {        
+        // Execute CLI command
+        match cli::execute_command(command, app_data).await {
+            Ok(()) => {
+                CLIResult::Executed(ReturnCode(0))
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                CLIResult::Executed(ReturnCode(1))
+            }
+        }
     } else {
-        None
-    };
-    CLIResult::NotExecuted
+        CLIResult::NotExecuted
+    }
 
-     // If CLI mode, execute command and exit
-    // if let Some(cli) = cli_parsed {
-
-    //     // Check if this is the migrate command - exit successfully since migrations are done
-    //     if matches!(cli.command, cli::Commands::Migrate) {
-    //         std::process::exit(0);
-    //     }
-
-    //     // For other CLI commands, initialize AppData with the migrated connections
-    //     let app_data = Arc::new(
-    //         AppData::init(connections).await
-    //             .map_err(|e| format!("Failed to initialize application data: {}", e))
-    //             .expect("Failed to initialize application data")
-    //     );
-
-    //     // Execute CLI command
-    //     match cli::execute_command(cli, &app_data).await {
-    //         Ok(()) => {
-    //             std::process::exit(0);
-    //         }
-    //         Err(e) => {
-    //             eprintln!("Error: {}", e);
-    //             std::process::exit(1);
-    //         }
-    //     }
-    // }
 }
 
 pub async fn get_routes(app_data: Arc<AppData>) -> Result<Route, std::io::Error> {
