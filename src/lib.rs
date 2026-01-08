@@ -93,8 +93,6 @@ pub struct ReturnCode(pub i32);
 pub enum CLIResult {
     Executed(ReturnCode),
     NotExecuted,
-    
-    
 }
 pub async fn run_cli_commands(app_data: &AppData)->CLIResult{
     let args: Vec<String> = std::env::args().collect();
