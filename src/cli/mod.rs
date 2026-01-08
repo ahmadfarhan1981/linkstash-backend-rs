@@ -6,7 +6,7 @@
 // pub mod password_management;
 
 use clap::{Parser, Subcommand};
-use std::sync::Arc;
+use std::{fmt::Debug, sync::Arc};
 
 use crate::app_data::AppData;
 
@@ -20,10 +20,10 @@ pub struct Cli {
     pub env_file: String,
 
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Run database migrations
     Migrate,
@@ -52,7 +52,7 @@ pub enum Commands {
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 pub enum OwnerCommands {
     /// Activate the owner account
     Activate,
@@ -76,12 +76,12 @@ pub enum OwnerCommands {
 /// * `Ok(())` - Command executed successfully
 /// * `Err(...)` - Command execution failed
 pub async fn execute_command(
-    cli: Cli,
+    command: Commands,
     app_data: &AppData,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // let conn = app_data.connections.auth;
-    match cli.command {
-        Commands::Migrate => Err("Unexpected cli path".to_string().into()),
+    match command {
+        Commands::Migrate => Ok(()),//migrate already ran
         Commands::Bootstrap {
             #[cfg(any(debug_assertions, feature = "test-utils"))]
             non_interactive,

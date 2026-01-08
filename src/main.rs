@@ -42,32 +42,7 @@ async fn main() -> Result<(), std::io::Error> {
 
     
 
-    // If CLI mode, execute command and exit
-    // if let Some(cli) = cli_parsed {
-
-    //     // Check if this is the migrate command - exit successfully since migrations are done
-    //     if matches!(cli.command, cli::Commands::Migrate) {
-    //         std::process::exit(0);
-    //     }
-
-    //     // For other CLI commands, initialize AppData with the migrated connections
-    //     let app_data = Arc::new(
-    //         AppData::init(connections).await
-    //             .map_err(|e| format!("Failed to initialize application data: {}", e))
-    //             .expect("Failed to initialize application data")
-    //     );
-
-    //     // Execute CLI command
-    //     match cli::execute_command(cli, &app_data).await {
-    //         Ok(()) => {
-    //             std::process::exit(0);
-    //         }
-    //         Err(e) => {
-    //             eprintln!("Error: {}", e);
-    //             std::process::exit(1);
-    //         }
-    //     }
-    // }
+   
 
     // No CLI arguments - run server mode
     // TODO logging and error handling
@@ -78,7 +53,10 @@ async fn main() -> Result<(), std::io::Error> {
             .expect("Failed to initialize application data"),
     );
 
-
+    match linkstash_backend::run_cli_commands(&app_data).await {
+        linkstash_backend::CLIResult::Executed(return_code) => std::process::exit(return_code.0),
+        linkstash_backend::CLIResult::NotExecuted => {},
+    }
     // Create coordinators using AppData pattern
     // let auth_coordinator = Arc::new(coordinators::AuthCoordinator::new(app_data.clone()));
     // let admin_coordinator = Arc::new(coordinators::AdminCoordinator::new(app_data.clone()));
