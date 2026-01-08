@@ -40,15 +40,7 @@ async fn main() -> Result<(), std::io::Error> {
     // Initialize logging
     init_logging().expect("Failed to initialize logging");
 
-    tracing::info!("connecting to database...");
-    let connections =
-        DatabaseConnections::init(&bootstrap_settings).expect("Failed to connect to database");
-    tracing::info!("Running database migrations...");
-    connections
-        .migrate()
-        .await
-        .expect("Failed to run migrations");
-    tracing::info!("Finished database migrations.");
+    
 
     // If CLI mode, execute command and exit
     // if let Some(cli) = cli_parsed {
@@ -78,20 +70,19 @@ async fn main() -> Result<(), std::io::Error> {
     // }
 
     // No CLI arguments - run server mode
-    // Initialize AppData with the migrated connections
+    // TODO logging and error handling
     let app_data = Arc::new(
-        AppData::init(connections)
+         linkstash_backend::init_appdata(&bootstrap_settings)
             .await
             .map_err(|e| format!("Failed to initialize application data: {}", e))
             .expect("Failed to initialize application data"),
     );
 
-    // No CLI arguments - run server mode
 
     // Create coordinators using AppData pattern
     // let auth_coordinator = Arc::new(coordinators::AuthCoordinator::new(app_data.clone()));
     // let admin_coordinator = Arc::new(coordinators::AdminCoordinator::new(app_data.clone()));
-    let auth_coordinator = Arc::new(LoginCoordinator::new(app_data.clone()));
+    //let auth_coordinator = Arc::new(LoginCoordinator::new(app_data.clone()));
 
     // Seed test user in debug mode
     #[cfg(debug_assertions)]
