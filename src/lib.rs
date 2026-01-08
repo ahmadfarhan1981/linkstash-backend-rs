@@ -19,7 +19,7 @@ use poem_openapi::OpenApiService;
 
 use crate::{
     api::{AdminApi, AuthApi, HealthApi},
-    config::{ApplicationError, BootstrapSettings},
+    config::{ApplicationError, BootstrapSettings, database::DatabaseConnections}, errors::InternalError,
 };
 
 // Test utilities (available for unit and integration tests)
@@ -52,8 +52,19 @@ async fn seed_test_user(app_data: &AppData) {
     // }
 }
 
-async fn get_init_appdata() -> Result<(), std::io::Error> {
-    Ok(())
+pub async fn init_appdata(bootstrap_settings: &BootstrapSettings) -> Result<AppData, InternalError> {
+    tracing::info!("connecting to database...");
+    let connections =
+        DatabaseConnections::init(&bootstrap_settings).expect("Failed to connect to database");
+    tracing::info!("Running database migrations...");
+    connections
+        .migrate()
+        .await
+        .expect("Failed to run migrations");
+    tracing::info!("Finished database migrations.");
+
+    AppData::init(connections).await
+    
 }
 
 pub fn init_bootstrap_settings() -> Result<BootstrapSettings, ApplicationError> {
@@ -76,6 +87,10 @@ pub fn init_bootstrap_settings() -> Result<BootstrapSettings, ApplicationError> 
     dotenv::from_filename(env_file).ok();
 
     BootstrapSettings::from_env()
+}
+
+pub fn run_cli_commands()->bool{
+    
 }
 
 pub async fn get_routes(app_data: Arc<AppData>) -> Result<Route, std::io::Error> {
