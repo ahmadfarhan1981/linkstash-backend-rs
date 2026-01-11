@@ -1,17 +1,21 @@
 use std::sync::Arc;
 
 use argon2::{
-    Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version,
-    password_hash::SaltString,
+    Algorithm, Argon2, Params, PasswordHasher, PasswordVerifier, Version, password_hash::SaltString,
 };
 use hmac::{Hmac, Mac};
+use migration::value;
 use rand::Rng;
 use sha2::Sha256;
 
 use crate::{
     AppData, app_data,
     config::SecretManager,
-    errors::{InternalError, internal::CredentialError},
+    errors::{
+        InternalError,
+        internal::{CredentialError, crypto::CryptoError},
+    },
+    types::{ProviderResult, ProviderResultTrait},
 };
 
 type HmacSha256 = Hmac<Sha256>;
@@ -46,6 +50,7 @@ impl CryptoProvider {
     /// # Returns
     /// Hexadecimal string representation of the HMAC-SHA256 hash
     pub fn hmac_sha256_token(&self, key: &str, token: &str) -> String {
+        //TODO review visibility/ fn name
         let mut mac =
             HmacSha256::new_from_slice(key.as_bytes()).expect("HMAC can take key of any size");
         mac.update(token.as_bytes());
@@ -99,7 +104,7 @@ impl CryptoProvider {
         stored_hash: &str,
         password: &str,
     ) -> Result<bool, InternalError> {
-        let parsed_hash = PasswordHash::new(&stored_hash)
+        let parsed_hash = argon2::PasswordHash::new(&stored_hash)
             .map_err(|_| InternalError::Credential(CredentialError::InvalidCredentials))?; //TODO not invalid credential
 
         let argon2 = Argon2::new_with_secret(
@@ -117,7 +122,39 @@ impl CryptoProvider {
             Err(_) => Ok(false),
         }
     }
+
+    fn initialize_argon(&self) -> Result<Argon2, InternalError> {
+        let argon2 = Argon2::new_with_secret(
+            self.secret_manager.password_pepper().as_bytes(),
+            Algorithm::Argon2id,
+            Version::V0x13,
+            Params::default(),
+        );
+        argon2
+        .map_err(|e| InternalError::Crypto {
+                0: CryptoError::other("CryptoProvider", "Init argon", e),
+            })
+
+        // match argon2 {
+        //     Ok(value) => ProviderResult::new(value),
+        //     Err(e) => Err(,
+        // }
+    }
+
+    pub fn hash_password(&self, password: String) -> ProviderResult<PasswordHash> {
+        let salt = SaltString::generate(&mut rand_core::OsRng);
+        let argon2 = self.initialize_argon()?.value;
+
+        let password_hash = argon2
+            .hash_password(password.as_bytes(), &salt)
+            // .map_err(|e| format!("Failed to hash password: {}", e))? //TODO Error handling
+            .to_string();
+
+        ProviderResult::<PasswordHash>::new(PasswordHash(password_hash))
+    }
 }
+
+pub struct PasswordHash(pub String);
 
 #[cfg(test)]
 mod tests {

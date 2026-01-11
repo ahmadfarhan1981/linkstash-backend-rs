@@ -6,8 +6,9 @@ pub mod database;
 pub mod jwt_validation;
 pub mod login;
 pub mod system_config;
+pub mod crypto;
 
-use crate::{config::ApplicationError, errors::internal::{jwt_validation::JwtValidationError, login::LoginError}};
+use crate::{config::ApplicationError, errors::internal::{crypto::CryptoError, jwt_validation::JwtValidationError, login::LoginError}};
 pub use audit::AuditError;
 pub use credential::CredentialError;
 pub use database::DatabaseError;
@@ -28,8 +29,10 @@ pub enum InternalError {
     #[error("Parse error: failed to parse {value_type}: {message}")]
     Parse { value_type: String, message: String },
 
-    #[error("Crypto error: {operation} failed: {message}")]
-    Crypto { operation: String, message: String },
+    // #[error("Crypto error: {operation} failed: {message}")]
+    // Crypto { operation: String, message: String },
+    #[error(transparent)]
+    Crypto(#[from] CryptoError),
 
     #[error(transparent)]
     Credential(#[from] CredentialError),
