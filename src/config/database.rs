@@ -50,7 +50,7 @@ impl DatabaseConnections {
 
         let db = Database::connect(database_url).await.map_err(|e| {
             InternalError::Database(DatabaseError::Operation {
-                operation: "connect database".to_string(),
+                operation: "connect database",
                 source: e,
             })
         })?;
@@ -75,7 +75,7 @@ impl DatabaseConnections {
 
         let audit_db = Database::connect(audit_database_url).await.map_err(|e| {
             InternalError::Database(DatabaseError::Operation {
-                operation: "connect audit database".to_string(),
+                operation: "connect audit database",
                 source: e,
             })
         })?;
@@ -122,7 +122,7 @@ impl DatabaseConnections {
 pub async fn migrate_auth_database(db: &DatabaseConnection) -> Result<(), InternalError> {
     AuthMigrator::up(db, None).await.map_err(|e| {
         InternalError::Database(DatabaseError::Operation {
-            operation: "run_migration".to_string(),
+            operation: "run_migration",
             source: e,
         })
     })?;
@@ -145,7 +145,7 @@ pub async fn migrate_auth_database(db: &DatabaseConnection) -> Result<(), Intern
 pub async fn migrate_audit_database(audit_db: &DatabaseConnection) -> Result<(), InternalError> {
     AuditMigrator::up(audit_db, None).await.map_err(|e| {
         InternalError::Database(DatabaseError::Operation {
-            operation: "run_audit_migrations".to_string(),
+            operation: "run_audit_migrations",
             source: e,
         })
     })?;

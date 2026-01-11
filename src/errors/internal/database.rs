@@ -4,7 +4,7 @@ use thiserror::Error;
 pub enum DatabaseError {
     #[error("Database error: {operation} failed: {source}")]
     Operation {
-        operation: String,
+        operation: &'static str,
         #[source]
         source: sea_orm::DbErr,
     },

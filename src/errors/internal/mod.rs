@@ -7,12 +7,14 @@ pub mod jwt_validation;
 pub mod login;
 pub mod system_config;
 pub mod crypto;
+pub mod user;
 
 use crate::{config::ApplicationError, errors::internal::{crypto::CryptoError, jwt_validation::JwtValidationError, login::LoginError}};
 pub use audit::AuditError;
 pub use credential::CredentialError;
 pub use database::DatabaseError;
 pub use system_config::SystemConfigError;
+pub use user::UserError;
 
 /// Internal error type for store and service operations
 ///
@@ -22,6 +24,9 @@ pub use system_config::SystemConfigError;
 pub enum InternalError {
     #[error(transparent)]
     Login(LoginError),
+
+    #[error(transparent)]
+    User(UserError),
 
     #[error(transparent)]
     Database(#[from] DatabaseError),
@@ -34,7 +39,7 @@ pub enum InternalError {
     #[error(transparent)]
     Crypto(#[from] CryptoError),
 
-    
+
     #[error(transparent)]
     Credential(#[from] CredentialError),
 
@@ -48,9 +53,9 @@ pub enum InternalError {
     JWTValidation(#[from] JwtValidationError),
 }
 impl InternalError {
-    pub fn database(operation: &str, source: sea_orm::DbErr) -> InternalError {
+    pub fn database(operation: &'static str, source: sea_orm::DbErr) -> InternalError {
         InternalError::Database(DatabaseError::Operation {
-            operation: operation.to_string(),
+            operation,
             source,
         })
     }

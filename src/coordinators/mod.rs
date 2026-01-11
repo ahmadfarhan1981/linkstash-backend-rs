@@ -8,6 +8,7 @@
 // pub mod auth_coordinator;
 // pub mod admin_coordinator;
 pub mod login_coordinator;
+pub mod user_coordinator;
 
 // Re-export coordinators for clean imports
 // pub use auth_coordinator::AuthCoordinator;
