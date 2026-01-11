@@ -34,6 +34,7 @@ pub enum InternalError {
     #[error(transparent)]
     Crypto(#[from] CryptoError),
 
+    
     #[error(transparent)]
     Credential(#[from] CredentialError),
 

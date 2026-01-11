@@ -1,11 +1,12 @@
 use crate::config::SecretManager;
-use crate::errors::internal::jwt_validation::JwtValidationError;
-use crate::types::db::AccessToken;
-use crate::types::internal::action_outcome::ActionOutcome;
 use crate::errors::InternalError;
-use crate::errors::internal::{CredentialError};
+use crate::errors::internal::CredentialError;
+use crate::errors::internal::crypto::CryptoError;
+use crate::errors::internal::jwt_validation::JwtValidationError;
 use crate::providers::CryptoProvider;
 use crate::stores::user_store::UserForJWT;
+use crate::types::db::AccessToken;
+use crate::types::internal::action_outcome::ActionOutcome;
 use crate::types::internal::auth::Claims;
 use base64::{Engine as _, engine::general_purpose};
 use chrono::{DateTime, Utc};
@@ -17,8 +18,7 @@ use std::fmt;
 use std::sync::Arc;
 use uuid::Uuid;
 
-
-const SECONDS_IN_MINUTES: i64=60;
+const SECONDS_IN_MINUTES: i64 = 60;
 
 /// Provides JWT token generation, validation, and refresh token operations
 ///
@@ -40,8 +40,13 @@ pub struct GeneratedJWT {
     pub token_type: String,
 }
 impl GeneratedJWT {
-    pub fn new( jwt: &str, jti: &str, expires_in: i64)-> Self{
-        Self { jwt: jwt.to_owned(), jti: jti.to_owned(), expires_in, token_type: "Bearer".to_owned() }
+    pub fn new(jwt: &str, jti: &str, expires_in: i64) -> Self {
+        Self {
+            jwt: jwt.to_owned(),
+            jti: jti.to_owned(),
+            expires_in,
+            token_type: "Bearer".to_owned(),
+        }
     }
 }
 
@@ -122,8 +127,12 @@ impl TokenProvider {
             &EncodingKey::from_secret(self.secret_manager.jwt_secret().as_bytes()),
         )
         .map_err(|e| InternalError::Crypto {
-            operation: "jwt_generation".to_string(),
-            message: format!("Failed to generate JWT: {}", e),
+            0: CryptoError::EncodeJWT {
+                component: "Token provider",
+                source: None,
+                operation: "jwt_generation",
+                message: format!("Failed to generate JWT: {}", e),
+            },
         })?;
 
         // Log JWT issuance at point of action (expiration_dt already validated above)
@@ -137,9 +146,12 @@ impl TokenProvider {
         //     tracing::error!("Failed to log JWT issuance: {:?}", audit_err);
         // }
 
-
-        let generated_jwt = GeneratedJWT::new(&jwt, &jti, self.jwt_expiration_minutes * SECONDS_IN_MINUTES) ;
-        Ok(ActionOutcome{ value: generated_jwt, audit: Vec::new() })
+        let generated_jwt =
+            GeneratedJWT::new(&jwt, &jti, self.jwt_expiration_minutes * SECONDS_IN_MINUTES);
+        Ok(ActionOutcome {
+            value: generated_jwt,
+            audit: Vec::new(),
+        })
     }
 
     /// Validate a JWT and return the claims
@@ -159,14 +171,9 @@ impl TokenProvider {
             &DecodingKey::from_secret(self.secret_manager.jwt_secret().as_bytes()),
             &validation,
         )
-        .map_err(|e| {
-            InternalError::JWTValidation(JwtValidationError::from_error(e, token) )
-
-        });
+        .map_err(|e| InternalError::JWTValidation(JwtValidationError::from_error(e, token)));
         // TODO audit intent
         token_data.map(|td| td.claims)
-                
-    
     }
     /// Extract claims from JWT without validation (for audit logging only)
     fn extract_unverified_claims(&self, token: &str) -> Result<Claims, InternalError> {
