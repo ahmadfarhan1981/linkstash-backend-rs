@@ -1,28 +1,75 @@
-use crate::AppData;
-use crate::audit::AuditLogger;
-use crate::providers::crypto_provider::PasswordHash;
-use crate::types::internal::action_outcome::ActionOutcome;
 use crate::errors::InternalError;
 use crate::errors::internal::login::LoginError::*;
-use crate::errors::internal::{CredentialError, DatabaseError};
+use crate::errors::internal::{CredentialError, DatabaseError, UserError};
+use crate::providers::crypto_provider::PasswordHash;
 use crate::types::db;
-use crate::types::db::refresh_token;
 use crate::types::db::user;
-use crate::types::internal::context::RequestContext;
+use crate::types::internal::action_outcome::ActionOutcome;
+use crate::errors::InternalError::User;
 
-use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
     FromQueryResult, QueryFilter, QuerySelect, Set,
 };
 use uuid::Uuid;
-use std::sync::Arc;
 
 pub struct UserStore {}
 impl UserStore {
     pub fn new() -> Self {
         Self {}
     }
+
+    pub async fn create_user(
+        &self,
+        conn: &impl ConnectionTrait,
+        user_to_create: UserToCreate,
+    ) -> Result<ActionOutcome<CreatedUser>, InternalError> {
+         // Check if username already exists
+        let existing_user = crate::types::db::user::Entity::find()
+            .filter(user::Column::Username.eq(&user_to_create.username))
+            .one(conn)
+            .await
+            .map_err(|e| InternalError::Database(DatabaseError::Operation { operation: "find existing user for create", source: e }))?;
+
+        if existing_user.is_some() {
+            return Err( InternalError::User( UserError::DuplicateUsername { username: user_to_create.username.clone() }));
+        }
+
+        let userid = UserId
+        let new_user = crate::types::db::user::ActiveModel {
+            id: Set(user_id.clone()),
+            username: Set(username.clone()),
+            password_hash: Set(password_hash),
+            created_at: Set(created_at),
+            is_owner: Set(false),
+            is_system_admin: Set(false),
+            is_role_admin: Set(false),
+            app_roles: Set(None),
+            password_change_required: Set(false),
+            updated_at: Set(created_at),
+        };
+
+        // Insert into database
+        new_user
+            .insert(&self.db)
+            .await
+            .map_err(|e| {
+                // Check if it's a unique constraint violation
+                if e.to_string().contains("UNIQUE") {
+                    InternalError::from(CredentialError::DuplicateUsername(username.clone()))
+                } else {
+                    InternalError::database("OPERATION", e)
+                }
+            })?;
+
+        // Log user creation at point of action
+        if
+        Ok(ActionOutcome::new(CreatedUser{
+            id: todo!(),
+            username: todo!(),
+        }))
+    }
+
     pub async fn get_user_from_username_for_auth(
         &self,
         conn: &impl ConnectionTrait,
@@ -40,7 +87,7 @@ impl UserStore {
             .await
             .map_err(|e| {
                 InternalError::Database(DatabaseError::Operation {
-                    operation: "get_user_from_username_for_auth".to_string(),
+                    operation: "get_user_from_username_for_auth",
                     source: e,
                 })
             })?;
@@ -73,7 +120,7 @@ impl UserStore {
             .await
             .map_err(|e| {
                 InternalError::Database(DatabaseError::Operation {
-                    operation: "get_user_from_username_for_jwt".to_string(),
+                    operation: "get_user_from_username_for_jwt",
                     source: e,
                 })
             })?;
@@ -145,14 +192,22 @@ pub struct UserForJWT {
     pub password_change_required: bool,
 }
 
-
 pub struct UserId(Uuid);
 
+impl UserId {
+    pub fn new()->Self{
+        Self(Uuid::new_v4())
+    }
+    
+}
 
-
-
-pub struct UserToCreate{
+pub struct UserToCreate {
     pub id: UserId,
     pub username: String,
     pub password: PasswordHash,
+}
+
+pub struct CreatedUser {
+    pub id: UserId,
+    pub username: String,
 }
