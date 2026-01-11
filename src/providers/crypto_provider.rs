@@ -132,7 +132,7 @@ impl CryptoProvider {
         );
         argon2
         .map_err(|e| InternalError::Crypto {
-                0: CryptoError::other("CryptoProvider", "Init argon", e),
+                0: CryptoError::other_from_string("CryptoProvider", "Init argon", e.to_string())
             })
 
         // match argon2 {
@@ -143,11 +143,14 @@ impl CryptoProvider {
 
     pub fn hash_password(&self, password: String) -> ProviderResult<PasswordHash> {
         let salt = SaltString::generate(&mut rand_core::OsRng);
-        let argon2 = self.initialize_argon()?.value;
+        let argon2 = self.initialize_argon()?;
 
         let password_hash = argon2
             .hash_password(password.as_bytes(), &salt)
-            // .map_err(|e| format!("Failed to hash password: {}", e))? //TODO Error handling
+            .map_err(|e| InternalError::Crypto {
+                0: CryptoError::other_from_string("CryptoProvider", "Hashing password", e.to_string())
+            })
+            ?
             .to_string();
 
         ProviderResult::<PasswordHash>::new(PasswordHash(password_hash))
