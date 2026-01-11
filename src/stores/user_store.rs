@@ -7,6 +7,7 @@ use crate::types::db::user;
 use crate::types::internal::action_outcome::ActionOutcome;
 use crate::errors::InternalError::User;
 
+use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
     FromQueryResult, QueryFilter, QuerySelect, Set,
@@ -35,38 +36,34 @@ impl UserStore {
             return Err( InternalError::User( UserError::DuplicateUsername { username: user_to_create.username.clone() }));
         }
 
-        let userid = UserId
+        let userid = UserId::new();
+        let now = Utc::now().timestamp();
         let new_user = crate::types::db::user::ActiveModel {
-            id: Set(user_id.clone()),
-            username: Set(username.clone()),
-            password_hash: Set(password_hash),
-            created_at: Set(created_at),
+            id: Set(userid.0.to_string()),
+            username: Set(user_to_create.username.clone()),
+            password_hash: Set(user_to_create.password.0.clone()),
+            created_at: Set(now),
             is_owner: Set(false),
             is_system_admin: Set(false),
             is_role_admin: Set(false),
             app_roles: Set(None),
             password_change_required: Set(false),
-            updated_at: Set(created_at),
+            updated_at: Set(now),
         };
 
         // Insert into database
         new_user
-            .insert(&self.db)
+            .insert(conn)
             .await
             .map_err(|e| {
-                // Check if it's a unique constraint violation
-                if e.to_string().contains("UNIQUE") {
-                    InternalError::from(CredentialError::DuplicateUsername(username.clone()))
-                } else {
-                    InternalError::database("OPERATION", e)
-                }
+                InternalError::database("OPERATION", e)
             })?;
 
         // Log user creation at point of action
-        if
+        
         Ok(ActionOutcome::new(CreatedUser{
-            id: todo!(),
-            username: todo!(),
+            id: userid,
+            username: user_to_create.username.clone(),
         }))
     }
 
@@ -199,6 +196,12 @@ impl UserId {
         Self(Uuid::new_v4())
     }
     
+}
+
+impl From<&UserId> for String {
+    fn from(value: &UserId) -> Self {
+        value.0.to_string()
+    }
 }
 
 pub struct UserToCreate {
