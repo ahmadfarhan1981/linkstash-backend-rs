@@ -1,5 +1,6 @@
 use crate::AppData;
 use crate::audit::AuditLogger;
+use crate::providers::crypto_provider::PasswordHash;
 use crate::types::internal::action_outcome::ActionOutcome;
 use crate::errors::InternalError;
 use crate::errors::internal::login::LoginError::*;
@@ -8,11 +9,13 @@ use crate::types::db;
 use crate::types::db::refresh_token;
 use crate::types::db::user;
 use crate::types::internal::context::RequestContext;
+
 use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
     FromQueryResult, QueryFilter, QuerySelect, Set,
 };
+use uuid::Uuid;
 use std::sync::Arc;
 
 pub struct UserStore {}
@@ -140,4 +143,16 @@ pub struct UserForJWT {
     /// json strings array
     pub app_roles: String,
     pub password_change_required: bool,
+}
+
+
+pub struct UserId(Uuid);
+
+
+
+
+pub struct UserToCreate{
+    pub id: UserId,
+    pub username: String,
+    pub password: PasswordHash,
 }
