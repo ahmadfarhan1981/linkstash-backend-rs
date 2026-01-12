@@ -21,6 +21,7 @@ use crate::{
     api::{AdminApi, AuthApi, HealthApi},
     config::{ApplicationError, BootstrapSettings, database::DatabaseConnections}, errors::InternalError,
 };
+use crate::api::user::UserApi;
 
 // Test utilities (available for unit and integration tests)
 // Note: Compiled in all builds but only used during testing
@@ -135,11 +136,13 @@ pub async fn get_routes(app_data: Arc<AppData>) -> Result<Route, std::io::Error>
     // Create AdminApi with AdminCoordinator
     let admin_api = AdminApi::new();
 
+    let user_api = UserApi::new(Arc::clone(&app_data));
+
     // Create OpenAPI service with API implementation
     // Use localhost for the server URL since 0.0.0.0 is not accessible from browsers
     let server_url = format!("http://localhost:{}/api", port);
     let api_service = OpenApiService::new(
-        (HealthApi, auth_api, admin_api),
+        (HealthApi, auth_api, admin_api, user_api),
         "Linkstash RS auth backend",
         "1.0.0",
     )

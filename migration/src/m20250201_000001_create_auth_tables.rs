@@ -14,7 +14,7 @@ impl MigrationTrait for Migration {
                     .if_not_exists()
                     .col(ColumnDef::new(Users::Id).string().not_null().primary_key())
                     .col(ColumnDef::new(Users::Username).string().not_null().unique_key())
-                    .col(ColumnDef::new(Users::PasswordHash).string().not_null())
+                    .col(ColumnDef::new(Users::PasswordHash).string().null())
                     .col(ColumnDef::new(Users::CreatedAt).big_integer().not_null())
                     .col(ColumnDef::new(Users::IsOwner).boolean().not_null().default(false))
                     .col(ColumnDef::new(Users::IsSystemAdmin).boolean().not_null().default(false))

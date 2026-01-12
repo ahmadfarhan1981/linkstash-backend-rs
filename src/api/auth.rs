@@ -1,7 +1,6 @@
 use crate::AppData;
-use crate::api::Api;
+use crate::api::{Api, BearerAuth};
 use crate::coordinators::LoginCoordinator;
-use crate::types::dto::UUID;
 use crate::types::dto::auth::{LoginApiResponse, LoginRequest, TokenResponse};
 use crate::types::dto::common::ErrorResponse;
 
@@ -25,16 +24,6 @@ impl AuthApi {
     }
 }
 
-/// JWT Bearer token authentication
-#[derive(SecurityScheme, Debug)]
-#[oai(
-    ty = "bearer",
-    key_name = "Authorization",
-    key_in = "header",
-    bearer_format = "JWT"
-)]
-pub struct BearerAuth(pub Bearer);
-
 /// API tags for authentication endpoints
 #[derive(Tags)]
 enum AuthTags {
@@ -49,13 +38,6 @@ impl AuthApi {
     async fn login(&self, req: &Request, body: Json<LoginRequest>) -> LoginApiResponse {
         let meta = self.generate_request_context_meta(req);
 
-        // self.auth_coordinator.login(ctx, username, password).await?
-        // let ctx = RequestContext::validate_request(req, )::new();
-
-        // self.auth_coordinator.login(ctx, username, password);
-
-        // self.auth_coordinator.login(ctx, username, password)
-
         let response = self
             .auth_coordinator
             .login(meta, body.username.clone(), body.password.clone() )
@@ -65,13 +47,6 @@ impl AuthApi {
                     status_code: 301,
                 })));
         response
-        
-        // LoginApiResponse::Ok(Json(TokenResponse {
-        //     access_token: format!("{:?}", &meta.auth),
-        //     refresh_token: "".to_string(),
-        //     token_type: "".to_string(),
-        //     expires_in: 0,
-        // }))
     }
     #[oai(path = "/test", method = "post", tag = "AuthTags::Authentication")]
     async fn test(

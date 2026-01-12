@@ -9,6 +9,7 @@ use crate::errors::InternalError;
 use crate::providers::crypto_provider::CryptoProvider;
 use crate::providers::token_provider::GeneratedRT;
 use crate::providers::{TokenProvider, token_provider};
+use crate::stores::authentication_store::AuthenticationStore;
 use crate::stores::user_store::{UserForAuth, UserStore};
 use crate::types::{ProviderResult, ProviderResultTrait};
 use crate::types::internal::context::RequestContext;
@@ -39,19 +40,22 @@ pub struct RefreshResponse {}
 pub struct LogoutRequest {}
 pub struct LogoutResponse {}
 pub struct AuthenticationProvider {
-    store: Arc<UserStore>,
+    user_store: Arc<UserStore>,
+    authentication_store: Arc<AuthenticationStore>,
     crypto_provider: Arc<CryptoProvider>,
     token_provider: Arc<TokenProvider>,
 }
 
 impl AuthenticationProvider {
     pub fn new(
-        store: Arc<UserStore>,
+        user_store: Arc<UserStore>,
+        authentication_store: Arc<AuthenticationStore>,
         crypto_provider: Arc<CryptoProvider>,
         token_provider: Arc<TokenProvider>,
     ) -> Self {
         Self {
-            store,
+            user_store,
+            authentication_store,
             crypto_provider,
             token_provider,
         }
@@ -62,7 +66,7 @@ impl AuthenticationProvider {
         creds: LoginRequest,
     ) -> ProviderResult<VerifyCredentialResult> {
         let user = self
-            .store
+            .authentication_store
             .get_user_from_username_for_auth(conn, &creds.username)
             .await?;
         let authenticated = self

@@ -1,4 +1,3 @@
-use crate::api::auth::BearerAuth;
 use poem::Request;
 use poem_openapi::{OpenApi, Tags, payload::Json};
 use std::sync::Arc;

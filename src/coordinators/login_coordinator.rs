@@ -21,6 +21,7 @@ use crate::{
         internal::context::RequestContext,
     },
 };
+use crate::stores::authentication_store::AuthenticationStore;
 
 pub struct LoginCoordinator {
     audit_logger: Arc<AuditLogger>,
@@ -28,6 +29,7 @@ pub struct LoginCoordinator {
     token_provider: Arc<TokenProvider>,
     user_store: Arc<UserStore>,
     connections: DatabaseConnections,
+    authentication_store: Arc<AuthenticationStore>,
 }
 
 impl Coordinator for LoginCoordinator {
@@ -43,6 +45,7 @@ impl LoginCoordinator {
             token_provider: Arc::clone(&app_data.providers.token_provider),
             user_store: Arc::clone(&app_data.stores.user_store),
             connections: app_data.connections.clone(),
+            authentication_store: Arc::clone(&app_data.stores.authentication_store),
         }
     }
 
@@ -65,7 +68,7 @@ impl LoginCoordinator {
         match verify_credential_result {
             Success { user } => {
                 let user_for_jwt = exec
-                    .fut(self.user_store.get_user_roles_for_jwt(&conn, &user.id))
+                    .fut(self.authentication_store.get_user_roles_for_jwt(&conn, &user.id))
                     .await?;
                 let jwt = exec
                     .fut(self.token_provider.generate_jwt(&user_for_jwt))
@@ -73,7 +76,7 @@ impl LoginCoordinator {
                 let rt = exec
                     .res(self.token_provider.generate_refresh_token())
                     .await?;
-                self.user_store
+                self.authentication_store
                     .save_refresh_token_for_user(
                         &conn,
                         &user.id,
