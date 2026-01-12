@@ -6,7 +6,7 @@ pub mod helpers;
 pub mod user;
 
 use std::{net::IpAddr, sync::Arc};
-
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 pub use admin::AdminApi;
 pub use auth::AuthApi;
 pub use health::HealthApi;
@@ -18,6 +18,9 @@ use uuid::Uuid;
 
 
 use crate::{providers::TokenProvider, types::{ApiResult, internal::context::{RequestContext, RequestContextMeta, RequestId, RequestSource}}};
+use crate::errors::internal::jwt_validation::JwtValidationError;
+use crate::errors::InternalError;
+use crate::types::internal::auth::Claims;
 
 /// JWT Bearer token authentication
 #[derive(SecurityScheme, Debug)]
@@ -65,9 +68,46 @@ pub trait Api {
             source: RequestSource::API,
         }
     }
+    
+    fn from_context_meta(
+        &self,
+        context_meta: RequestContextMeta,
+    ) -> RequestContext {
+        let claims = context_meta
+            .auth
+            .as_ref()
+            .ok_or_else(|| {
+                InternalError::Login(crate::errors::internal::login::LoginError::IncorrectPassword)
+            })
+            .and_then(|bearer| self.validate_jwt(bearer));
 
-    fn verify_token(&self){
+        let actor_id = claims
+            .as_ref()
+            .ok()
+            .map(|claims| claims.sub.clone())
+            .unwrap_or("unknown".to_owned());
 
+        RequestContext {
+            ip_address: context_meta.ip,
+            request_id: context_meta.request_id,
+            authenticated: claims.is_ok(),
+            claims: claims.ok(),
+            source: context_meta.source,
+            actor_id,
+        }
+    }
+
+    fn validate_jwt(&self, auth: &Bearer) -> Result<Claims, InternalError> {
+        let validation = Validation::new(Algorithm::HS256);
+        let token = auth.token.as_str();
+        let token_data = decode::<Claims>(
+            token,
+            &DecodingKey::from_secret(self.secret_manager.jwt_secret().as_bytes()),
+            &validation,
+        )
+            .map_err(|e| InternalError::JWTValidation(JwtValidationError::from_error(e, token)));
+        // TODO audit intent
+        token_data.map(|td| td.claims)
     }
 }
 
