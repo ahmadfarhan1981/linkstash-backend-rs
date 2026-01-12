@@ -7,7 +7,7 @@ pub struct Model {
     pub id: String,
     #[sea_orm(unique)]
     pub username: String,
-    pub password_hash: String,
+    pub password_hash: Option<String>,
     pub created_at: i64,
 
     // Admin role flags

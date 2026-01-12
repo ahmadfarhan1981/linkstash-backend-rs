@@ -11,6 +11,7 @@ pub mod authentication_provider;
 pub mod crypto_provider;
 // pub mod users;
 pub mod context_provider;
+pub mod user_provider;
 
 // Re-export providers for clean imports
 pub use crypto_provider::CryptoProvider;

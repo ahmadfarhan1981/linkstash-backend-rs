@@ -3,6 +3,7 @@ pub mod admin;
 pub mod auth;
 pub mod health;
 pub mod helpers;
+pub mod user;
 
 use std::{net::IpAddr, sync::Arc};
 
@@ -12,11 +13,21 @@ pub use health::HealthApi;
 use migration::token;
 use poem::Request;
 use poem_openapi::auth::{Bearer, BearerAuthorization};
+use poem_openapi::SecurityScheme;
 use uuid::Uuid;
 
 
 use crate::{providers::TokenProvider, types::{ApiResult, internal::context::{RequestContext, RequestContextMeta, RequestId, RequestSource}}};
 
+/// JWT Bearer token authentication
+#[derive(SecurityScheme, Debug)]
+#[oai(
+    ty = "bearer",
+    key_name = "Authorization",
+    key_in = "header",
+    bearer_format = "JWT"
+)]
+pub struct BearerAuth(pub Bearer);
 
 pub trait Api {
    
@@ -53,6 +64,10 @@ pub trait Api {
             auth,
             source: RequestSource::API,
         }
+    }
+
+    fn verify_token(&self){
+
     }
 }
 

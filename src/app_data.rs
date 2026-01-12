@@ -3,7 +3,9 @@ use crate::config::database::DatabaseConnections;
 use crate::config::{EnvironmentProvider, SecretManager, SystemEnvironment};
 use crate::errors::InternalError;
 use crate::providers::authentication_provider::AuthenticationProvider;
+use crate::providers::user_provider::UserProvider;
 use crate::providers::{CryptoProvider, TokenProvider, token_provider};
+use crate::stores::authentication_store::AuthenticationStore;
 use crate::stores::user_store::UserStore;
 use crate::stores::{AuditStore, user_store};
 use sea_orm::DatabaseConnection;
@@ -47,9 +49,11 @@ pub struct Providers {
     pub authentication_provider: Arc<AuthenticationProvider>,
     pub crypto_provider: Arc<CryptoProvider>,
     pub token_provider: Arc<TokenProvider>,
+    pub user_provider: Arc<UserProvider>,
 }
 pub struct Stores {
     pub user_store: Arc<UserStore>,
+    pub authentication_store: Arc<AuthenticationStore>,
     // pub credential_store: Arc<CredentialStore>,
     // pub system_config_store: Arc<SystemConfigStore>,
     // pub common_password_store: Arc<CommonPasswordStore>,
@@ -83,6 +87,7 @@ impl AppData {
         tracing::debug!("Creating stores...");
         let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
         let user_store = Arc::new(UserStore::new());
+        let authentication_store = Arc::new(AuthenticationStore::new());
         // let credential_store = Arc::new(CredentialStore::new(
         //     db.clone(),
         //     secret_manager.password_pepper().to_string(),
@@ -103,6 +108,7 @@ impl AppData {
 
         let stores = Stores {
             user_store: Arc::clone(&user_store),
+            authentication_store: Arc::clone(&authentication_store),
             // credential_store,
             // system_config_store,
             // common_password_store,
@@ -122,13 +128,16 @@ impl AppData {
         ));
         let authentication_provider = Arc::new(AuthenticationProvider::new(
             Arc::clone(&user_store),
+            Arc::clone(&authentication_store),
             Arc::clone(&crypto_provider),
             Arc::clone(&token_provider),
         ));
+        let user_provider = Arc::new(UserProvider::new(Arc::clone(&user_store)));
         let providers = Providers {
             crypto_provider,
             authentication_provider,
             token_provider,
+            user_provider
         };
 
         Ok(Self {
