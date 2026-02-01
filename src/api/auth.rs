@@ -1,5 +1,5 @@
 use crate::AppData;
-use crate::api::{Api, BearerAuth};
+use crate::api::{Api, BearerAuth, TokenVerifier};
 use crate::coordinators::LoginCoordinator;
 use crate::types::dto::auth::{LoginApiResponse, LoginRequest, TokenResponse};
 use crate::types::dto::common::ErrorResponse;
@@ -13,13 +13,15 @@ use uuid::Uuid;
 /// Authentication API endpoints
 pub struct AuthApi {
     auth_coordinator: LoginCoordinator,
+    token_verifier: Arc<TokenVerifier>,
 }
 
 impl AuthApi {
     /// Create a new AuthApi with the given AuthCoordinator
     pub fn new(app_data: Arc<AppData>) -> Self {
         Self {
-            auth_coordinator: LoginCoordinator::new(app_data),
+            auth_coordinator: LoginCoordinator::new(Arc::clone(&app_data)),
+            token_verifier: Arc::new(TokenVerifier::new(Arc::clone(&app_data))),
         }
     }
 }
@@ -30,7 +32,11 @@ enum AuthTags {
     /// Authentication endpoints
     Authentication,
 }
-impl Api for AuthApi {}
+impl Api for AuthApi {
+    fn token_verifier(&self) -> Arc<TokenVerifier> {
+        todo!()
+    }
+}
 
 #[OpenApi(prefix_path = "/auth")]
 impl AuthApi {

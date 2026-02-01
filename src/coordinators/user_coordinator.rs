@@ -33,12 +33,11 @@ impl UserCoordinator {
         }
     }
     pub async fn create_user( &self,
-                              context_meta: RequestContextMeta,
+                              request_context: RequestContext,
                               username: String,
                               password: String,) -> Result<(), ApplicationError> {
 
-        let ctx = &RequestContext::from_context_meta(context_meta, token_provider)
-        let exec = self.exec(ctx)
+        let exec = self.exec(&request_context);
         let conn = self.connections.begin_auth_transaction().await?;
         //checks if user exists
         let user_exists = self.user_provider.user_exists(&conn, &username).await?;

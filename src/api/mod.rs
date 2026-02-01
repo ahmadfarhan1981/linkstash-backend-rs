@@ -5,22 +5,25 @@ pub mod health;
 pub mod helpers;
 pub mod user;
 
-use std::{net::IpAddr, sync::Arc};
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 pub use admin::AdminApi;
 pub use auth::AuthApi;
 pub use health::HealthApi;
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use migration::token;
 use poem::Request;
-use poem_openapi::auth::{Bearer, BearerAuthorization};
 use poem_openapi::SecurityScheme;
+use poem_openapi::auth::{Bearer, BearerAuthorization};
+use std::{net::IpAddr, sync::Arc};
 use uuid::Uuid;
 
-
-use crate::{providers::TokenProvider, types::{ApiResult, internal::context::{RequestContext, RequestContextMeta, RequestId, RequestSource}}};
-use crate::errors::internal::jwt_validation::JwtValidationError;
+use crate::config::SecretManager;
 use crate::errors::InternalError;
+use crate::errors::internal::jwt_validation::JwtValidationError;
 use crate::types::internal::auth::Claims;
+use crate::{providers::TokenProvider, types::{
+    ApiResult,
+    internal::context::{RequestContext, RequestContextMeta, RequestId, RequestSource},
+}, AppData};
 
 /// JWT Bearer token authentication
 #[derive(SecurityScheme, Debug)]
@@ -33,7 +36,6 @@ use crate::types::internal::auth::Claims;
 pub struct BearerAuth(pub Bearer);
 
 pub trait Api {
-   
     fn extract_ip_address(&self, req: &Request) -> Option<IpAddr> {
         // Check X-Forwarded-For header (proxy/load balancer)
         if let Some(forwarded) = req.header("X-Forwarded-For") {
@@ -48,19 +50,17 @@ pub trait Api {
         }
 
         // Fall back to remote address
-        req.remote_addr()
-            .as_socket_addr()
-            .map(|addr| addr.ip())
+        req.remote_addr().as_socket_addr().map(|addr| addr.ip())
     }
 
-    fn generate_request_context_meta(&self, req: &Request)->RequestContextMeta{
+    fn generate_request_context_meta(&self, req: &Request) -> RequestContextMeta {
         let ip = self.extract_ip_address(req);
         let auth = match Bearer::from_request(req) {
             Ok(bearer) => Some(bearer),
             Err(_) => None,
         };
         let request_id = RequestId(Uuid::new_v4());
-        
+
         RequestContextMeta {
             request_id,
             ip,
@@ -68,18 +68,15 @@ pub trait Api {
             source: RequestSource::API,
         }
     }
-    
-    fn from_context_meta(
-        &self,
-        context_meta: RequestContextMeta,
-    ) -> RequestContext {
+
+    fn generate_request_context(&self, context_meta: RequestContextMeta) -> RequestContext {
         let claims = context_meta
             .auth
             .as_ref()
             .ok_or_else(|| {
                 InternalError::Login(crate::errors::internal::login::LoginError::IncorrectPassword)
             })
-            .and_then(|bearer| self.validate_jwt(bearer));
+            .and_then(|bearer| self.token_verifier().validate_jwt(bearer));
 
         let actor_id = claims
             .as_ref()
@@ -97,7 +94,20 @@ pub trait Api {
         }
     }
 
-    fn validate_jwt(&self, auth: &Bearer) -> Result<Claims, InternalError> {
+    fn token_verifier(&self) -> Arc<TokenVerifier>;
+}
+
+pub struct TokenVerifier {
+    secret_manager: Arc<SecretManager>,
+}
+
+impl TokenVerifier {
+    pub fn new(app_data: Arc<AppData>) -> Self {
+        Self{
+            secret_manager: Arc::clone(&app_data.secret_manager),
+        }
+    }
+    pub fn validate_jwt(&self, auth: &Bearer) -> Result<Claims, InternalError> {
         let validation = Validation::new(Algorithm::HS256);
         let token = auth.token.as_str();
         let token_data = decode::<Claims>(
@@ -110,4 +120,3 @@ pub trait Api {
         token_data.map(|td| td.claims)
     }
 }
-
