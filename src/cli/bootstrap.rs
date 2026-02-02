@@ -47,7 +47,7 @@ pub async fn bootstrap_system(
     
     // Log CLI session start
     use crate::audit::audit_logger;
-    if let Err(audit_err) = audit_logger::log_cli_session_start(
+    if let Err(audit_err) = audit_logger::AuditLogger::log_cli_session_start(
         audit_store,
         &ctx,
         "bootstrap",
