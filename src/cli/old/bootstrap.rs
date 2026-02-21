@@ -1,16 +1,17 @@
 // Bootstrap command implementation
 // Creates owner account and initial admin accounts during system setup
 
-use argon2::{password_hash::SaltString, Algorithm, Argon2, Params, PasswordHasher, Version};
 use std::io::{self, Write};
 use std::sync::Arc;
 use uuid::Uuid;
+use argon2::{Argon2, PasswordHasher, password_hash::SaltString, Algorithm, Version, Params};
 
 use crate::config::SecretManager;
-use crate::stores::{AuditStore, SystemConfigStore};
+use crate::stores::{CredentialStore, SystemConfigStore, AuditStore};
 use crate::types::internal::auth::AdminFlags;
+use crate::providers::PasswordValidatorProvider;
+use crate::cli::credential_export::{ExportFormat, export_credentials};
 use crate::types::internal::context::RequestContext;
-
 
 // Fixed credentials for non-interactive bootstrap (TEST ONLY)
 #[cfg(any(debug_assertions, feature = "test-utils"))]
@@ -32,11 +33,11 @@ const TEST_OWNER_PASSWORD: &str = "test-owner-password-do-not-use-in-production"
 /// * `Ok(())` - Bootstrap completed successfully
 /// * `Err(...)` - Bootstrap failed (e.g., system already bootstrapped)
 pub async fn bootstrap_system(
-    // credential_store: &CredentialStore,
+    credential_store: &CredentialStore,
     system_config_store: &SystemConfigStore,
     audit_store: &Arc<AuditStore>,
     secret_manager: &SecretManager,
-    // password_validator: &PasswordValidatorProvider,
+    password_validator: &PasswordValidatorProvider,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== Linkstash Bootstrap ===\n");
     
@@ -45,55 +46,55 @@ pub async fn bootstrap_system(
     let ctx = RequestContext::for_cli("bootstrap");
     
     // Log CLI session start
-    // use crate::audit::audit_logger;
-    // if let Err(audit_err) = audit_logger::AuditLogger::log_cli_session_start(
-    //     audit_store,
-    //     &ctx,
-    //     "bootstrap",
-    //     vec![], // No sensitive args to log
-    // ).await {
-    //     eprintln!("Warning: Failed to log CLI session start: {:?}", audit_err);
-    // }
+    use crate::audit::audit_logger;
+    if let Err(audit_err) = audit_logger::AuditLogger::log_cli_session_start(
+        audit_store,
+        &ctx,
+        "bootstrap",
+        vec![], // No sensitive args to log
+    ).await {
+        eprintln!("Warning: Failed to log CLI session start: {:?}", audit_err);
+    }
     
     // Execute bootstrap logic and capture result
-    let result = bootstrap_system_impl(system_config_store, audit_store, secret_manager,  &ctx).await;
+    let result = bootstrap_system_impl(credential_store, system_config_store, audit_store, secret_manager, password_validator, &ctx).await;
     
     // Log CLI session end based on result
-    // match &result {
-    //     Ok(_) => {
-    //         if let Err(audit_err) = audit_logger::log_cli_session_end(
-    //             audit_store,
-    //             &ctx,
-    //             "bootstrap",
-    //             true,
-    //             None,
-    //         ).await {
-    //             eprintln!("Warning: Failed to log CLI session end: {:?}", audit_err);
-    //         }
-    //     }
-    //     Err(e) => {
-    //         if let Err(audit_err) = audit_logger::log_cli_session_end(
-    //             audit_store,
-    //             &ctx,
-    //             "bootstrap",
-    //             false,
-    //             Some(e.to_string()),
-    //         ).await {
-    //             eprintln!("Warning: Failed to log CLI session end: {:?}", audit_err);
-    //         }
-    //     }
-    // }
-    // 
+    match &result {
+        Ok(_) => {
+            if let Err(audit_err) = audit_logger::log_cli_session_end(
+                audit_store,
+                &ctx,
+                "bootstrap",
+                true,
+                None,
+            ).await {
+                eprintln!("Warning: Failed to log CLI session end: {:?}", audit_err);
+            }
+        }
+        Err(e) => {
+            if let Err(audit_err) = audit_logger::log_cli_session_end(
+                audit_store,
+                &ctx,
+                "bootstrap",
+                false,
+                Some(e.to_string()),
+            ).await {
+                eprintln!("Warning: Failed to log CLI session end: {:?}", audit_err);
+            }
+        }
+    }
+    
     result
 }
 
 /// Internal implementation of bootstrap system
 async fn bootstrap_system_impl(
-    // credential_store: &CredentialStore,
+    credential_store: &CredentialStore,
     system_config_store: &SystemConfigStore,
     audit_store: &Arc<AuditStore>,
     secret_manager: &SecretManager,
-    // password_validator: &PasswordValidatorProvider,
+    password_validator: &PasswordValidatorProvider,
     ctx: &RequestContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::audit::audit_logger;
@@ -612,8 +613,8 @@ async fn create_admin_user_with_password_change_required(
     password_hash: String,
     admin_flags: AdminFlags,
 ) -> Result<crate::types::db::user::Model, crate::errors::InternalError> {
-    use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
-    use crate::types::db::user::{self, ActiveModel, Entity as User};
+    use sea_orm::{EntityTrait, ColumnTrait, QueryFilter, ActiveModelTrait, Set};
+    use crate::types::db::user::{self, Entity as User, ActiveModel};
     use crate::audit::audit_logger;
     use chrono::Utc;
     
