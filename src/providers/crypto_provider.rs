@@ -141,30 +141,41 @@ impl CryptoProvider {
         // }
     }
 
-    pub fn hash_password(&self, password: String) -> ProviderResult<PasswordHash> {
+    // pub fn hash_password(&self, password: String) -> ProviderResult<PasswordHash> {
+    //     let salt = SaltString::generate(&mut rand_core::OsRng);
+    //     let argon2 = self.initialize_argon()?;
+    //
+    //     let password_hash = argon2
+    //         .hash_password(password.as_bytes(), &salt)
+    //         .map_err(|e| InternalError::Crypto {
+    //             0: CryptoError::other_from_string("CryptoProvider", "Hashing password", e.to_string())
+    //         })
+    //         ?
+    //         .to_string();
+    //
+    //     ProviderResult::<PasswordHash>::new(PasswordHash(password_hash))
+    // }
+
+    fn hash_password1(password: &str, password_pepper: &str) -> Result<String, Box<dyn std::error::Error>> {
         let salt = SaltString::generate(&mut rand_core::OsRng);
-        let argon2 = self.initialize_argon()?;
+        let argon2 = Argon2::new_with_secret(
+            password_pepper.as_bytes(),
+            Algorithm::Argon2id,
+            Version::V0x13,
+            Params::default(),
+        )
+            .map_err(|e| format!("Failed to initialize Argon2: {}", e))?;
 
         let password_hash = argon2
             .hash_password(password.as_bytes(), &salt)
-            .map_err(|e| InternalError::Crypto {
-                0: CryptoError::other_from_string("CryptoProvider", "Hashing password", e.to_string())
-            })
-            ?
+            .map_err(|e| format!("Failed to hash password: {}", e))?
             .to_string();
 
-        ProviderResult::<PasswordHash>::new(PasswordHash(password_hash))
+        Ok(password_hash)
     }
+
 }
 
-pub struct PasswordHash(pub String);
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn test_generate_secure_password_meets_length_requirement() {
-        // TODO
-    }
-}
+
