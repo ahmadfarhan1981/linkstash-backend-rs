@@ -85,7 +85,7 @@ impl AppData {
 
         // Order matters: audit_store first, then others that depend on it
         tracing::debug!("Creating stores...");
-        let audit_store = Arc::new(AuditStore::new(audit_db.clone()));
+        let audit_store = Arc::new(AuditStore::new());
         let user_store = Arc::new(UserStore::new());
         let authentication_store = Arc::new(AuthenticationStore::new());
         // let credential_store = Arc::new(CredentialStore::new(
@@ -137,7 +137,7 @@ impl AppData {
             crypto_provider,
             authentication_provider,
             token_provider,
-            user_provider
+            user_provider,
         };
 
         Ok(Self {

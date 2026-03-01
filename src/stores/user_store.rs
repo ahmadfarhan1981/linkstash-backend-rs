@@ -1,15 +1,11 @@
+use crate::errors::internal::DatabaseError;
 use crate::errors::InternalError;
-use crate::errors::InternalError::User;
-use crate::errors::internal::login::LoginError::*;
-use crate::errors::internal::{CredentialError, DatabaseError, UserError};
-use crate::providers::crypto_provider::PasswordHash;
-use crate::types::db;
 use crate::types::db::user;
 use crate::types::internal::action_outcome::ActionOutcome;
 
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait,
     FromQueryResult, QueryFilter, QuerySelect, Set,
 };
 use uuid::Uuid;
@@ -23,9 +19,9 @@ impl UserStore {
     pub async fn username_in_use(
         &self,
         conn: &impl ConnectionTrait,
-        username: impl AsRef<str>
+        username: impl AsRef<str>,
     ) -> Result<ActionOutcome<bool>, InternalError> {
-        let existing_user = crate::types::db::user::Entity::find()
+        let existing_user = user::Entity::find()
             .filter(user::Column::Username.eq(username.as_ref()))
             .column(user::Column::Username)
             .one(conn)
@@ -37,7 +33,7 @@ impl UserStore {
                 })
             })?;
 
-        Ok(ActionOutcome::new(existing_user.is_some()))// TODO logging
+        Ok(ActionOutcome::new(existing_user.is_some())) // TODO logging
     }
 
     pub async fn create_user(
@@ -45,10 +41,9 @@ impl UserStore {
         conn: &impl ConnectionTrait,
         user_to_create: UserToCreate,
     ) -> Result<ActionOutcome<CreatedUser>, InternalError> {
-        
         let userid = UserId::new();
         let now = Utc::now().timestamp();
-        let new_user = crate::types::db::user::ActiveModel {
+        let new_user = user::ActiveModel {
             id: Set(userid.0.to_string()),
             username: Set(user_to_create.username.clone()),
             password_hash: Set(None),
@@ -67,15 +62,15 @@ impl UserStore {
             .await
             .map_err(|e| InternalError::database("OPERATION", e))?;
 
+        // TODO
         // Log user creation at point of action
+
 
         Ok(ActionOutcome::new(CreatedUser {
             id: userid,
             username: user_to_create.username.clone(),
         }))
     }
-
-
 }
 
 #[derive(FromQueryResult, Clone)]
@@ -96,8 +91,9 @@ pub struct UserForJWT {
     pub password_change_required: bool,
 }
 
-pub struct UserId(Uuid);
 
+#[derive(Copy, Clone)]
+pub struct UserId(Uuid);
 impl UserId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
@@ -106,6 +102,12 @@ impl UserId {
 
 impl From<&UserId> for String {
     fn from(value: &UserId) -> Self {
+        value.0.to_string()
+    }
+}
+
+impl From<UserId> for String {
+    fn from(value: UserId) -> Self {
         value.0.to_string()
     }
 }

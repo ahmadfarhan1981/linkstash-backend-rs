@@ -29,3 +29,5 @@ pub trait ProviderResultTrait<T> {
     }
 }
 impl<T>  ProviderResultTrait<T> for ProviderResult<T> {}
+
+pub struct PasswordHash(pub String);

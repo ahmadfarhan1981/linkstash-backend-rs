@@ -2,7 +2,7 @@
 
 pub mod bootstrap;
 // pub mod owner;
-// pub mod credential_export;
+pub mod credential_export;
 // pub mod password_management;
 
 use clap::{Parser, Subcommand};
@@ -114,13 +114,13 @@ pub async fn execute_command(
                     //     app_data.stores.hibp_cache_store.clone(),
                     // ));
 
-                    bootstrap::bootstrap_system(
-                        &app_data.stores.credential_store,
-                        &app_data.stores.system_config_store,
-                        &app_data.audit_logger.audit_store,
-                        &app_data.secret_manager,
-                        &password_validator,
-                    ).await
+                    // bootstrap::bootstrap_system(
+                    //     &app_data.stores.credential_store,
+                    //     &app_data.stores.system_config_store,
+                    //     &app_data.audit_logger.audit_store,
+                    //     &app_data.secret_manager,
+                    //     &password_validator,
+                    // ).await
                 }
             }
 
