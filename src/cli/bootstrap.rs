@@ -4,20 +4,14 @@
 use argon2::{password_hash::SaltString, Algorithm, Argon2, Params, PasswordHasher, Version};
 use std::io::{self, Write};
 use std::sync::Arc;
+use rand::Rng;
 use uuid::Uuid;
 
 use crate::config::SecretManager;
 use crate::stores::{AuditStore, SystemConfigStore};
+use crate::stores::owner_store::{OwnerStatus, OwnerStore};
 use crate::types::internal::auth::AdminFlags;
 use crate::types::internal::context::RequestContext;
-
-
-// Fixed credentials for non-interactive bootstrap (TEST ONLY)
-#[cfg(any(debug_assertions, feature = "test-utils"))]
-const TEST_OWNER_USERNAME: &str = "test-owner";
-
-#[cfg(any(debug_assertions, feature = "test-utils"))]
-const TEST_OWNER_PASSWORD: &str = "test-owner-password-do-not-use-in-production";
 
 /// Bootstrap the system by creating owner and initial admin accounts
 /// 
@@ -32,11 +26,11 @@ const TEST_OWNER_PASSWORD: &str = "test-owner-password-do-not-use-in-production"
 /// * `Ok(())` - Bootstrap completed successfully
 /// * `Err(...)` - Bootstrap failed (e.g., system already bootstrapped)
 pub async fn bootstrap_system(
-    // credential_store: &CredentialStore,
     system_config_store: &SystemConfigStore,
     audit_store: &Arc<AuditStore>,
     secret_manager: &SecretManager,
-    // password_validator: &PasswordValidatorProvider,
+
+    // password_validator: &PasswordValidatorProvider, // TODO password validator
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== Linkstash Bootstrap ===\n");
     
@@ -44,65 +38,35 @@ pub async fn bootstrap_system(
     use crate::types::internal::context::RequestContext;
     let ctx = RequestContext::for_cli("bootstrap");
     
-    // Log CLI session start
-    // use crate::audit::audit_logger;
-    // if let Err(audit_err) = audit_logger::AuditLogger::log_cli_session_start(
-    //     audit_store,
-    //     &ctx,
-    //     "bootstrap",
-    //     vec![], // No sensitive args to log
-    // ).await {
-    //     eprintln!("Warning: Failed to log CLI session start: {:?}", audit_err);
-    // }
-    
+    // TODO Log CLI session start
+
     // Execute bootstrap logic and capture result
     let result = bootstrap_system_impl(system_config_store, audit_store, secret_manager,  &ctx).await;
     
-    // Log CLI session end based on result
-    // match &result {
-    //     Ok(_) => {
-    //         if let Err(audit_err) = audit_logger::log_cli_session_end(
-    //             audit_store,
-    //             &ctx,
-    //             "bootstrap",
-    //             true,
-    //             None,
-    //         ).await {
-    //             eprintln!("Warning: Failed to log CLI session end: {:?}", audit_err);
-    //         }
-    //     }
-    //     Err(e) => {
-    //         if let Err(audit_err) = audit_logger::log_cli_session_end(
-    //             audit_store,
-    //             &ctx,
-    //             "bootstrap",
-    //             false,
-    //             Some(e.to_string()),
-    //         ).await {
-    //             eprintln!("Warning: Failed to log CLI session end: {:?}", audit_err);
-    //         }
-    //     }
-    // }
-    // 
+    // TODO Log CLI session end based on result
+
     result
 }
 
 /// Internal implementation of bootstrap system
 async fn bootstrap_system_impl(
-    // credential_store: &CredentialStore,
     system_config_store: &SystemConfigStore,
     audit_store: &Arc<AuditStore>,
     secret_manager: &SecretManager,
-    // password_validator: &PasswordValidatorProvider,
+    // password_validator: &PasswordValidatorProvider, // TODO Password validator
+    owner_store: OwnerStore,
     ctx: &RequestContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::audit::audit_logger;
     
     // Check if owner already exists
-    let existing_owner = credential_store.get_owner().await
+    let existing_owner = owner_store.check_owner().await
         .map_err(|e| format!("Failed to check for existing owner: {}", e))?;
-    if existing_owner.is_some() {
-        return Err("System already bootstrapped".into());
+    match existing_owner {
+        // return Err("System already bootstrapped".into());
+        OwnerStatus::DoesNotExist => {}//intentionally pass // TODO look for better structure
+        OwnerStatus::ExistsNotActivated => {return Err("System already bootstrapped".into());}
+        OwnerStatus::ExistsActivated(_) => {return Err("System already bootstrapped".into());}
     }
     
     println!("No owner account found. Starting bootstrap process...\n");
@@ -168,7 +132,7 @@ async fn bootstrap_system_impl(
 /// * `owner_password` - Password for the owner account (will be hashed)
 /// * `skip_export` - If true, skip the credential export prompt
 async fn create_owner_account(
-    credential_store: &CredentialStore,
+    // credential_store: &CredentialStore,
     system_config_store: &SystemConfigStore,
     secret_manager: &SecretManager,
     ctx: &RequestContext,
@@ -303,6 +267,21 @@ async fn create_role_admin_accounts(
     Ok(role_admin_count)
 }
 
+//temp put here for now.
+// TODO figure out where to put this
+pub fn generate_secure_password() -> String {
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+    let mut rng = rand::rng();
+
+    (0..20)
+        .map(|_| {
+            let idx = rng.random_range(0..CHARSET.len());
+            CHARSET[idx] as char
+        })
+        .collect()
+}
+
+
 /// Prompt user for password (auto-generate or manual entry)
 /// 
 /// Default: Auto-generate (on empty input)
@@ -318,7 +297,7 @@ async fn create_role_admin_accounts(
 /// * `Err(...)` - I/O error or validation error
 async fn prompt_for_password(
     role_type: &str,
-    password_validator: &PasswordValidatorProvider,
+    // password_validator: &PasswordValidatorProvider,
     username: Option<&str>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     // Loop for retry on invalid input (y/n choice)
@@ -335,7 +314,7 @@ async fn prompt_for_password(
         match input.as_str() {
             "" | "y" | "yes" => {
                 // Default or explicit yes: auto-generate using PasswordValidator
-                let password = password_validator.generate_secure_password();
+                let password = generate_secure_password();
                 println!("✓ Password auto-generated");
                 return Ok(password);
             }
@@ -353,19 +332,19 @@ async fn prompt_for_password(
                         println!("❌ Password cannot be empty");
                         continue;
                     }
-                    
-                    // Validate password using PasswordValidator
-                    match password_validator.validate(&password, username).await {
-                        Ok(_) => {
-                            println!("✓ Password validated successfully");
-                            return Ok(password);
-                        }
-                        Err(e) => {
-                            println!("❌ Password validation failed: {}", e);
-                            println!("Please try again or press Ctrl+C to cancel.");
-                            // Loop continues, prompting for password again
-                        }
-                    }
+                    return Ok(password);
+                    // // Validate password using PasswordValidator
+                    // match password_validator.validate(&password, username).await {
+                    //     Ok(_) => {
+                    //         println!("✓ Password validated successfully");
+                    //         return Ok(password);
+                    //     }
+                    //     Err(e) => {
+                    //         println!("❌ Password validation failed: {}", e);
+                    //         println!("Please try again or press Ctrl+C to cancel.");
+                    //         // Loop continues, prompting for password again
+                    //     }
+                    // }
                 }
             }
             _ => {
@@ -606,7 +585,7 @@ pub async fn bootstrap_system_non_interactive(
 /// * `Ok(Model)` - The created user model with password_change_required=true
 /// * `Err(InternalError)` - User creation or privilege assignment failed
 async fn create_admin_user_with_password_change_required(
-    credential_store: &CredentialStore,
+    // credential_store: &CredentialStore,
     ctx: &RequestContext,
     username: String,
     password_hash: String,

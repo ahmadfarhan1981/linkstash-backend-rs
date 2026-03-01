@@ -17,11 +17,15 @@ impl UserProvider {
     
 
     pub async fn user_exists(&self, conn:&impl ConnectionTrait, username: &str)->ProviderResult<bool>{
-
         let result = self.user_store.username_in_use(conn, username).await?;
-
         ProviderResult::new(result.value)
     }
+
+    pub async fn create_user(&self, conn:&impl ConnectionTrait, username: &str)->ProviderResult<bool>{
+        let result = self.user_store.username_in_use(conn, username).await?;
+        ProviderResult::new(result.value)
+    }
+
     
     
 }
