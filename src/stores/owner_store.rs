@@ -1,14 +1,16 @@
-use argon2::PasswordHash;
-use chrono::Utc;
-use crate::InternalError;
 use crate::errors::internal::SystemConfigError;
-use crate::stores::user_store::UserForAuth;
+use crate::stores::user_store::{UserForAuth, UserId};
 use crate::types::db::system_config::Entity as SystemConfig;
 use crate::types::db::user;
 use crate::types::db::user::{ActiveModel, Entity as User};
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect, Set};
+use crate::InternalError;
+use argon2::PasswordHash;
+use chrono::Utc;
+use poem_openapi::Object;
+use sea_orm::{ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect, Set};
 use uuid::Uuid;
-use crate::providers::crypto_provider::PasswordHash;
+
+// use crate::providers::crypto_provider::PasswordHash;
 
 pub struct OwnerStore {}
 
@@ -16,6 +18,14 @@ pub enum OwnerStatus {
     DoesNotExist,
     ExistsNotActivated,
     ExistsActivated(UserForAuth),
+}
+
+#[derive(Debug, Clone, Object)]
+pub struct CreateOwnerResponse {
+    pub user_id: UserId,
+    pub username: String,
+    pub is_active: bool,
+    pub created_at: i64,
 }
 
 impl OwnerStore {
@@ -42,13 +52,22 @@ impl OwnerStore {
             username: Set(username.clone()),
             password_hash: Set(Some(password_hash.to_string())),
             created_at: Set(created_at),
-            is_owner: Set(admin_flags.is_owner),
-            is_system_admin: Set(admin_flags.is_system_admin),
-            is_role_admin: Set(admin_flags.is_role_admin),
+            // is_owner: Set(admin_flags.is_owner),
+            // is_system_admin: Set(admin_flags.is_system_admin),
+            // is_role_admin: Set(admin_flags.is_role_admin),
             app_roles: Set(None),
             password_change_required: Set(true), // Force password change on first login
             updated_at: Set(created_at),
+            ..Default::default()
         };
+        let owner = new_user.insert(conn).await.map_err(|e| InternalError::database("create owner", e))?;
+
+
+        // UserForAuth{
+        //     id: owner.id,
+        //     username: owner.username,
+        //     password_hash: owner.password_hash.unwrap().to_string(),
+        // }
 
     }
     pub async fn check_owner(

@@ -98,7 +98,7 @@ impl AuthorizationStore {
             None => {
                 Err(InternalError::Authorization(AuthorizationError::SettingRoleOnNonExistentUser { user_id: role_update_request.id.into(), role: role_update_request.new_roles }))
             }
-            Some(mut userWithRole) => {
+            Some(userWithRole) => {
                 let mut user: user::ActiveModel = userWithRole.into();
 
                 user.is_role_admin = Set(role_update_request.new_roles.is_role_admin);
@@ -110,8 +110,5 @@ impl AuthorizationStore {
                 Ok(ActionOutcome::new(()))
             }
         }
-
-
-        // Ok(ActionOutcome::new(()))
     }
 }

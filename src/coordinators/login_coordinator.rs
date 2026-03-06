@@ -1,34 +1,32 @@
 use std::sync::Arc;
 
 use poem_openapi::payload::Json;
-use sea_orm::{ConnectionTrait, TransactionTrait};
 
 use crate::audit::AuditLogger;
 use crate::config::database::DatabaseConnections;
-use crate::coordinators::{Coordinator, Exec, execute};
-use crate::errors::{AuthError, InternalError};
-use crate::providers::TokenProvider;
+use crate::coordinators::Coordinator;
 use crate::providers::authentication_provider::AuthenticationProvider;
 use crate::providers::authentication_provider::VerifyCredentialResult::{Failure, Success};
+use crate::providers::TokenProvider;
+use crate::stores::authentication_store::AuthenticationStore;
 use crate::stores::user_store::UserStore;
 use crate::types::internal::context::RequestContextMeta;
 use crate::{
-    AppData,
     config::ApplicationError,
     providers::authentication_provider::LoginRequest,
     types::{
         dto::auth::{LoginApiResponse, TokenResponse},
         internal::context::RequestContext,
     },
+    AppData,
 };
-use crate::stores::authentication_store::AuthenticationStore;
 
 pub struct LoginCoordinator {
     audit_logger: Arc<AuditLogger>,
+    connections: DatabaseConnections,
     authentication_provider: Arc<AuthenticationProvider>,
     token_provider: Arc<TokenProvider>,
     user_store: Arc<UserStore>,
-    connections: DatabaseConnections,
     authentication_store: Arc<AuthenticationStore>,
 }
 
@@ -68,7 +66,10 @@ impl LoginCoordinator {
         match verify_credential_result {
             Success { user } => {
                 let user_for_jwt = exec
-                    .fut(self.authentication_store.get_user_roles_for_jwt(&conn, &user.id))
+                    .fut(
+                        self.authentication_store
+                            .get_user_roles_for_jwt(&conn, &user.id),
+                    )
                     .await?;
                 let jwt = exec
                     .fut(self.token_provider.generate_jwt(&user_for_jwt))
