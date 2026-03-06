@@ -1,4 +1,4 @@
-use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
+use sea_orm::{ActiveModelTrait, ConnectionTrait, Set};
 
 use crate::errors::InternalError;
 use crate::errors::internal::AuditError;
@@ -12,7 +12,11 @@ impl AuditStore {
         Self
     }
 
-    pub async fn write_event(&self, conn: &impl ConnectionTrait, event: AuditEvent) -> Result<(), InternalError> {
+    pub async fn write_event_1(
+        &self,
+        conn: &impl ConnectionTrait,
+        event: AuditEvent,
+    ) -> Result<(), InternalError> {
         let data_json = serde_json::to_string(&event.data).map_err(|e| {
             AuditError::LogWriteFailed(format!("Failed to serialize audit data: {}", e))
         })?;
@@ -28,10 +32,18 @@ impl AuditStore {
         };
 
         audit_event
-            .insert(db)
+            .insert(conn)
             .await
             .map_err(|e| InternalError::database("write_audit_event", e))?;
 
+        Ok(())
+    }
+
+    pub async fn write_event(
+        &self,
+        event: AuditEvent,
+    ) -> Result<(), InternalError> {
+        //do nothing. will remove later and use the real one
         Ok(())
     }
 }

@@ -9,6 +9,7 @@
 // pub mod admin_coordinator;
 pub mod login_coordinator;
 pub mod user_coordinator;
+pub mod owner_coordinator;
 
 // Re-export coordinators for clean imports
 // pub use auth_coordinator::AuthCoordinator;
@@ -22,8 +23,8 @@ use crate::{
     config::ApplicationError,
     errors::InternalError,
     types::internal::{
-        action_outcome::ActionOutcome,
-        audit_intent::AuditIntent,
+        action_outcome::ActionOutcome
+        ,
         context::{RequestContext, RequestContextMeta},
     },
 };
