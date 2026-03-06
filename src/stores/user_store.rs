@@ -6,7 +6,7 @@ use crate::types::internal::action_outcome::ActionOutcome;
 use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait,
-    FromQueryResult, QueryFilter, QuerySelect, Set,
+    FromQueryResult, QueryFilter, Set,
 };
 use uuid::Uuid;
 
@@ -23,12 +23,11 @@ impl UserStore {
     ) -> Result<ActionOutcome<bool>, InternalError> {
         let existing_user = user::Entity::find()
             .filter(user::Column::Username.eq(username.as_ref()))
-            .column(user::Column::Username)
             .one(conn)
             .await
             .map_err(|e| {
                 InternalError::Database(DatabaseError::Operation {
-                    operation: "find existing user for create",
+                    operation: "find existing user",
                     source: e,
                 })
             })?;
@@ -60,7 +59,7 @@ impl UserStore {
         new_user
             .insert(conn)
             .await
-            .map_err(|e| InternalError::database("OPERATION", e))?;
+            .map_err(|e| InternalError::database("Create new user", e))?;
 
         // TODO
         // Log user creation at point of action
@@ -92,13 +91,8 @@ pub struct UserForJWT {
 }
 
 
-#[derive(Copy, Clone)]
-pub struct UserId(Uuid);
-impl UserId {
-    pub fn new() -> Self {
-        Self(Uuid::new_v4())
-    }
-}
+#[derive(Copy, Clone, Debug)]
+pub struct UserId(pub Uuid);
 
 impl From<&UserId> for String {
     fn from(value: &UserId) -> Self {
@@ -112,6 +106,11 @@ impl From<UserId> for String {
     }
 }
 
+impl UserId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
 pub struct UserToCreate {
     pub id: UserId,
     pub username: String,
