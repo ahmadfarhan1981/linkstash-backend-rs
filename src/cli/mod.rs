@@ -24,6 +24,12 @@ pub async fn execute_command(
     app_data: &AppData,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match command {
-        Commands::Bootstrap => bootstrap::run(&app_data.connections.auth).await,
+        Commands::Bootstrap => {
+            bootstrap::run(
+                &app_data.connections.auth,
+                app_data.secret_manager.password_pepper(),
+            )
+            .await
+        }
     }
 }

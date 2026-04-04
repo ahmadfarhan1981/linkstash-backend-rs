@@ -1,0 +1,15 @@
+POST http://localhost:3000/api/auth/login
+Content-Type: application/json
+
+{
+  "username": "user",
+  "password": "user-dev-password-change-me"
+}
+
+> {% client.global.set("auth_token", response.body.access_token); %}
+
+###
+
+GET http://localhost:3000/api/auth/whoami
+Content-Type: application/json
+Authorization: Bearer {{auth_token}}

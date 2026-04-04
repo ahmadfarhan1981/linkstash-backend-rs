@@ -1,7 +1,7 @@
 use crate::AppData;
 use crate::api::{Api, BearerAuth, TokenVerifier};
 use crate::coordinators::LoginCoordinator;
-use crate::types::dto::auth::{LoginApiResponse, LoginRequest, TokenResponse};
+use crate::types::dto::auth::{LoginApiResponse, LoginRequest, TokenResponse, WhoAmIApiResponse};
 use crate::types::dto::common::ErrorResponse;
 
 use poem::Request;
@@ -46,26 +46,30 @@ impl AuthApi {
 
         let response = self
             .auth_coordinator
-            .login(meta, body.username.clone(), body.password.clone() )
-            .await.unwrap_or(LoginApiResponse::Unauthorized(Json(ErrorResponse {
-                    message: "Unauthorized".to_owned(),
-                    error: "Error".to_owned(),
-                    status_code: 301,
-                })));
+            .login(meta, body.username.clone(), body.password.clone())
+            .await
+            .unwrap_or(LoginApiResponse::Unauthorized(Json(ErrorResponse {
+                message: "Unauthorized".to_owned(),
+                error: "Error".to_owned(),
+                status_code: 301,
+            })));
         response
     }
-    #[oai(path = "/test", method = "post", tag = "AuthTags::Authentication")]
-    async fn test(
-        &self,
-        req: &Request,
-        body: Json<LoginRequest>,
-        auth: BearerAuth,
-    ) -> LoginApiResponse {
-        LoginApiResponse::Ok(Json(TokenResponse {
-            access_token: format!("{:?}", auth),
-            refresh_token: "".to_string(),
-            token_type: "".to_string(),
-            expires_in: 0,
-        }))
+
+    #[oai(path = "/whoami", method = "get", tag = "AuthTags::Authentication")]
+    async fn whoami(&self, req: &Request, auth: BearerAuth) -> WhoAmIApiResponse {
+        // Whoami should remain accessible even when password change is required
+        let meta = self.generate_request_context_meta(req);
+
+        let response =
+            self.auth_coordinator
+                .whoami(meta)
+                .await
+                .unwrap_or(WhoAmIApiResponse::Unauthorized(Json(ErrorResponse {
+                    error: "Unauthorized".to_owned(),
+                    message: "Unauthorized".to_owned(),
+                    status_code: 401,
+                })));
+        response
     }
 }

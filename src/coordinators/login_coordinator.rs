@@ -5,20 +5,23 @@ use poem_openapi::payload::Json;
 use crate::audit::AuditLogger;
 use crate::config::database::DatabaseConnections;
 use crate::coordinators::Coordinator;
+use crate::providers::TokenProvider;
 use crate::providers::authentication_provider::AuthenticationProvider;
 use crate::providers::authentication_provider::VerifyCredentialResult::{Failure, Success};
-use crate::providers::TokenProvider;
 use crate::stores::authentication_store::AuthenticationStore;
 use crate::stores::user_store::UserStore;
+use crate::types::dto::auth::{WhoAmIApiResponse, WhoAmIResponse};
+use crate::types::dto::common::ErrorResponse;
+use crate::types::internal::auth::Claims;
 use crate::types::internal::context::RequestContextMeta;
 use crate::{
+    AppData,
     config::ApplicationError,
     providers::authentication_provider::LoginRequest,
     types::{
         dto::auth::{LoginApiResponse, TokenResponse},
         internal::context::RequestContext,
     },
-    AppData,
 };
 
 pub struct LoginCoordinator {
@@ -62,7 +65,6 @@ impl LoginCoordinator {
                     .verify_credential(&conn, LoginRequest { username, password }),
             )
             .await?;
-
         match verify_credential_result {
             Success { user } => {
                 let user_for_jwt = exec
@@ -77,15 +79,14 @@ impl LoginCoordinator {
                 let rt = exec
                     .res(self.token_provider.generate_refresh_token())
                     .await?;
-                self.authentication_store
-                    .save_refresh_token_for_user(
-                        &conn,
-                        &user.id,
-                        &rt.token_hash,
-                        rt.created_at,
-                        rt.expires_at,
-                    )
-                    .await?;
+                exec.fut(self.authentication_store.save_refresh_token_for_user(
+                    &conn,
+                    &user.id,
+                    &rt.token_hash,
+                    rt.created_at,
+                    rt.expires_at,
+                ))
+                .await?;
                 Ok(LoginApiResponse::Ok(Json(TokenResponse {
                     access_token: jwt.jwt,
                     refresh_token: rt.token,
@@ -97,5 +98,31 @@ impl LoginCoordinator {
                 message: "Placeholeder".to_owned(),
             }),
         }
+    }
+
+    pub async fn whoami(
+        &self,
+        context_meta: RequestContextMeta,
+    ) -> Result<WhoAmIApiResponse, ApplicationError> {
+        let ctx = RequestContext::from_context_meta(context_meta, &self.token_provider);
+        println!("{:?}", ctx);
+        // Check if authenticated
+        if !ctx.authenticated {
+            return Ok(WhoAmIApiResponse::Unauthorized(Json(ErrorResponse {
+                error: "Unauthenticated".to_string(),
+                message: "Unauthenticated".to_owned(),
+                status_code: 401,
+            })));
+        }
+
+        let claims = ctx
+            .claims
+            .ok_or_else(|| ApplicationError::UnknownServerError {
+                message: "No claims".to_owned(),
+            })?;
+        Ok(WhoAmIApiResponse::Ok(Json(WhoAmIResponse {
+            user_id: claims.sub,
+            expires_at: claims.exp,
+        })))
     }
 }

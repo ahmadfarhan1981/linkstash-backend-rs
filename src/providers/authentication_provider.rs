@@ -4,15 +4,15 @@ use std::sync::Arc;
 
 use crate::audit::audit_logger::AuditLogger;
 use crate::config::database::DatabaseConnections;
-use crate::types::internal::action_outcome::ActionOutcome;
 use crate::errors::InternalError;
 use crate::providers::crypto_provider::CryptoProvider;
 use crate::providers::token_provider::GeneratedRT;
 use crate::providers::{TokenProvider, token_provider};
 use crate::stores::authentication_store::AuthenticationStore;
 use crate::stores::user_store::{UserForAuth, UserStore};
-use crate::types::{ProviderResult, ProviderResultTrait};
+use crate::types::internal::action_outcome::ActionOutcome;
 use crate::types::internal::context::RequestContext;
+use crate::types::{ProviderResult, ProviderResultTrait};
 
 pub struct LoginRequest {
     pub username: String,
@@ -74,12 +74,11 @@ impl AuthenticationProvider {
             .verify_password(&user.password_hash, &creds.password)
             .await?;
 
-            
         match authenticated {
-            true => ProviderResult::new(VerifyCredentialResult::Success { user }),//TODO Audit intent
+            true => ProviderResult::new(VerifyCredentialResult::Success { user }), //TODO Audit intent
             false => Ok(ActionOutcome::new(VerifyCredentialResult::Failure {
                 reason: LoginFailureReason::InvalidCredentials,
-            })),//TODO Audit intent
+            })), //TODO Audit intent
         }
     }
 

@@ -1,22 +1,20 @@
-use sea_orm::{ActiveModelTrait, ColumnTrait, Set};
-use sea_orm::QuerySelect;
-use sea_orm::QueryFilter;
-use sea_orm::{ConnectionTrait, EntityTrait};
-use crate::errors::internal::{CredentialError, DatabaseError};
-use crate::errors::internal::login::LoginError::UsernameNotFound;
 use crate::errors::InternalError;
+use crate::errors::internal::login::LoginError::UsernameNotFound;
+use crate::errors::internal::{CredentialError, DatabaseError};
 use crate::stores::user_store::{UserForAuth, UserForJWT};
 use crate::types::db;
 use crate::types::db::user;
 use crate::types::internal::action_outcome::ActionOutcome;
+use sea_orm::QueryFilter;
+use sea_orm::QuerySelect;
+use sea_orm::{ActiveModelTrait, ColumnTrait, Set};
+use sea_orm::{ConnectionTrait, EntityTrait};
 
-pub struct AuthenticationStore{
-
-}
+pub struct AuthenticationStore {}
 
 impl AuthenticationStore {
     pub fn new() -> Self {
-        Self{}
+        Self {}
     }
     pub async fn get_user_from_username_for_auth(
         &self,
@@ -94,7 +92,7 @@ impl AuthenticationStore {
         token_hash: &str,
         created_at: i64,
         expires_at: i64,
-    ) -> Result<(), InternalError> {
+    ) -> Result<ActionOutcome<()>, InternalError> {
         let new_token = db::refresh_token::ActiveModel {
             token_hash: Set(token_hash.to_owned()),
             user_id: Set(user_id.to_owned()),
@@ -118,7 +116,6 @@ impl AuthenticationStore {
         //     tracing::error!("Failed to log refresh token issuance: {:?}", audit_err);
         // }
 
-        Ok(())
+        ActionOutcome::ok()
     }
-
 }

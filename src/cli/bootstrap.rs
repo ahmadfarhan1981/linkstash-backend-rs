@@ -1,4 +1,4 @@
-use argon2::{password_hash::SaltString, Argon2, PasswordHasher};
+use argon2::{Algorithm, Argon2, Params, PasswordHasher, Version, password_hash::SaltString};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
 use crate::types::db::user;
@@ -35,9 +35,15 @@ const SEED_USERS: [SeedUser; 3] = [
     },
 ];
 
-fn hash_password(password: &str) -> Result<String, Box<dyn std::error::Error>> {
+fn hash_password(password: &str, pepper: &str) -> Result<String, Box<dyn std::error::Error>> {
     let salt = SaltString::generate(&mut rand_core::OsRng);
-    let argon2 = Argon2::default();
+    let argon2 = Argon2::new_with_secret(
+        pepper.as_bytes(),
+        Algorithm::Argon2id,
+        Version::V0x13,
+        Params::default(),
+    )
+    .map_err(|e| format!("Failed to initialize Argon2: {}", e))?;
     let hash = argon2
         .hash_password(password.as_bytes(), &salt)
         .map_err(|e| format!("Failed to hash password: {}", e))?
@@ -56,7 +62,7 @@ async fn user_exists(
     Ok(result.is_some())
 }
 
-pub async fn run(db: &DatabaseConnection) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(db: &DatabaseConnection, pepper: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== Linkstash Bootstrap ===\n");
 
     let mut created = 0u32;
@@ -70,7 +76,7 @@ pub async fn run(db: &DatabaseConnection) -> Result<(), Box<dyn std::error::Erro
         }
 
         let id = uuid::Uuid::new_v4().to_string();
-        let password_hash = hash_password(seed.password)?;
+        let password_hash = hash_password(seed.password, pepper)?;
         let now = chrono::Utc::now().timestamp();
 
         let model = user::ActiveModel {
@@ -81,14 +87,17 @@ pub async fn run(db: &DatabaseConnection) -> Result<(), Box<dyn std::error::Erro
             is_owner: Set(seed.is_owner),
             is_system_admin: Set(seed.is_system_admin),
             is_role_admin: Set(seed.is_role_admin),
-            app_roles: Set(None),
+            app_roles: Set(Some("[]".to_string())),
             password_change_required: Set(false),
             updated_at: Set(now),
         };
 
         user::Entity::insert(model).exec(db).await?;
 
-        println!("Created '{}' with password '{}'", seed.username, seed.password);
+        println!(
+            "Created '{}' with password '{}'",
+            seed.username, seed.password
+        );
         created += 1;
     }
 

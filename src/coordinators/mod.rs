@@ -42,6 +42,7 @@ pub async fn execute<T>(
         Err(err) => {
             // audit.emit_all(ctx, &err.audit_intents()).await;
             // log errors
+            println!("{:#?}", err);
             Err(err.into())
         }
     }

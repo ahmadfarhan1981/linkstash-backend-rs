@@ -1,3 +1,5 @@
+use crate::errors::InternalError;
+
 use super::audit_intent::AuditIntent;
 
 pub struct ActionOutcome<T> {
@@ -24,5 +26,17 @@ impl<T> ActionOutcome<T> {
         self.audit.extend(audit_intents);
         self
     }
+}
 
+impl ActionOutcome<()> {
+    pub fn empty() -> Self {
+        Self {
+            value: (),
+            audit: Vec::new(),
+        }
+    }
+
+    pub fn ok() ->Result<Self, InternalError>{
+        Ok(ActionOutcome::empty())
+    }
 }
