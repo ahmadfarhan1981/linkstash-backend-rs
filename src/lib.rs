@@ -28,31 +28,6 @@ use crate::api::user::UserApi;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test;
 
-/// Seed test user for development
-///
-/// Only runs in debug builds. Creates a test user with username "testuser"
-/// and password "TestSecure-Pass-12345-UUID" for development and testing purposes.
-#[cfg(debug_assertions)]
-async fn seed_test_user(app_data: &AppData) {
-    // Create password validator from AppData stores
-    // let password_validator = std::sync::Arc::new(providers::PasswordValidatorProvider::new(
-    //     app_data.common_password_store.clone(),
-    //     app_data.hibp_cache_store.clone(),
-    // ));
-
-    // match app_data.credential_store.add_user(&password_validator, "testuser".to_string(), "TestSecure-Pass-12345-UUID".to_string()).await {
-    //     Ok(user_id) => {
-    //         tracing::info!("Test user created successfully with ID: {}", user_id);
-    //     }
-    //     Err(InternalError::Credential(CredentialError::DuplicateUsername(_))) => {
-    //         tracing::debug!("Test user already exists, skipping creation");
-    //     }
-    //     Err(e) => {
-    //         tracing::error!("Failed to create test user: {:?}", e);
-    //     }
-    // }
-}
-
 pub async fn init_appdata(bootstrap_settings: &BootstrapSettings) -> Result<AppData, InternalError> {
     tracing::info!("connecting to database...");
     let connections =
@@ -96,10 +71,8 @@ pub enum CLIResult {
     NotExecuted,
 }
 pub async fn run_cli_commands(app_data: &AppData)->CLIResult{
-    let args: Vec<String> = std::env::args().collect();
-    let cli  = cli::Cli::parse();
-    println!("{:?}",cli.command);
-    
+    let cli = cli::Cli::parse();
+
     if let Some(command) = cli.command {        
         // Execute CLI command
         match cli::execute_command(command, app_data).await {
