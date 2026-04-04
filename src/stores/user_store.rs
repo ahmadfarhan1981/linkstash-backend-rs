@@ -96,7 +96,7 @@ pub struct UserForJWT {
 }
 
 
-#[derive(Copy, Clone, Debug, Object)]
+#[derive(Copy, Clone, Debug)]
 pub struct UserId(pub Uuid);
 impl From<&UserId> for String {
     fn from(value: &UserId) -> Self {

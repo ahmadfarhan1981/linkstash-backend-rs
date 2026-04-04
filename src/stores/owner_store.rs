@@ -20,7 +20,7 @@ pub enum OwnerStatus {
     ExistsActivated(UserForAuth),
 }
 
-#[derive(Debug, Clone, Object)]
+#[derive(Debug, Clone)]
 pub struct CreateOwnerResponse {
     pub user_id: UserId,
     pub username: String,

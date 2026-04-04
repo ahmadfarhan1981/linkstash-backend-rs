@@ -5,9 +5,10 @@ use crate::coordinators::Coordinator;
 use crate::stores::authentication_store::AuthenticationStore;
 use crate::stores::authorization_store::AuthorizationStore;
 use crate::stores::user_store::{UserId, UserStore, UserToCreate};
-use crate::types::dto::auth::LoginApiResponse;
+use crate::types::dto::auth::{LoginApiResponse, TokenResponse};
 use crate::types::internal::RequestContextMeta;
 use std::sync::Arc;
+use poem_openapi::payload::Json;
 use uuid::Uuid;
 
 pub struct OwnerCoordinator {
@@ -37,7 +38,14 @@ impl OwnerCoordinator {
             id: UserId::new(),
             username,
         };
-        self.user_store.create_user()
+        Ok(LoginApiResponse::Ok(Json(TokenResponse{
+            access_token: "".to_string(),
+            refresh_token: "".to_string(),
+            token_type: "".to_string(),
+            expires_in: 0,
+        })))
+        // TODO
+        //self.user_store.create_user()
         // self.authorization_store.set_permissions()
         // self.authorization_store.change_password()
     }
