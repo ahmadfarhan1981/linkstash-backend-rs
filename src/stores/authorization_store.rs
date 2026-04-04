@@ -21,9 +21,9 @@ pub struct PasswordChangeRequest {
 
 #[derive(Debug)]
 pub struct RoleDefinition {
-    is_owner: bool,
-    is_admin: bool,
-    is_role_admin: bool,
+    pub is_owner: bool,
+    pub is_admin: bool,
+    pub is_role_admin: bool,
 }
 
 impl fmt::Display for RoleDefinition {
@@ -43,8 +43,8 @@ impl fmt::Display for RoleDefinition {
 }
 
 pub struct RoleUpdateRequest {
-    id: UserId,
-    new_roles: RoleDefinition,
+    pub id: UserId,
+    pub new_roles: RoleDefinition,
 }
 
 #[derive(FromQueryResult)]

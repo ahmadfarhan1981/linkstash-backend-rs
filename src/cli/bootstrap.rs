@@ -2,12 +2,11 @@
 // Creates owner account and initial admin accounts during system setup
 
 use crate::stores::authorization_store::AuthorizationStore;
-use crate::stores::authorization_store::AuthorizationStore;
 use crate::cli::credential_export::{export_credentials, ExportFormat};
 use crate::config::database::DatabaseConnections;
 use crate::config::SecretManager;
 use crate::stores::owner_store::{OwnerStatus, OwnerStore};
-use crate::stores::user_store::{UserId, UserStore, UserToCreate};
+use crate::stores::user_store::{CreatedUser, UserId, UserStore, UserToCreate};
 use crate::stores::{AuditStore, SystemConfigStore};
 use crate::types::internal::auth::AdminFlags;
 use crate::types::internal::context::RequestContext;
@@ -19,24 +18,13 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 /// Bootstrap the system by creating owner and initial admin accounts
-/// 
-/// # Arguments
-/// * `credential_store` - Credential store for user management
-/// * `system_config_store` - System config store for owner status
-/// * `audit_store` - Audit store for logging
-/// * `secret_manager` - Secret manager for accessing password pepper
-/// * `password_validator` - Password validator for validating passwords
-/// 
-/// # Returns
-/// * `Ok(())` - Bootstrap completed successfully
-/// * `Err(...)` - Bootstrap failed (e.g., system already bootstrapped)
+///
 pub async fn bootstrap_system(
     system_config_store: &SystemConfigStore,
     audit_store: &Arc<AuditStore>,
     owner_store: &Arc<OwnerStore>,
     secret_manager: &SecretManager,
     database_connections: DatabaseConnections,
-
     // password_validator: &PasswordValidatorProvider, // TODO password validator
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== Linkstash Bootstrap ===\n");
@@ -152,7 +140,7 @@ async fn create_owner_account(
     let password_pepper = secret_manager.password_pepper();
     let owner_password_hash = hash_password(&owner_password, &password_pepper)?;
     
-    let _owner = create_admin_user_with_password_change_required(
+    let _owner = create_user_with_roles(
         conn,
         user_store,
         authorization_store,
@@ -218,7 +206,7 @@ async fn create_system_admin_accounts(
         let password = prompt_for_password("System Admin", Some(&username)).await?;
         let password_hash = hash_password(&password, &password_pepper)?;
         
-        let _admin = create_admin_user_with_password_change_required(
+        let _admin = create_user_with_roles(
             conn,
             user_store,
             authorization_store,
@@ -261,7 +249,7 @@ async fn create_role_admin_accounts(
         let password = prompt_for_password("Role Admin", password_validator, Some(&username)).await?;
         let password_hash = hash_password(&password, &password_pepper)?;
         
-        let _admin = create_admin_user_with_password_change_required(
+        let _admin = create_user_with_roles(
             // credential_store,
             /* UserStore */,
             ctx,
@@ -460,23 +448,8 @@ fn handle_credential_export(username: &str, password: &str, role_type: &str) -> 
 
 
 
-/// Create an admin user with password_change_required=true
-/// 
-/// This is a helper function for bootstrap that creates admin users with the
-/// password_change_required flag set to true, forcing them to change their
-/// password on first login.
-/// 
-/// # Arguments
-/// * `credential_store` - Credential store for user management
-/// * `ctx` - Request context for audit logging
-/// * `username` - Username for the new admin user
-/// * `password_hash` - Pre-hashed password
-/// * `admin_flags` - Admin flags specifying which admin roles to assign
-/// 
-/// # Returns
-/// * `Ok(Model)` - The created user model with password_change_required=true
-/// * `Err(InternalError)` - User creation or privilege assignment failed
-async fn create_admin_user_with_password_change_required(
+/// Create an user user given roles and with password_change_required=true
+async fn create_user_with_roles(
     // credential_store: &CredentialStore,
     conn: &impl ConnectionTrait,
     user_store: &UserStore,
@@ -485,11 +458,12 @@ async fn create_admin_user_with_password_change_required(
     username: String,
     password_hash: String,
     admin_flags: AdminFlags,
-) -> Result<crate::types::db::user::Model, crate::errors::InternalError> {
+    database_connections: DatabaseConnections,
+) -> Result<CreatedUser, crate::errors::InternalError> {
     use chrono::Utc;
     
     // Start transaction
-    //let txn = credential_store.begin_transaction(ctx, "create_admin_with_password_change_required").await?;
+    let conn = database_connections.begin_auth_transaction().await?;
 
     let exists = user_store.username_in_use(conn, &username).await?.value;
     if exists {
@@ -505,7 +479,7 @@ async fn create_admin_user_with_password_change_required(
     let created_at = Utc::now().timestamp();
 
     let new_user = UserToCreate { id: UserId(user_id), username };
-    let user = user_store.create_user(conn, new_user).await?.value;
+    let user = user_store.create_user(&conn, new_user).await?.value;
 
     let role_update = crate::stores::authorization_store::RoleUpdateRequest {
         id: UserId(user_id),
@@ -515,38 +489,7 @@ async fn create_admin_user_with_password_change_required(
             is_role_admin: admin_flags.is_role_admin,
         },
     };
-    
-    authorization_store.set_permissions(conn, role_update).await?;
-
-    // Log user creation at point of action
-    // if let Err(audit_err) = audit_logger::log_user_created(
-    //     &credential_store.audit_store,
-    //     ctx,
-    //     &user_id,
-    //     &username,
-    // ).await {
-    //     tracing::error!("Failed to log user creation: {:?}", audit_err);
-    // }
-
-    // Log privilege assignment //TODO audit intent
-    // if let Err(audit_err) = audit_logger::log_privileges_changed(
-    //     &credential_store.audit_store,
-    //     ctx,
-    //     &user_id,
-    //     false, // old is_owner
-    //     admin_flags.is_owner, // new is_owner
-    //     false, // old is_system_admin
-    //     admin_flags.is_system_admin, // new is_system_admin
-    //     false, // old is_role_admin
-    //     admin_flags.is_role_admin, // new is_role_admin
-    // ).await {
-    //     tracing::error!("Failed to log privilege change: {:?}", audit_err);
-    // }
-    
-    // Commit transaction
-    // txn.commit().await
-    //     .map_err(|e| crate::errors::InternalError::transaction("commit_admin_user", e))?;
-    //
+    authorization_store.set_permissions(&conn, role_update).await?;
     Ok(user)
 }
 

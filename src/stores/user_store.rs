@@ -1,13 +1,18 @@
+use std::borrow::Cow;
 use crate::errors::internal::DatabaseError;
 use crate::errors::InternalError;
 use crate::types::db::user;
 use crate::types::internal::action_outcome::ActionOutcome;
 
 use chrono::Utc;
+use poem_openapi::{NewType, Object};
+use poem_openapi::registry::MetaSchemaRef;
+use poem_openapi::types::{ToJSON, Type};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait,
     FromQueryResult, QueryFilter, Set,
 };
+use serde_json::Value;
 use uuid::Uuid;
 
 pub struct UserStore {}
@@ -91,9 +96,8 @@ pub struct UserForJWT {
 }
 
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Object)]
 pub struct UserId(pub Uuid);
-
 impl From<&UserId> for String {
     fn from(value: &UserId) -> Self {
         value.0.to_string()
