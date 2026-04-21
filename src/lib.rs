@@ -14,20 +14,16 @@ use std::sync::Arc;
 
 pub use app_data::AppData;
 use clap::Parser;
-use poem::{Route, handler, web::Html};
+use poem::{handler, web::Html, Route};
 use poem_openapi::OpenApiService;
 
 use crate::api::user::UserApi;
 use crate::{
     api::{AdminApi, AuthApi, HealthApi},
-    config::{ApplicationError, BootstrapSettings, database::DatabaseConnections},
+    config::{database::DatabaseConnections, ApplicationError, BootstrapSettings},
     errors::InternalError,
 };
 
-// Test utilities (available for unit and integration tests)
-// Note: Compiled in all builds but only used during testing
-#[cfg(any(test, feature = "test-utils"))]
-pub mod test;
 
 pub async fn init_appdata(
     bootstrap_settings: &BootstrapSettings,
