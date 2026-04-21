@@ -3,12 +3,11 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum UserError {
-    
     #[error("User already exists: {username}")]
-    DuplicateUsername{username: String},
+    DuplicateUsername { username: String },
 
     #[error("User not found: {username}")]
-    UserNotFound{username: String},
+    UserNotFound { username: String },
 
     #[error("User ID not found: {user_id}")]
     UserIdNotFound { user_id: String },
@@ -20,6 +19,6 @@ impl Into<ApplicationError> for UserError {
             UserError::DuplicateUsername { username } => todo!(),
             UserError::UserNotFound { username } => todo!(),
             UserError::UserIdNotFound { user_id } => todo!(),
-                    }
+        }
     }
 }

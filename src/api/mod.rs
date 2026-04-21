@@ -20,10 +20,14 @@ use crate::config::SecretManager;
 use crate::errors::InternalError;
 use crate::errors::internal::jwt_validation::JwtValidationError;
 use crate::types::internal::auth::Claims;
-use crate::{providers::TokenProvider, types::{
-    ApiResult,
-    internal::context::{RequestContext, RequestContextMeta, RequestId, RequestSource},
-}, AppData};
+use crate::{
+    AppData,
+    providers::TokenProvider,
+    types::{
+        ApiResult,
+        internal::context::{RequestContext, RequestContextMeta, RequestId, RequestSource},
+    },
+};
 
 /// JWT Bearer token authentication
 #[derive(SecurityScheme, Debug)]
@@ -103,7 +107,7 @@ pub struct TokenVerifier {
 
 impl TokenVerifier {
     pub fn new(app_data: Arc<AppData>) -> Self {
-        Self{
+        Self {
             secret_manager: Arc::clone(&app_data.secret_manager),
         }
     }
@@ -115,7 +119,7 @@ impl TokenVerifier {
             &DecodingKey::from_secret(self.secret_manager.jwt_secret().as_bytes()),
             &validation,
         )
-            .map_err(|e| InternalError::JWTValidation(JwtValidationError::from_error(e, token)));
+        .map_err(|e| InternalError::JWTValidation(JwtValidationError::from_error(e, token)));
         // TODO audit intent
         token_data.map(|td| td.claims)
     }

@@ -1,17 +1,22 @@
 use thiserror::Error;
 
 pub mod audit;
+pub mod authorization;
 pub mod credential;
+pub mod crypto;
 pub mod database;
 pub mod jwt_validation;
 pub mod login;
 pub mod system_config;
-pub mod crypto;
 pub mod user;
-pub mod authorization;
 
 use crate::errors::internal::authorization::AuthorizationError;
-use crate::{config::ApplicationError, errors::internal::{crypto::CryptoError, jwt_validation::JwtValidationError, login::LoginError}};
+use crate::{
+    config::ApplicationError,
+    errors::internal::{
+        crypto::CryptoError, jwt_validation::JwtValidationError, login::LoginError,
+    },
+};
 pub use audit::AuditError;
 pub use credential::CredentialError;
 pub use database::DatabaseError;
@@ -41,7 +46,6 @@ pub enum InternalError {
     #[error(transparent)]
     Crypto(#[from] CryptoError),
 
-
     #[error(transparent)]
     Credential(#[from] CredentialError),
 
@@ -55,14 +59,11 @@ pub enum InternalError {
     JWTValidation(#[from] JwtValidationError),
 
     #[error(transparent)]
-    Authorization(#[from] AuthorizationError)
+    Authorization(#[from] AuthorizationError),
 }
 impl InternalError {
     pub fn database(operation: &'static str, source: sea_orm::DbErr) -> InternalError {
-        InternalError::Database(DatabaseError::Operation {
-            operation,
-            source,
-        })
+        InternalError::Database(DatabaseError::Operation { operation, source })
     }
 }
 

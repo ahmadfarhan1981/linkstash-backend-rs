@@ -69,7 +69,6 @@ pub struct JwtErrorInfo {
     pub source_message: String,
 }
 
-
 #[derive(Debug, Error)]
 #[error("JWT validation failed: {class:?}")]
 pub struct JwtValidationError {
@@ -80,56 +79,64 @@ pub struct JwtValidationError {
     pub source: Option<jsonwebtoken::errors::Error>,
 }
 impl JwtValidationError {
-    pub fn new(class: JwtFailClass, info: JwtErrorInfo, source:Option<jsonwebtoken::errors::Error>) ->Self{
-        Self { class, info, source }
+    pub fn new(
+        class: JwtFailClass,
+        info: JwtErrorInfo,
+        source: Option<jsonwebtoken::errors::Error>,
+    ) -> Self {
+        Self {
+            class,
+            info,
+            source,
+        }
     }
 
-    pub fn from_error(err: jsonwebtoken::errors::Error,
-    token: &str)-> Self{
+    pub fn from_error(err: jsonwebtoken::errors::Error, token: &str) -> Self {
         use jsonwebtoken::errors::ErrorKind;
 
-    let token_len = token.len().min(u16::MAX as usize) as u16;
-    let segment_count =
-        token.as_bytes().iter().filter(|&&b| b == b'.').count().saturating_add(1) as u8;
+        let token_len = token.len().min(u16::MAX as usize) as u16;
+        let segment_count = token
+            .as_bytes()
+            .iter()
+            .filter(|&&b| b == b'.')
+            .count()
+            .saturating_add(1) as u8;
 
-    let class = match err.kind() {
-        // Not a JWT / undecodable
-        ErrorKind::InvalidToken
-        | ErrorKind::Base64(_)
-        | ErrorKind::Json(_)
-        | ErrorKind::Utf8(_) => JwtFailClass::Malformed,
+        let class = match err.kind() {
+            // Not a JWT / undecodable
+            ErrorKind::InvalidToken
+            | ErrorKind::Base64(_)
+            | ErrorKind::Json(_)
+            | ErrorKind::Utf8(_) => JwtFailClass::Malformed,
 
-        // Crypto verification failures
-        ErrorKind::InvalidSignature
-        | ErrorKind::InvalidAlgorithm => JwtFailClass::Invalid,
+            // Crypto verification failures
+            ErrorKind::InvalidSignature | ErrorKind::InvalidAlgorithm => JwtFailClass::Invalid,
 
-        // Claims rejected (time, audience, issuer, etc.)
-        ErrorKind::ExpiredSignature
-        | ErrorKind::ImmatureSignature
-        | ErrorKind::InvalidAudience
-        | ErrorKind::InvalidIssuer
-        | ErrorKind::InvalidSubject
-        | ErrorKind::MissingRequiredClaim(_) => JwtFailClass::ClaimsRejected,
+            // Claims rejected (time, audience, issuer, etc.)
+            ErrorKind::ExpiredSignature
+            | ErrorKind::ImmatureSignature
+            | ErrorKind::InvalidAudience
+            | ErrorKind::InvalidIssuer
+            | ErrorKind::InvalidSubject
+            | ErrorKind::MissingRequiredClaim(_) => JwtFailClass::ClaimsRejected,
 
-        // Unsupported / config issues
-        ErrorKind::MissingAlgorithm
-        | ErrorKind::InvalidAlgorithmName
-        | ErrorKind::InvalidKeyFormat => JwtFailClass::Unsupported,
+            // Unsupported / config issues
+            ErrorKind::MissingAlgorithm
+            | ErrorKind::InvalidAlgorithmName
+            | ErrorKind::InvalidKeyFormat => JwtFailClass::Unsupported,
 
-        // Everything else
-        _ => JwtFailClass::Internal,
-    };
+            // Everything else
+            _ => JwtFailClass::Internal,
+        };
 
-    let info = JwtErrorInfo {
-        token_len,
-        segment_count,
-        source_message: err.to_string(),
-    };
+        let info = JwtErrorInfo {
+            token_len,
+            segment_count,
+            source_message: err.to_string(),
+        };
 
-    JwtValidationError::new(class, info, Some(err)) 
-
+        JwtValidationError::new(class, info, Some(err))
     }
-    
 }
 
 // fn classify_jwt_error(
@@ -176,5 +183,5 @@ impl JwtValidationError {
 //         source_message: err.to_string(),
 //     };
 
-//     JwtValidationError::new(class, info, Some(err)) 
+//     JwtValidationError::new(class, info, Some(err))
 // }

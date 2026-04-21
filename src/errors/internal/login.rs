@@ -1,5 +1,5 @@
-use thiserror::Error;
 use super::InternalError;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum LoginError {
@@ -13,7 +13,7 @@ impl LoginError {
     pub fn username_not_found(username: String) -> InternalError {
         InternalError::Login(Self::UsernameNotFound { username })
     }
-    
+
     pub fn incorrect_password() -> InternalError {
         InternalError::Login(Self::IncorrectPassword)
     }

@@ -1,6 +1,6 @@
+use chrono;
 use std::collections::HashMap;
 use std::fmt;
-use chrono;
 
 /// Event types for audit logging
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,7 +1,7 @@
-use poem_openapi::{ApiResponse, Object};
-use poem_openapi::payload::Json;
-use serde::{Deserialize, Serialize};
 use crate::types::dto::common::ErrorResponse;
+use poem_openapi::payload::Json;
+use poem_openapi::{ApiResponse, Object};
+use serde::{Deserialize, Serialize};
 
 #[derive(ApiResponse)]
 pub enum CreateUserApiResponse {
@@ -17,5 +17,5 @@ pub enum CreateUserApiResponse {
 /// Response model containing authentication tokens
 #[derive(Object, Debug, Serialize, Deserialize)]
 pub struct CreatedUserResponse {
-   pub username: String,
+    pub username: String,
 }

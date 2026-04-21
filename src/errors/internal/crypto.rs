@@ -1,8 +1,7 @@
 #[derive(Debug, thiserror::Error)]
 pub enum CryptoError {
-    
     #[error("Encode JWT failure in {component} during {operation}: {message}")]
-    EncodeJWT{
+    EncodeJWT {
         operation: &'static str,
         component: &'static str,
         #[source]
@@ -21,11 +20,7 @@ pub enum CryptoError {
 }
 
 impl CryptoError {
-    pub fn other_from_error<E>(
-        component: &'static str,
-        operation: &'static str,
-        err: E,
-    ) -> Self
+    pub fn other_from_error<E>(component: &'static str, operation: &'static str, err: E) -> Self
     where
         E: std::error::Error + Send + Sync + 'static,
     {
@@ -42,9 +37,7 @@ impl CryptoError {
         component: &'static str,
         operation: &'static str,
         error_message: String,
-    ) -> Self
-    {
-        
+    ) -> Self {
         Self::Other {
             component,
             operation,

@@ -17,18 +17,21 @@ use clap::Parser;
 use poem::{Route, handler, web::Html};
 use poem_openapi::OpenApiService;
 
+use crate::api::user::UserApi;
 use crate::{
     api::{AdminApi, AuthApi, HealthApi},
-    config::{ApplicationError, BootstrapSettings, database::DatabaseConnections}, errors::InternalError,
+    config::{ApplicationError, BootstrapSettings, database::DatabaseConnections},
+    errors::InternalError,
 };
-use crate::api::user::UserApi;
 
 // Test utilities (available for unit and integration tests)
 // Note: Compiled in all builds but only used during testing
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test;
 
-pub async fn init_appdata(bootstrap_settings: &BootstrapSettings) -> Result<AppData, InternalError> {
+pub async fn init_appdata(
+    bootstrap_settings: &BootstrapSettings,
+) -> Result<AppData, InternalError> {
     tracing::info!("connecting to database...");
     let connections =
         DatabaseConnections::init(&bootstrap_settings).expect("Failed to connect to database");
@@ -40,7 +43,6 @@ pub async fn init_appdata(bootstrap_settings: &BootstrapSettings) -> Result<AppD
     tracing::info!("Finished database migrations.");
 
     AppData::init(connections).await
-    
 }
 
 pub fn init_bootstrap_settings() -> Result<BootstrapSettings, ApplicationError> {
@@ -70,15 +72,13 @@ pub enum CLIResult {
     Executed(ReturnCode),
     NotExecuted,
 }
-pub async fn run_cli_commands(app_data: &AppData)->CLIResult{
+pub async fn run_cli_commands(app_data: &AppData) -> CLIResult {
     let cli = cli::Cli::parse();
 
-    if let Some(command) = cli.command {        
+    if let Some(command) = cli.command {
         // Execute CLI command
         match cli::execute_command(command, app_data).await {
-            Ok(()) => {
-                CLIResult::Executed(ReturnCode(0))
-            }
+            Ok(()) => CLIResult::Executed(ReturnCode(0)),
             Err(e) => {
                 eprintln!("Error: {}", e);
                 CLIResult::Executed(ReturnCode(1))
@@ -87,7 +87,6 @@ pub async fn run_cli_commands(app_data: &AppData)->CLIResult{
     } else {
         CLIResult::NotExecuted
     }
-
 }
 
 pub async fn get_routes(app_data: Arc<AppData>) -> Result<Route, std::io::Error> {

@@ -17,5 +17,3 @@ pub struct RequestContextMeta {
     pub auth: Option<Bearer>,
     pub source: RequestSource,
 }
-
-

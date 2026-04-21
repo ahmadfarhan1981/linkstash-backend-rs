@@ -1,13 +1,15 @@
+use crate::InternalError;
 use crate::errors::internal::SystemConfigError;
 use crate::stores::user_store::{UserForAuth, UserId};
 use crate::types::db::system_config::Entity as SystemConfig;
 use crate::types::db::user;
 use crate::types::db::user::{ActiveModel, Entity as User};
-use crate::InternalError;
 use argon2::PasswordHash;
 use chrono::Utc;
 use poem_openapi::Object;
-use sea_orm::{ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect, Set,
+};
 use uuid::Uuid;
 
 // use crate::providers::crypto_provider::PasswordHash;
@@ -33,7 +35,6 @@ impl OwnerStore {
         Self {}
     }
 
-
     pub async fn check_owner(
         &self,
         conn: &impl ConnectionTrait,
@@ -45,7 +46,9 @@ impl OwnerStore {
             .ok_or_else(|| SystemConfigError::config_not_found())?
             .owner_active;
 
-        if !activated {return Ok(OwnerStatus::ExistsNotActivated);}
+        if !activated {
+            return Ok(OwnerStatus::ExistsNotActivated);
+        }
 
         let result = User::find()
             .filter(user::Column::IsOwner.eq(true))
@@ -60,9 +63,7 @@ impl OwnerStore {
 
         match result {
             None => Ok(OwnerStatus::DoesNotExist),
-            Some(owner) => {
-                Ok(OwnerStatus::ExistsActivated(owner))
-            }
+            Some(owner) => Ok(OwnerStatus::ExistsActivated(owner)),
         }
     }
 }

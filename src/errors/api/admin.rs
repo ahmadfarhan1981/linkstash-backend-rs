@@ -175,7 +175,8 @@ impl AdminError {
                 tracing::error!("Parse error for {}: {}", value_type, err);
                 Self::internal_server_error()
             }
-            InternalError::Crypto(_) => {//TODO
+            InternalError::Crypto(_) => {
+                //TODO
                 tracing::error!("Crypto error");
                 Self::internal_server_error()
             }

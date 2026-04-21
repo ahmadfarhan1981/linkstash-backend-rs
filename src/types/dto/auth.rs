@@ -164,8 +164,6 @@ pub enum ChangePasswordApiResponse {
     BadRequest(Json<ErrorResponse>),
 }
 
-
 use poem_openapi::payload::Json;
 
 use crate::types::dto::common::ErrorResponse;
-

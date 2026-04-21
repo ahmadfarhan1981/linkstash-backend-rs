@@ -14,7 +14,7 @@ pub mod context_provider;
 pub mod user_provider;
 
 // Re-export providers for clean imports
+pub use context_provider::ContextProvider;
 pub use crypto_provider::CryptoProvider;
 pub use token_provider::TokenProvider;
-pub use context_provider::ContextProvider;
 // pub use password_validator_provider::PasswordValidatorProvider;

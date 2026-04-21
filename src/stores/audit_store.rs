@@ -39,10 +39,7 @@ impl AuditStore {
         Ok(())
     }
 
-    pub async fn write_event(
-        &self,
-        event: AuditEvent,
-    ) -> Result<(), InternalError> {
+    pub async fn write_event(&self, event: AuditEvent) -> Result<(), InternalError> {
         //do nothing. will remove later and use the real one
         Ok(())
     }

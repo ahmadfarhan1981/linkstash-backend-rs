@@ -1,16 +1,15 @@
-use std::borrow::Cow;
-use crate::errors::internal::DatabaseError;
 use crate::errors::InternalError;
+use crate::errors::internal::DatabaseError;
 use crate::types::db::user;
 use crate::types::internal::action_outcome::ActionOutcome;
+use std::borrow::Cow;
 
 use chrono::Utc;
-use poem_openapi::{NewType, Object};
 use poem_openapi::registry::MetaSchemaRef;
 use poem_openapi::types::{ToJSON, Type};
+use poem_openapi::{NewType, Object};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait,
-    FromQueryResult, QueryFilter, Set,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, Set,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -69,7 +68,6 @@ impl UserStore {
         // TODO
         // Log user creation at point of action
 
-
         Ok(ActionOutcome::new(CreatedUser {
             id: userid,
             username: user_to_create.username.clone(),
@@ -94,7 +92,6 @@ pub struct UserForJWT {
     pub app_roles: String,
     pub password_change_required: bool,
 }
-
 
 #[derive(Copy, Clone, Debug)]
 pub struct UserId(pub Uuid);

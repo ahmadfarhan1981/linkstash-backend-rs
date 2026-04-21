@@ -9,9 +9,9 @@ pub struct ActionOutcome<T> {
 
 impl<T> ActionOutcome<T> {
     pub fn new(value: T) -> Self {
-        Self { 
-            value, 
-            audit: Vec::new() 
+        Self {
+            value,
+            audit: Vec::new(),
         }
     }
 
@@ -36,7 +36,7 @@ impl ActionOutcome<()> {
         }
     }
 
-    pub fn ok() ->Result<Self, InternalError>{
+    pub fn ok() -> Result<Self, InternalError> {
         Ok(ActionOutcome::empty())
     }
 }

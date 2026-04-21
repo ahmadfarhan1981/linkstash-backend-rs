@@ -183,9 +183,14 @@ impl AuditBuilder {
     /// Panics if required fields are not set. Use `with_context()` or set fields manually.
     pub fn build(self) -> AuditEvent {
         let user_id = self.user_id.unwrap_or_else(|| "unknown".to_string());
-        let ip_address = self.ip_address.map(|ip| ip.to_string()).unwrap_or_else(|| "unknown".to_string());
+        let ip_address = self
+            .ip_address
+            .map(|ip| ip.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
         let jwt_id = self.jwt_id.unwrap_or_else(|| "none".to_string());
-        let timestamp = self.timestamp.unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+        let timestamp = self
+            .timestamp
+            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
 
         AuditEvent {
             event_type: self.event_type,

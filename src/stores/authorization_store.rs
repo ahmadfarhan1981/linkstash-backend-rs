@@ -1,9 +1,9 @@
-use crate::errors::internal::authorization::AuthorizationError;
 use crate::errors::InternalError;
+use crate::errors::internal::authorization::AuthorizationError;
 use crate::stores::user_store::UserId;
+use crate::types::PasswordHash;
 use crate::types::db::user;
 use crate::types::internal::action_outcome::ActionOutcome;
-use crate::types::PasswordHash;
 use chrono::Utc;
 use sea_orm::ActiveValue::Set;
 use sea_orm::ColumnTrait;
@@ -16,7 +16,6 @@ pub struct AuthorizationStore {}
 pub struct PasswordChangeRequest {
     id: String,
     new_password_hash: PasswordHash,
-
 }
 
 #[derive(Debug)]
@@ -92,12 +91,16 @@ impl AuthorizationStore {
             .column(user::Column::IsSystemAdmin)
             .column(user::Column::IsRoleAdmin)
             .one(conn)
-            .await.map_err(|e| InternalError::database("find user to change role", e))?;
+            .await
+            .map_err(|e| InternalError::database("find user to change role", e))?;
 
         return match user {
-            None => {
-                Err(InternalError::Authorization(AuthorizationError::SettingRoleOnNonExistentUser { user_id: role_update_request.id.into(), role: role_update_request.new_roles }))
-            }
+            None => Err(InternalError::Authorization(
+                AuthorizationError::SettingRoleOnNonExistentUser {
+                    user_id: role_update_request.id.into(),
+                    role: role_update_request.new_roles,
+                },
+            )),
             Some(userWithRole) => {
                 let mut user: user::ActiveModel = userWithRole.into();
 
@@ -105,10 +108,12 @@ impl AuthorizationStore {
                 user.is_owner = Set(role_update_request.new_roles.is_owner);
                 user.is_system_admin = Set(role_update_request.new_roles.is_admin);
                 user.updated_at = Set(Utc::now().timestamp());
-                user.update(conn).await.map_err(|e| InternalError::database("update user", e))?;
+                user.update(conn)
+                    .await
+                    .map_err(|e| InternalError::database("update user", e))?;
 
                 Ok(ActionOutcome::new(()))
             }
-        }
+        };
     }
 }

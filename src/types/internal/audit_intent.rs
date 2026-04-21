@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use crate::types::internal::audit::EventType;
+use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct AuditIntent {

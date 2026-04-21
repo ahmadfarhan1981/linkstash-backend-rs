@@ -1,6 +1,10 @@
 use std::{net::IpAddr, sync::Arc};
 
-use crate::{errors::InternalError, providers::TokenProvider, types::internal::{RequestContextMeta, auth::Claims}};
+use crate::{
+    errors::InternalError,
+    providers::TokenProvider,
+    types::internal::{RequestContextMeta, auth::Claims},
+};
 use poem::Request;
 use poem_openapi::auth::{Bearer, BearerAuthorization};
 use uuid::Uuid;

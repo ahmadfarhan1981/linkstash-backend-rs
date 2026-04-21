@@ -130,10 +130,9 @@ impl CryptoProvider {
             Version::V0x13,
             Params::default(),
         );
-        argon2
-        .map_err(|e| InternalError::Crypto {
-                0: CryptoError::other_from_string("CryptoProvider", "Init argon", e.to_string())
-            })
+        argon2.map_err(|e| InternalError::Crypto {
+            0: CryptoError::other_from_string("CryptoProvider", "Init argon", e.to_string()),
+        })
 
         // match argon2 {
         //     Ok(value) => ProviderResult::new(value),
@@ -156,7 +155,10 @@ impl CryptoProvider {
     //     ProviderResult::<PasswordHash>::new(PasswordHash(password_hash))
     // }
 
-    fn hash_password1(password: &str, password_pepper: &str) -> Result<String, Box<dyn std::error::Error>> {
+    fn hash_password1(
+        password: &str,
+        password_pepper: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
         let salt = SaltString::generate(&mut rand_core::OsRng);
         let argon2 = Argon2::new_with_secret(
             password_pepper.as_bytes(),
@@ -164,7 +166,7 @@ impl CryptoProvider {
             Version::V0x13,
             Params::default(),
         )
-            .map_err(|e| format!("Failed to initialize Argon2: {}", e))?;
+        .map_err(|e| format!("Failed to initialize Argon2: {}", e))?;
 
         let password_hash = argon2
             .hash_password(password.as_bytes(), &salt)
@@ -173,9 +175,4 @@ impl CryptoProvider {
 
         Ok(password_hash)
     }
-
 }
-
-
-
-

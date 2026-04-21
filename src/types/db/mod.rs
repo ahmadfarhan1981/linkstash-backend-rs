@@ -7,11 +7,10 @@ pub mod system_config;
 pub mod system_settings;
 pub mod user;
 
-
 pub struct AccessToken(String);
 
-impl  AccessToken {
- pub fn as_str(&self) -> &str {
+impl AccessToken {
+    pub fn as_str(&self) -> &str {
         &self.0
     }
 }
@@ -24,7 +23,6 @@ where
         Self(value.as_ref().to_owned())
     }
 }
-
 
 impl std::fmt::Display for AccessToken {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -4,10 +4,10 @@ pub mod audit_store;
 pub mod system_config_store;
 // pub mod common_password_store;
 // pub mod hibp_cache_store;
-pub mod owner_store;
-pub mod user_store;
 pub mod authentication_store;
 pub mod authorization_store;
+pub mod owner_store;
+pub mod user_store;
 
 // pub use credential_store::CredentialStore;
 pub use audit_store::AuditStore;

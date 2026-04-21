@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use crate::config::ApplicationError;
 use crate::providers::user_provider::UserProvider;
+use crate::types::internal::{RequestContext, RequestContextMeta};
 use crate::{
     AppData, audit::AuditLogger, config::database::DatabaseConnections, coordinators::Coordinator,
     providers::TokenProvider, stores::user_store::UserStore,
 };
-use crate::types::internal::{RequestContext, RequestContextMeta};
 /***
  * This coordinator handles user lifecycle related operations
  */
@@ -32,11 +32,12 @@ impl UserCoordinator {
             connections: app_data.connections.clone(),
         }
     }
-    pub async fn create_user( &self,
-                              request_context: RequestContext,
-                              username: String,
-                              password: String,) -> Result<(), ApplicationError> {
-
+    pub async fn create_user(
+        &self,
+        request_context: RequestContext,
+        username: String,
+        password: String,
+    ) -> Result<(), ApplicationError> {
         let exec = self.exec(&request_context);
         let conn = self.connections.begin_auth_transaction().await?;
         //checks if user exists
@@ -45,7 +46,7 @@ impl UserCoordinator {
         // future: validate pass
         //creata
         // set pass
-        // set auth 
+        // set auth
         Ok(())
     }
 }

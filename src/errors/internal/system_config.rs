@@ -1,5 +1,5 @@
-use thiserror::Error;
 use super::InternalError;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum SystemConfigError {
@@ -17,11 +17,11 @@ impl SystemConfigError {
     pub fn config_not_found() -> InternalError {
         InternalError::SystemConfig(Self::ConfigNotFound)
     }
-    
+
     pub fn owner_already_exists() -> InternalError {
         InternalError::SystemConfig(Self::OwnerAlreadyExists)
     }
-    
+
     pub fn owner_not_found() -> InternalError {
         InternalError::SystemConfig(Self::OwnerNotFound)
     }

@@ -1,14 +1,14 @@
 use crate::audit::AuditLogger;
-use crate::config::database::DatabaseConnections;
 use crate::config::ApplicationError;
+use crate::config::database::DatabaseConnections;
 use crate::coordinators::Coordinator;
 use crate::stores::authentication_store::AuthenticationStore;
 use crate::stores::authorization_store::AuthorizationStore;
 use crate::stores::user_store::{UserId, UserStore, UserToCreate};
 use crate::types::dto::auth::{LoginApiResponse, TokenResponse};
 use crate::types::internal::RequestContextMeta;
-use std::sync::Arc;
 use poem_openapi::payload::Json;
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub struct OwnerCoordinator {
@@ -17,7 +17,6 @@ pub struct OwnerCoordinator {
     connections: DatabaseConnections,
     authentication_store: Arc<AuthenticationStore>,
     authorization_store: Arc<AuthorizationStore>,
-
 }
 
 impl Coordinator for OwnerCoordinator {
@@ -38,7 +37,7 @@ impl OwnerCoordinator {
             id: UserId::new(),
             username,
         };
-        Ok(LoginApiResponse::Ok(Json(TokenResponse{
+        Ok(LoginApiResponse::Ok(Json(TokenResponse {
             access_token: "".to_string(),
             refresh_token: "".to_string(),
             token_type: "".to_string(),
